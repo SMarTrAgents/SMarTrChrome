@@ -1,0 +1,57 @@
+{
+  "manifest_version": 3,
+  "name": "SMarTrChrome Beta",
+  "short_name": "SMarTrChrome",
+  "version": "0.5.0",
+  "description": "SMarTrAgents im Browser. Der Agent liest, zeigt, klickt, tippt und waehlt aus — jeden Schritt gibst du einzeln frei. Passwoerter tippt er nie.",
+  "minimum_chrome_version": "116",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAs76phqZHpgIaF7nGiVt/hQF7B7xkZZyXHD62lWEkQiO4BtEeq1VdRZq7JEcQnCZQ3+Roh13VimymnXWIkbGPgStqXkCQZ4/fNc/WQ2qL1Cq2nqoORUz7lvRNLkbewbmtNKIlM01oKPc0F96V/BcIZYcrzFo/ZQUU6/2AH/bd+l8+OAKdCNhVD+1fWG8mJO/9cow8V74bM/XIWs4rJvAQAlRjsQY6mqUosojbSS6kc382ExOyjy3QpmzKlix8b2wWnQ1jtHAHN1oGqnSCrUcpaYsNODiDiJPxRMFFOSigbSV1VWeHcwGpXj+E0VoooNDzsnhoPjCKu9WWL/953WE3iwIDAQAB",
+  "permissions": [
+    "sidePanel",
+    "scripting",
+    "storage",
+    "tabs",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://api.smartragents.ai/*",
+    "https://connect.smartragents.ai/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ],
+  "externally_connectable": {
+    "matches": [
+      "https://cloud.smartragents.ai/*"
+    ]
+  },
+  "background": {
+    "service_worker": "src/background/worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "SMarTrChrome — Niemand öffnen",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "side_panel": {
+    "default_path": "src/panel/panel.html"
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "commands": {
+    "notbremse": {
+      "suggested_key": {
+        "default": "Alt+Shift+S"
+      },
+      "description": "Notbremse — Agentensitzung sofort beenden"
+    }
+  }
+}

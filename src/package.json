@@ -1,0 +1,6 @@
+{
+  "name": "smartrchrome-src",
+  "private": true,
+  "type": "module",
+  "description": "Nur fuer node: sagt dem Pruefwerkzeug, dass die Dateien unter src/ ES-Module sind. Chrome liest diese Datei nicht — dort steht es im manifest.json (background.type = module) und in der Endung der Panel-Skripte."
+}

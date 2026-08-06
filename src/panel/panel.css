@@ -1,0 +1,392 @@
+/* SMarTrChrome Beta — Seitenleiste.
+   Grundgröße 16 px (bleibt), Bedienziele mindestens 44 px, Kontraste nach WCAG 2.2 AA.
+   Verdichtet wird über Abstände, nie über die Schriftgröße.
+   Abstandsraster: 4 / 8 / 12 / 16. Radien: 8 / 12 / 999. */
+
+:root {
+  --grund: #030612;
+  --flaeche: #111731;
+  --rand: #24304f;
+  --text: #f1f5f9;
+  --leise: #b9c4d8;
+  --cyan: #00d4ff;
+  --gruen: #2aff2a;
+  --gelb: #ffd60a;
+  --rot: #ff5d73;
+}
+
+* { box-sizing: border-box; }
+
+/* Muss über den display-Regeln der Klassen stehen, sonst zeigt sich alles
+   gleichzeitig — hidden ist hier die Zustandssteuerung. */
+[hidden] { display: none !important; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--grund);
+  color: var(--text);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  min-width: 320px;
+}
+
+.sr {
+  position: absolute; width: 1px; height: 1px;
+  margin: -1px; padding: 0; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* Der Rahmen ums Panel: ruhig, solange nichts läuft — gestrichelt grün, sobald
+   der Agent auf dem Tab ist. Farbe ist nie das einzige Signal (das Wort „Aktiv“
+   steht daneben). */
+#app {
+  height: 100%;
+  display: flex; flex-direction: column;
+  border: 2px solid transparent;
+  border-radius: 12px;
+}
+#app[data-state="aktiv"] { border: 2px dashed var(--gruen); }
+
+/* ---------------- Kopfzeile ---------------- */
+
+.kopf {
+  flex: 0 0 auto;
+  display: flex; align-items: center; justify-content: space-between; gap: 4px;
+  min-height: 44px; padding: 0 8px;
+  border-bottom: 1px solid var(--rand);
+}
+.marke { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.hase { font-size: 24px; line-height: 1; }
+.name { font-weight: 600; }
+
+.chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  min-height: 32px; padding: 0 8px;
+  border-radius: 999px; border: 1px solid var(--rand);
+  background: none; color: var(--leise);
+  font: 14px/1.2 inherit; cursor: pointer;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.chip .pfeil { font-size: 12px; }
+#app[data-state="aktiv"] #zustand-chip { border-color: var(--gruen); color: var(--gruen); }
+
+.kopf-knoepfe { display: flex; gap: 8px; flex: 0 0 auto; }
+
+.symbol {
+  min-width: 44px; min-height: 44px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: none; border: 0; border-radius: 8px;
+  color: var(--leise); font-size: 22px; line-height: 1; cursor: pointer;
+}
+.symbol:hover { background: rgba(255,255,255,.06); color: var(--text); }
+
+.erklaerung {
+  margin: 0; padding: 8px 12px;
+  border-bottom: 1px solid var(--rand);
+  color: var(--leise); font-size: 14px;
+}
+
+/* Störungsmeldung. Rot ist hier nie das einzige Signal — der Text sagt
+   ohne Fachwort, was los ist und was als Nächstes zu tun wäre. */
+.stoerung {
+  flex: 0 0 auto;
+  margin: 0; padding: 8px 12px;
+  background: rgba(255,93,115,.12);
+  border-bottom: 2px solid var(--rot);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+/* ---------------- Menü ---------------- */
+
+.menue {
+  position: absolute; top: 48px; right: 8px; z-index: 20;
+  min-width: 232px; padding: 4px;
+  background: var(--flaeche); border: 1px solid var(--rand);
+  border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.6);
+}
+.menue-titel { margin: 0; padding: 8px 12px 4px; font-size: 14px; color: var(--leise); }
+.menue-fuss { margin: 0; padding: 8px 12px; font-size: 14px; color: var(--leise); }
+.menue-linie { margin: 4px 0; border: 0; border-top: 1px solid var(--rand); }
+.menue-punkt {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  min-height: 44px; padding: 0 12px;
+  background: none; border: 0; border-radius: 8px;
+  color: var(--text); font: 16px/1.3 inherit; text-align: left; cursor: pointer;
+}
+.menue-punkt:hover { background: rgba(255,255,255,.06); }
+.menue-punkt[disabled] { color: var(--leise); opacity: .55; cursor: not-allowed; }
+.menue-punkt.leise { color: var(--leise); }
+.menue-punkt .haken { width: 16px; flex: 0 0 auto; color: var(--cyan); visibility: hidden; }
+.menue-punkt[aria-checked="true"] .haken { visibility: visible; }
+
+/* ---------------- Sitzungsleiste ---------------- */
+
+.sitzungsleiste {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 8px;
+  min-height: 44px; padding: 0 12px;
+  border-bottom: 1px solid rgba(42,255,42,.55);
+  background: rgba(42,255,42,.10);
+}
+.sitzungsleiste .punkt { width: 10px; height: 10px; border-radius: 50%; background: var(--gruen); flex: 0 0 auto; }
+.aktiv-wort { font-weight: 700; color: var(--gruen); }
+#rest { font-variant-numeric: tabular-nums; font-weight: 700; margin-left: auto; }
+.etikett {
+  padding: 2px 8px; border-radius: 999px;
+  border: 1px solid var(--rand); color: var(--leise); font-size: 14px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Der Weg zur Verbindung im Ruhezustand. Dieselbe Bauhöhe wie die
+   Sitzungsleiste, damit die Kopfzone beim Wechsel nicht springt, aber in Cyan
+   statt Grün: Grün gehört zum laufenden Agenten und darf nichts anderes
+   bedeuten. `flex: 0 0 auto` am Knopf überschreibt das `1 1 auto` aus `.haupt`,
+   sonst schluckt er den Hinweistext daneben. */
+.verbindungsleiste {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 8px;
+  min-height: 44px; padding: 6px 12px;
+  border-bottom: 1px solid var(--rand);
+}
+.verbindungsleiste .haupt { flex: 0 0 auto; min-height: 32px; padding: 4px 14px; }
+.verbinden-hinweis { color: var(--leise); font-size: 14px; }
+
+/* Die beiden Knöpfe, die seit 0.4.1 in der Kopfzone stehen statt in #leer:
+   der Beispielauftrag unter der Sitzungsleiste, die Vorführung unter der
+   Störungszeile. In #leer waren sie Rasterkinder und `justify-self` reichte;
+   #app ist eine Flexspalte, dort braucht es `align-self`, sonst zieht die
+   Vorgabe `stretch` sie über die volle Breite. `flex: 0 0 auto` hält sie aus
+   dem Schrumpfen heraus — ein auf 20 px gequetschter Knopf ist keine
+   44-px-Trefferfläche mehr. */
+.kopfchip {
+  flex: 0 0 auto;
+  align-self: start;
+  margin: 8px 12px;
+}
+
+/* ---------------- Freigabe ---------------- */
+
+.freigabe {
+  flex: 0 0 auto;
+  padding: 12px; display: grid; gap: 8px;
+  background: rgba(255,214,10,.08); border-bottom: 2px solid var(--gelb);
+}
+.freigabe p { margin: 0; font-weight: 600; }
+.freigabe-quelle {
+  font-weight: 400 !important; font-size: 14px; color: var(--leise);
+  padding: 4px 8px; border-left: 2px solid var(--rand);
+  overflow-wrap: anywhere;
+}
+
+/* Die Restzeit ist eine Auskunft, kein Alarm: leise Farbe, kein Blinken, kein
+   Rot beim Näherkommen. Sie soll dem Menschen Zeit geben, nicht Druck machen. */
+.freigabe-rest {
+  font-weight: 400 !important; font-size: 14px; color: var(--leise);
+  display: grid; gap: 4px;
+}
+.freigabe-balken {
+  display: block; height: 4px; border-radius: 999px;
+  background: var(--rand); overflow: hidden;
+}
+#freigabe-balken-fuellung { display: block; height: 100%; width: 100%; background: var(--gelb); }
+@media (prefers-reduced-motion: no-preference) {
+  #freigabe-balken-fuellung { transition: width .9s linear; }
+}
+
+/* ---------------- Gesprächsfläche ---------------- */
+
+#flaeche {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  padding: 8px 12px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+
+.leer { display: grid; gap: 8px; align-content: start; }
+.rede {
+  margin: 0; padding: 8px 12px;
+  background: rgba(0,212,255,.08);
+  border-left: 2px solid var(--cyan);
+  border-radius: 0 8px 8px 0;
+}
+.hinweis { margin: 0; color: var(--leise); }
+.fussnote { margin: 0; font-size: 14px; color: var(--leise); }
+
+.vorschlag { min-height: 44px; justify-self: start; color: var(--text); }
+
+.verlauf { display: grid; gap: 8px; align-content: start; }
+.blase { padding: 8px 10px; border-radius: 10px; max-width: 100%; overflow-wrap: anywhere; }
+.blase.niemand { background: rgba(0,212,255,.08); border-left: 2px solid var(--cyan); }
+.blase.du { background: rgba(255,255,255,.06); border-left: 2px solid var(--rand); }
+
+#protokoll-box { border-top: 1px solid var(--rand); padding-top: 8px; }
+#protokoll-box summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; color: var(--leise); }
+.protokoll { margin: 0; padding-left: 20px; display: grid; gap: 4px; color: var(--leise); font-size: 14px; }
+.protokoll li strong { color: var(--text); }
+
+/* ---------------- Dialog ---------------- */
+
+.karte {
+  background: var(--flaeche);
+  border: 1px solid var(--rand);
+  border-radius: 12px;
+  padding: 12px;
+  display: grid; gap: 8px;
+}
+h2 { font-size: 18px; margin: 0; }
+
+fieldset { margin: 0; padding: 8px; border: 1px solid var(--rand); border-radius: 8px; }
+legend { padding: 0 4px; font-weight: 700; }
+.raster { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+.auswahl { display: grid; gap: 2px; }
+.spalte { display: grid; gap: 4px; }
+label { display: flex; gap: 8px; align-items: center; min-height: 44px; padding: 0 4px; cursor: pointer; }
+label input[type=radio] { width: 22px; height: 22px; accent-color: var(--cyan); flex: 0 0 auto; }
+
+/* Das Kennwort ist das eine Element auf dem Bildschirm, bei dem Größe wirklich
+   Sicherheit ist: Es muss über zwei Fenster hinweg verglichen werden. Deshalb
+   groß, mit weiten Zeichenabständen und in einer Schrift, in der 5 und S nicht
+   ineinanderlaufen. */
+.kennwort {
+  margin: 0; padding: 12px;
+  border-radius: 12px;
+  background: rgba(0,212,255,.10);
+  border: 2px solid var(--cyan);
+  color: var(--cyan);
+  font: 700 40px/1.2 ui-monospace, "Cascadia Mono", "DejaVu Sans Mono", monospace;
+  letter-spacing: .18em;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+.kennwort-funk {
+  margin: 0;
+  color: var(--text);
+  font-size: 18px; font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.zusammenfassung {
+  margin: 0; padding: 8px 12px; border-radius: 8px;
+  background: rgba(42,255,42,.08);
+  border: 1px solid rgba(42,255,42,.5);
+  font-weight: 600;
+}
+
+/* Der dezente Weg zu Dauer und Stufe. Kein Hauptknopf: Die zwei Klicks des
+   üblichen Wegs sind aufbauen und herstellen, das Ändern ist die Ausnahme. */
+.einstellungen-aendern {
+  display: inline-flex; align-items: center;
+  min-height: 44px; margin: 4px 0; padding: 6px 4px;
+  background: none; border: none;
+  color: var(--cyan, #00d4ff); font: inherit; font-size: 15px;
+  text-decoration: underline; cursor: pointer;
+}
+.einstellungen-aendern:focus-visible {
+  outline: 2px solid var(--cyan, #00d4ff); outline-offset: 2px; border-radius: 6px;
+}
+
+/* Stufe ② ist eine Auskunft, keine Auswahl — sie sieht deshalb auch nicht
+   wie eine aus (kein Rahmen, keine Klickfläche). */
+.stufe-auskunft { margin: 0; padding: 4px; line-height: 1.4; }
+
+/* Die Erklärkarte ist ruhig: kein Rot, kein Alarm. Was hier steht, ist eine
+   Regel oder eine Lage — beides kein Defekt. Deshalb dieselbe Ruhe wie im
+   übrigen Fenster, nur abgesetzt. */
+.erklaertext {
+  margin: 0; padding: 8px 12px; border-radius: 8px;
+  background: rgba(0,212,255,.08);
+  border: 1px solid rgba(0,212,255,.45);
+  line-height: 1.45;
+}
+
+/* ---------------- Knöpfe ---------------- */
+
+.knopfreihe { display: flex; flex-wrap: wrap; gap: 8px; }
+
+button {
+  min-height: 44px; padding: 8px 16px;
+  border-radius: 8px; border: 2px solid transparent;
+  font: 600 16px/1.2 inherit; cursor: pointer;
+}
+button:focus-visible { outline: 3px solid var(--cyan); outline-offset: 2px; }
+.haupt { background: var(--cyan); color: #05213a; border-color: var(--cyan); flex: 1 1 auto; }
+.haupt:hover { filter: brightness(1.08); }
+.neben { background: transparent; color: var(--text); border-color: var(--rand); flex: 1 1 auto; }
+.stopp { background: transparent; color: var(--rot); border-color: var(--rot); min-height: 36px; padding: 4px 12px; }
+button[disabled] { opacity: .5; cursor: not-allowed; }
+
+/* ---------------- Eingabekarte ---------------- */
+
+.eingabekarte {
+  flex: 0 0 auto;
+  display: grid; gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--rand);
+  background: var(--flaeche);
+}
+.guthabenzeile { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; min-height: 28px; }
+.guthaben {
+  padding: 2px 10px; border-radius: 999px;
+  border: 1px solid var(--cyan); color: var(--cyan);
+  font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums;
+}
+.guthaben[data-stand="knapp"] { border-color: var(--gelb); color: var(--gelb); }
+.guthaben[data-stand="leer"] { border-color: var(--rot); color: var(--rot); }
+/* Die Wartezeile trägt seit dem 29.07. den laufenden Schritt des Agenten. Sie
+   darf dabei wachsen, aber die Eingabekarte nicht sprengen. */
+.kosten { color: var(--leise); font-size: 14px; min-width: 0; overflow-wrap: anywhere; }
+
+#eingabe {
+  width: 100%; min-height: 44px; max-height: 160px; padding: 8px 12px;
+  border-radius: 8px; border: 1px solid var(--rand);
+  background: var(--grund); color: var(--text);
+  font: 16px/1.4 inherit; resize: none; overflow-y: auto;
+}
+#eingabe:focus-visible { outline: 3px solid var(--cyan); outline-offset: 1px; }
+
+.werkzeugzeile { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 44px; }
+.modus-chip {
+  padding: 2px 10px; border-radius: 999px;
+  border: 1px solid var(--rand); color: var(--leise); font-size: 14px;
+}
+.senden {
+  min-width: 44px; min-height: 44px; padding: 0; margin-left: auto;
+  background: var(--cyan); color: #05213a; border-color: var(--cyan);
+  font-size: 20px;
+}
+
+/* Der Antwortmodus: zwei Knöpfe, der aktive trägt die Farbe UND aria-pressed —
+   Farbe ist nie das einzige Signal. Bedienziel mindestens 44 px hoch. */
+.chat-modus {
+  display: inline-flex; gap: 4px;
+  padding: 2px; border: 1px solid var(--rand); border-radius: 999px;
+}
+.moduswahl {
+  min-height: 44px; padding: 0 12px;
+  border: 1px solid transparent; border-radius: 999px;
+  background: none; color: var(--leise);
+  font: 14px/1.2 inherit; cursor: pointer; white-space: nowrap;
+}
+.moduswahl:focus-visible { outline: 3px solid var(--cyan); outline-offset: 1px; }
+.moduswahl[aria-pressed="true"] {
+  background: var(--cyan); color: #05213a; border-color: var(--cyan);
+  font-weight: 700;
+}
+
+.fusszeile {
+  flex: 0 0 auto; margin: 0;
+  padding: 4px 12px; min-height: 28px;
+  font-size: 14px; color: var(--leise); text-align: center;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .sitzungsleiste .punkt { animation: pulsen 2.4s ease-in-out infinite; }
+  @keyframes pulsen { 0%,100% { opacity: 1; } 50% { opacity: .55; } }
+}
+
+@media (prefers-contrast: more) {
+  .karte, fieldset, .chip, .etikett, .modus-chip, .chat-modus, .moduswahl { border-width: 2px; }
+  #app[data-state="aktiv"] { border-width: 3px; }
+  .rede, .blase.niemand { background: rgba(0,212,255,.16); }
+}

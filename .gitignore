@@ -1,0 +1,13 @@
+# Interne Dokumente — gehören ins Projekt, nie ins öffentliche Repo.
+# (packen.py hält sie ebenfalls aus dem Store-Paket heraus.)
+KENNUNG.md
+README-BETA.md
+
+# Schlüsselmaterial darf NIE hierher.
+*.pem
+*.key
+
+# Werkzeug-Artefakte
+node_modules/
+*.log
+.DS_Store
