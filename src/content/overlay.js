@@ -250,6 +250,47 @@
     }
   };
 
+  /*
+   * Der Arbeitszeiger.
+   *
+   * Bis 0.5.1 bewegte sich auf der Lesestufe nichts: Von zehn möglichen
+   * Befehlen bewegte genau einer den Zeiger. Wer lesen oder blättern ließ, sah
+   * den grünen Rahmen und sonst nichts, und das ist von „kaputt" nicht zu
+   * unterscheiden. Hier fährt der Zeiger jetzt auch dann, wenn es gar kein
+   * Element gibt, auf das er zeigen könnte.
+   *
+   * Die Bahn entsteht ausschließlich aus den Maßen des Sichtfensters, nie aus
+   * Seiteninhalt. Das Muster ist ein Wort, kein Text von der Seite, und es
+   * steht an der Fahne, damit der Mensch liest, was gerade geschieht.
+   */
+  const arbeitsBahn = {
+    lesen: [[0.12, 0.18], [0.72, 0.26], [0.14, 0.42], [0.68, 0.5]],
+    ablesen: [[0.2, 0.3], [0.6, 0.34], [0.3, 0.52]],
+    prüfen: [[0.5, 0.2], [0.5, 0.45]],
+    blättern: [[0.86, 0.25], [0.86, 0.65]],
+    warten: [[0.5, 0.4], [0.53, 0.4], [0.5, 0.4]],
+    aufnehmen: [[0.5, 0.5]],
+    wechseln: [[0.3, 0.08], [0.5, 0.08]],
+    zurück: [[0.06, 0.08], [0.06, 0.12]],
+  };
+  let arbeitsLauf = null;
+  const arbeitsZeiger = (muster) => {
+    const bahn = arbeitsBahn[muster] || arbeitsBahn.lesen;
+    if (arbeitsLauf) { clearInterval(arbeitsLauf); arbeitsLauf = null; }
+    const b = innerWidth, h = innerHeight;
+    let i = 0;
+    const schritt = () => {
+      if (i >= bahn.length) {
+        clearInterval(arbeitsLauf); arbeitsLauf = null;
+        return;
+      }
+      const [ax, ay] = bahn[i++];
+      zeigerAuf(Math.round(b * ax), Math.round(h * ay), muster);
+    };
+    schritt();
+    arbeitsLauf = setInterval(schritt, 420);
+  };
+
   const zielRahmen = (r) => {
     if (!r) { ziel.setAttribute("data-an", "0"); return; }
     /* Der Wirt ist position:fixed — also Sichtfenster-Koordinaten verwenden,
@@ -1429,6 +1470,12 @@
       case "overlay:zeiger":
         zeigerAuf(n.x, n.y, n.beschriftung);
         zielRahmen(n.rect || null);
+        antwort({ ok: true });
+        break;
+      /* Arbeit ohne Ziel sichtbar machen. Trägt kein Element und keinen
+         Seiteninhalt, nur ein Muster — deshalb auf jeder Stufe erlaubt. */
+      case "overlay:arbeitszeiger":
+        arbeitsZeiger(String(n.muster || "arbeiten"));
         antwort({ ok: true });
         break;
       case "overlay:lesen":

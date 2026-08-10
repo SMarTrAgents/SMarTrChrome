@@ -479,6 +479,43 @@ async function zeigerZeigen(lage) {
   ).catch(() => {});
 }
 
+/*
+ * Der Arbeitszeiger: eine sichtbare Bewegung für Schritte OHNE Ziel.
+ *
+ * Gemessen am 10.08.2026: Von den zehn Befehlen der Lesestufe bewegte genau
+ * einer den Zeiger, nämlich `highlight` — und der auch nur, wenn der Agent die
+ * Epoche der letzten Wahrnehmung mitschickte. Wer lesen, blättern oder warten
+ * ließ, sah den grünen Rahmen und sonst nichts. Für einen Menschen ist „der
+ * Rahmen steht, aber nichts bewegt sich" von „kaputt" nicht zu unterscheiden,
+ * und genau so wurde es gemeldet.
+ *
+ * Die Oberfläche verspricht auf der Lesestufe wörtlich „lesen, blättern,
+ * zeigen". Diese Funktion löst das ein: Sie schickt ein Muster an die Seite,
+ * die daraus eine Bewegung im Sichtfenster zeichnet. Sie trägt keinerlei
+ * Seiteninhalt und braucht keine Referenz, ist also auf jeder Stufe und in
+ * jedem Zustand erlaubt.
+ *
+ * Beste-Kraft wie beim Zielzeiger: Misslingt es, läuft der Schritt trotzdem.
+ */
+const ARBEITSMUSTER = {
+  readPage: "lesen",
+  snapshot: "lesen",
+  get_state: "prüfen",
+  extract: "ablesen",
+  scroll: "blättern",
+  waitFor: "warten",
+  screenshot: "aufnehmen",
+  navigate: "wechseln",
+  back: "zurück",
+};
+
+async function arbeitsZeigerFahren(tabId, cmd, frist) {
+  const muster = ARBEITSMUSTER[cmd];
+  if (!muster) return;
+  await anSeite(tabId, { typ: "overlay:arbeitszeiger", muster }, Math.max(800, frist || 1500))
+    .catch(() => {});
+}
+
 async function tuHighlight(rahmen, lage) {
   const ziel = lage.ziel; // vor der Freigabe nachgeschlagen, siehe unten
   const gesetzt = await anSeite(
@@ -1501,6 +1538,11 @@ async function einzeln(rahmen, sitzung, { id, cmd, begonnen, meineGeneration }) 
   const uhr = new Promise((fertig) => {
     wecker = setTimeout(() => fertig(null), Math.max(1500, frist(eintrag, uhrBeginn)));
   });
+  /* Sichtbar machen, dass jetzt gearbeitet wird — bei JEDEM Befehl, nicht nur
+     bei denen mit Ziel. Steht nach der Freigabe und vor der Ausführung, genau
+     wie der Zielzeiger: Ein abgelehnter Schritt bewegt weiterhin nichts. */
+  await arbeitsZeigerFahren(tabId, cmd, lage.seitenfrist());
+
   let ergebnis;
   try {
     ergebnis = await Promise.race([AUSFUEHRUNG[cmd](rahmen, lage), uhr]);

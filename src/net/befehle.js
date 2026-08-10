@@ -41,12 +41,22 @@
  * `freigabe` — „schritt" = Rückfrage im Schrittmodus, „immer" = Rückfrage auch
  *            in der Automatik.
  *
- *            In dieser Fassung steht überall „immer", auch bei `readPage` und
- *            `scroll`, für die spec-01 §5.2 „nie" vorsieht. Das ist bewusst
- *            strenger: Solange die Erweiterung neu ist, soll kein Schritt an
- *            der Rückfrage vorbei. Der Schrittmodus der Sitzung wird trotzdem
- *            ausgewertet — er bleibt der Weg, auf dem sich das später öffnet,
- *            ohne dass jemand eine zweite Tabelle pflegen muss.
+ *            Bis 0.5.1 stand hier überall „immer", auch bei `readPage` und
+ *            `scroll`. Das war als vorübergehende Strenge gedacht und hatte
+ *            zwei Wirkungen, die niemand wollte: Der Schrittmodus der Sitzung
+ *            war damit wirkungslos, und bei geschlossener Seitenleiste
+ *            scheiterte JEDER Befehl an `grant_required`, auch reines Lesen.
+ *            Arbeit im Hintergrund war dadurch baulich unmöglich.
+ *
+ *            Seit 0.5.2 steht überall „schritt". Damit entscheidet allein der
+ *            Schrittmodus der Sitzung, und der ist doppelt gesichert: Der
+ *            Mensch muss „selbständig" ausdrücklich wählen, und die Gegenstelle
+ *            muss den Selbständig-Modus überhaupt erteilen, sonst fällt die
+ *            Sitzung dort auf Einzelfreigabe zurück. Wer
+ *            nichts wählt, wird weiterhin bei jedem Schritt gefragt.
+ *            Unberührt davon bleibt, was gar nicht erst gehen darf: Passwort-,
+ *            Karten- und Einmalcodefelder werden nie ausgelesen und nie
+ *            befüllt, in keinem Modus (spec-01 V10).
  * `tut`    — der Satz, mit dem der Mensch gefragt wird. Er stammt aus unseren
  *            eigenen Worten; Text von der besuchten Seite kommt dort nie hinein.
  *
@@ -78,52 +88,52 @@ export const BEFEHLE = {
      Stufe `read` führt (app.py REQUIRED). Beide meinen dasselbe; zwei Namen
      für eine Sache sind hier kein Fehler, sondern die Brücke zwischen einer
      Tabelle, die schon steht, und einer, die noch kommt. */
-  readPage: { stufe: "read", frist: 25000, freigabe: "immer", tut: "die Seite lesen" },
-  snapshot: { stufe: "read", frist: 25000, freigabe: "immer", tut: "die Seite lesen" },
+  readPage: { stufe: "read", frist: 25000, freigabe: "schritt", tut: "die Seite lesen" },
+  snapshot: { stufe: "read", frist: 25000, freigabe: "schritt", tut: "die Seite lesen" },
 
   /* Zustand melden: Adresse, Titel, Bildlaufstand, Größe der letzten
      Wahrnehmung. Kein Seitentext, keine Feldinhalte. */
-  get_state: { stufe: "read", frist: 15000, freigabe: "immer", tut: "den Zustand dieses Tabs melden" },
+  get_state: { stufe: "read", frist: 15000, freigabe: "schritt", tut: "den Zustand dieses Tabs melden" },
 
   /* Bildlauf. Danach immer eine neue Wahrnehmung — durch Nachladen entsteht in
      der Regel eine neue Epoche (spec-01 §5.2). */
-  scroll: { stufe: "read", frist: 10000, freigabe: "immer", tut: "auf der Seite scrollen" },
+  scroll: { stufe: "read", frist: 10000, freigabe: "schritt", tut: "auf der Seite scrollen" },
 
   /* Zeigen: der Agentenzeiger wandert auf ein Element der letzten Wahrnehmung.
      Das ist der einzige Befehl, der auf der Seite überhaupt sichtbar wird —
      und er verändert nichts an ihr. */
-  highlight: { stufe: "read", frist: 20000, freigabe: "immer", tut: "dir ein Element auf der Seite zeigen" },
+  highlight: { stufe: "read", frist: 20000, freigabe: "schritt", tut: "dir ein Element auf der Seite zeigen" },
 
   /* Gezielt ablesen statt alles lesen. `extract` ist KEINE Skriptausführung
      (spec-01 §5.2): Es liest ausschließlich aus der bereits erhobenen
      Wahrnehmung und sieht nichts, was `readPage` nicht auch sähe. Der Nutzen
      ist ein Kostennutzen — 12 Zeilen statt 3.000 Tokens Baum. */
-  extract: { stufe: "read", frist: 25000, freigabe: "immer", tut: "einzelne Angaben von der Seite ablesen" },
+  extract: { stufe: "read", frist: 25000, freigabe: "schritt", tut: "einzelne Angaben von der Seite ablesen" },
 
   /* Warten. Die längste Frist der Tabelle, weil Warten die einzige Handlung
      ist, deren Zweck das Vergehen von Zeit ist. Genau eine Bedingung, nie ein
      Prädikat als Skript — das wäre `eval` durch die Hintertür (spec-01 V4). */
-  waitFor: { stufe: "read", frist: 60000, freigabe: "immer", tut: "auf der Seite auf etwas warten" },
+  waitFor: { stufe: "read", frist: 60000, freigabe: "schritt", tut: "auf der Seite auf etwas warten" },
 
   /* Der Notausgang, nicht der Regelweg (spec-01 §4.7). Ein Bild kostet ein
      Vielfaches eines Textbaums und sagt weniger; deshalb verlangt dieser Befehl
      als einziger einen benannten Anlass. */
-  screenshot: { stufe: "read", frist: 30000, freigabe: "immer", tut: "ein Bild vom sichtbaren Ausschnitt aufnehmen" },
+  screenshot: { stufe: "read", frist: 30000, freigabe: "schritt", tut: "ein Bild vom sichtbaren Ausschnitt aufnehmen" },
 
   /* Ortswechsel. Stufe `read`, weil der Relay das seit jeher so führt
      (RELAY:41) — die eigentliche Schranke ist nicht die Stufe, sondern der
      Bereich: Die Zieladresse wird VOR der Frage geprüft (ausfuehrer.js), damit
      der Mensch nie eine Adresse bestätigt, die danach abgelehnt wird. */
-  navigate: { stufe: "read", frist: 45000, freigabe: "immer", tut: "eine andere Adresse aufrufen" },
-  back: { stufe: "read", frist: 30000, freigabe: "immer", tut: "eine Seite zurückgehen" },
+  navigate: { stufe: "read", frist: 45000, freigabe: "schritt", tut: "eine andere Adresse aufrufen" },
+  back: { stufe: "read", frist: 30000, freigabe: "schritt", tut: "eine Seite zurückgehen" },
 
   /* Bedienen. Alle drei verändern die Seite — deshalb Stufe `write` und
      Freigabe „immer": kein Schrittmodus schaltet die Rückfrage hier ab. Das
      Ziel wird VOR der Frage nachgeschlagen (ausfuehrer.js), damit der Mensch
      einem konkreten Element zustimmt, nicht einer Absicht. */
-  click: { stufe: "write", frist: 20000, freigabe: "immer", tut: "für dich klicken" },
-  type: { stufe: "write", frist: 25000, freigabe: "immer", tut: "für dich in ein Feld tippen" },
-  select: { stufe: "write", frist: 15000, freigabe: "immer", tut: "für dich eine Auswahl treffen" },
+  click: { stufe: "write", frist: 20000, freigabe: "schritt", tut: "für dich klicken" },
+  type: { stufe: "write", frist: 25000, freigabe: "schritt", tut: "für dich in ein Feld tippen" },
+  select: { stufe: "write", frist: 15000, freigabe: "schritt", tut: "für dich eine Auswahl treffen" },
 };
 
 /* Der Sicherheitsabstand zur Uhr des Relays. Unsere Antwort muss vor seinem

@@ -288,7 +288,19 @@ test("panel.js: Antrag, Zusammenfassung und Auswahl sind EINE Wahrheit", () => {
   assert.ok(!quelle.includes('gewaehlt("bereich")'), "der Bereich bleibt fest: nur dieser Tab");
 
   const vorschlag = abschnitt("function geltungsbereichVorschlag", "function klartextVon");
-  assert.ok(vorschlag.includes("access: gewaehlteStufe()"));
+  /* Die Wahl des Menschen geht in den Antrag, aber uebersetzt: Auf der Leitung
+     gibt es nur read und write, waehrend die Oberflaeche drei Moeglichkeiten
+     anbietet. "Vollzugriff" ist write mit Selbstaendig-Modus. Geprueft wird
+     deshalb, dass BEIDE Felder aus derselben Wahl entstehen und keines fest
+     verdrahtet ist. */
+  assert.ok(vorschlag.includes("access: stufeAufDerLeitung(wahl)"),
+    "die Stufe entsteht aus der Wahl, nicht aus einem festen Wert");
+  assert.ok(vorschlag.includes("step_mode: schrittmodusAus(wahl)"),
+    "der Schrittmodus entsteht aus derselben Wahl");
+  assert.ok(vorschlag.includes("const wahl = gewaehlteStufe()"),
+    "und beide lesen dieselbe Quelle");
+  assert.ok(!/step_mode: "auto"/.test(quelle),
+    "der Selbstaendig-Modus darf nirgends fest verdrahtet sein");
   assert.ok(vorschlag.includes("duration: dauer.sekunden"));
   assert.ok(vorschlag.includes('mode: "tab"'));
 
@@ -528,6 +540,19 @@ async function panelStarten({
   const anTabSpur = []; // an das Seitenskript
   const bindSpur = []; // an das Gateway (nur /bind)
   const gesprochen = []; // was die Stimme wirklich gesagt hat
+  /* Was WIRKLICH beantragt wurde. Der Wunsch (`gewuenscht`) entsteht tief in
+     geltungsbereichVorschlag() und verlässt die Seitenleiste nur hier, auf dem
+     Weg zur Freigabeseite. Ihn hier abzugreifen ist der einzige Weg, die
+     Stufenwahl zu MESSEN statt sie im Quelltext nachzulesen. */
+  const ticketSpur = [];
+  /* Jede Rückgabe eines Seitenrechts. Das Recht ist das, was der Agent
+     wirklich in der Hand hat — ob es zurückgegeben wurde, ist deshalb keine
+     Frage des Aussehens, sondern die Frage, ob er noch arbeiten kann. */
+  const rechteZurueck = [];
+  /* Was am FENSTER hängt (pagehide, keydown). Bis zum 10.08.2026 verschluckte
+     diese Attrappe jeden Fensterzuhörer — damit war ausgerechnet der Weg
+     unprüfbar, auf dem die Seitenleiste bisher die Sitzung abriss. */
+  const fensterHoerer = new Map();
   const uhren = new Set();
   const hoerer = [];
   const elemente = new Map();
@@ -707,7 +732,10 @@ async function panelStarten({
   sandbox.window = sandbox;
   sandbox.self = sandbox;
   sandbox.globalThis = sandbox;
-  sandbox.window.addEventListener = () => {};
+  sandbox.window.addEventListener = (art, f) => {
+    if (!fensterHoerer.has(art)) fensterHoerer.set(art, []);
+    fensterHoerer.get(art).push(f);
+  };
 
   const einfuhr = {
     "../net/konto.js": {
@@ -722,12 +750,23 @@ async function panelStarten({
     },
     "../net/ticket.js": {
       buchstabiert: (wort) => String(wort).split("").join(" "),
-      async freigabeDurchlaufen() {
+      async freigabeDurchlaufen(angaben) {
+        ticketSpur.push(angaben || {});
         return { ticket: "ticket-attrappe" };
       },
       async freigabeseiteOeffnen() {},
     },
-    "../net/rechte.js": rechte,
+    /* Die echten Rechte, nur mit einem Zähler an der Rückgabe. Ein Ersatz
+       wäre hier falsch: `rechtHolen` entscheidet mit der Sperre aus §7.3 über
+       den ganzen Verbindungsweg, und den soll die Prüfung fahren, nicht
+       nachbilden. */
+    "../net/rechte.js": {
+      ...rechte,
+      async rechtZurueckgeben(muster) {
+        rechteZurueck.push(muster ?? null);
+        return rechte.rechtZurueckgeben(muster);
+      },
+    },
     "../net/chat.js": {
       CHAT_KLIENT: "smartrchrome-app",
       async guthabenHolen() {
@@ -843,10 +882,33 @@ async function panelStarten({
     anWorkerVoll: () => spur.map((n) => ({ ...n })),
     anTab: () => anTabSpur.map((n) => n.typ),
     bindAufrufe: () => bindSpur,
+    /* Die Anträge, die wirklich auf den Weg zur Freigabeseite gegangen sind. */
+    antraege: () => ticketSpur,
+    /* Wie oft die Seitenleiste ein Seitenrecht zurückgegeben hat. */
+    rechteRueckgaben: () => rechteZurueck.length,
+    /* Ein Ereignis am Fenster auslösen — pagehide ist der Weg, auf dem die
+       Seitenleiste verschwindet. Gibt es dafür gar keinen Zuhörer mehr, ist
+       das schon der Befund. */
+    async fensterEreignis(art, ereignis = {}) {
+      const liste = fensterHoerer.get(art) || [];
+      assert.ok(liste.length, `auf „${art}" hört in der Seitenleiste niemand`);
+      await Promise.all(liste.map((f) => f(ereignis)));
+    },
     spurLeeren: () => {
       spur.length = 0;
       bindSpur.length = 0;
       gesprochen.length = 0;
+    },
+    /* Alles auf null, auch der Weg zur Seite und die Rechte-Rückgaben. Als
+       eigener Weg neben spurLeeren(), damit kein bestehender Prüfsatz seine
+       Vorgeschichte verliert. */
+    alleSpurenLeeren: () => {
+      spur.length = 0;
+      bindSpur.length = 0;
+      gesprochen.length = 0;
+      anTabSpur.length = 0;
+      ticketSpur.length = 0;
+      rechteZurueck.length = 0;
     },
     stimmabbrueche: () => sandbox.speechSynthesis.abbrueche,
     aufraeumen() {
@@ -1974,4 +2036,282 @@ test("Antwortmodus — ein wieder geöffnetes Panel stellt die gemerkte Wahl her
   const q = await panelStarten({ speicher: { chatModus: "smartest" } });
   t.after(q.aufraeumen);
   assert.equal(q.zustand.chatModus, "normal", "nur die zwei gebauten Modi kommen zurück");
+});
+
+/* ================================================================== *
+ * Die Stufe „Vollzugriff" und das Ende der Reißleine
+ * (Inhaber-Entscheid 10.08.2026)
+ *
+ * Zwei Entscheidungen, die zusammengehören: Erst wenn der Mensch eine Stufe
+ * wählen kann, in der der Agent nicht bei jedem Schritt fragt, ergibt es
+ * überhaupt einen Sinn, dass die Seitenleiste die Sitzung nicht mehr beim
+ * Schließen abreißt. Vorher war Arbeit im Hintergrund baulich unmöglich.
+ *
+ * Beide Zusagen sind Zusagen über VERHALTEN und werden deshalb gefahren. Der
+ * Antrag, den die Seitenleiste stellt, verlässt sie an genau einer Stelle: auf
+ * dem Weg zur Freigabeseite (ticket.freigabeDurchlaufen). Dort wird er
+ * abgegriffen — im Quelltext nachgelesen wäre er nur eine Behauptung.
+ * ================================================================== */
+
+const sitzungAntwort = () => ({
+  ok: true,
+  sitzung: {
+    stufe: "write",
+    code: "VV11WW",
+    endetUm: Date.now() + 600000,
+    modus: "tab",
+    bereich: ["geizhals.de"],
+    schrittmodus: "confirm_each",
+  },
+});
+
+/**
+ * Den ganzen Verbindungsweg mit einer Stufe fahren und den Antrag zurückgeben,
+ * der dabei wirklich entstanden ist. `stufe === null` heißt: nichts wählen —
+ * der übliche Zwei-Klick-Weg mit der Vorbelegung aus panel.html.
+ */
+async function antragMitStufe(t, stufe) {
+  const p = await panelStarten({ workerAntworten: { "link:verbinden": sitzungAntwort() } });
+  t.after(p.aufraeumen);
+  await p.klick("verbinden-start");
+  if (stufe !== null) await p.waehlen("stufe", stufe);
+  await p.klick("verbinden");
+  assert.equal(p.el("app").dataset.state, "aktiv", "Vorbedingung: der Weg lief durch");
+  assert.equal(p.antraege().length, 1, "genau ein Antrag geht zur Freigabeseite");
+  return p.antraege()[0].gewuenscht;
+}
+
+test("S1 — Jede der drei Stufen erzeugt genau den Antrag, den sie verspricht", async (t) => {
+  /* a) Zusehen bleibt Zusehen. */
+  const lesen = await antragMitStufe(t, "read");
+  assert.equal(lesen.access, "read");
+  assert.equal(lesen.step_mode, "confirm_each");
+
+  /* b) Bedienen darf klicken und tippen — und fragt trotzdem bei jedem
+     Schritt. Das ist der Unterschied zu Vollzugriff, und er ist der ganze
+     Grund, warum es drei Knöpfe gibt und nicht zwei. */
+  const bedienen = await antragMitStufe(t, "write");
+  assert.equal(bedienen.access, "write");
+  assert.equal(bedienen.step_mode, "confirm_each");
+
+  /* c) Vollzugriff ist auf der Leitung dieselbe Stufe wie Bedienen, nur ohne
+     Einzelfreigabe. `full` wird ausdrücklich NICHT beantragt: Was `full` dort
+     zusätzlich freigäbe, sind eval, terminal und maintenance — Befehle, die
+     diese Erweiterung gar nicht kennt. Ein Antrag darauf wäre entweder
+     wirkungslos oder gefährlich, und beides ist keine Wahl. */
+  const voll = await antragMitStufe(t, "voll");
+  assert.equal(voll.access, "write", "die Leitung kennt kein drittes Wort für diese Stufe");
+  assert.equal(voll.step_mode, "auto", "genau das ist der Unterschied: keine Einzelfreigabe");
+
+  /* Drei Wahlen, drei Anträge. Fällt eine der drei mit einer anderen
+     zusammen, hat der Mensch einen Knopf ohne Wirkung gedrückt — und das ist
+     schlimmer als ein fehlender Knopf. */
+  const paare = [lesen, bedienen, voll].map((g) => `${g.access}/${g.step_mode}`);
+  assert.equal(new Set(paare).size, 3, `drei Stufen, aber nur ${new Set(paare).size} Anträge: ${paare}`);
+  assert.ok(
+    !paare.some((s) => s.startsWith("full/")),
+    "die Erweiterung beantragt die Stufe full nie — sie hat keinen einzigen Befehl daraus"
+  );
+
+  /* Und der Selbständig-Modus entsteht wirklich aus der Wahl, nicht aus der
+     Dauer oder dem Bereich: Alles andere ist bei allen dreien gleich. */
+  for (const g of [lesen, bedienen, voll]) {
+    assert.equal(g.mode, "tab");
+    /* Über die Realmgrenze der Sandbox hinweg wird der Inhalt verglichen, nicht
+       der Bauplan: Die Liste stammt aus dem eigenen Kontext von panel.js. */
+    assert.deepEqual([...g.allow], ["geizhals.de"]);
+  }
+});
+
+test("S2 — Vorbelegt bleibt die schwächste der angebotenen Stufen", async (t) => {
+  /* d) Der übliche Weg ist zwei Klicks ohne Entscheidung. Wer nichts wählt,
+     bekommt die schwächste Stufe — nicht die zuletzt hinzugefügte. */
+  const vorgabe = await antragMitStufe(t, null);
+  assert.equal(vorgabe.access, "read", "ohne Wahl wird nur zugesehen");
+  assert.equal(vorgabe.step_mode, "confirm_each", "und jeder Schritt einzeln bestätigt");
+
+  /* Gemessen wird „die schwächste", nicht „read": Die Vorbelegung wird gegen
+     die Rangfolge der WIRKLICH angebotenen Knöpfe geprüft. Ein neuer, noch
+     stärkerer Knopf mit Haken fiele hier durch, ein umbenannter nicht. */
+  const RANG = { read: 0, write: 1, voll: 2 };
+  const knoepfe = [...html.matchAll(/<input type="radio" name="stufe" value="([^"]+)"([^>]*)>/g)]
+    .map((tr) => ({ wert: tr[1], gehakt: /\bchecked\b/.test(tr[2]) }));
+  assert.deepEqual(
+    knoepfe.map((k) => k.wert).sort(),
+    ["read", "voll", "write"],
+    "angeboten werden genau die drei gebauten Stufen"
+  );
+  for (const k of knoepfe) {
+    assert.ok(Object.hasOwn(RANG, k.wert), `unbekannte Stufe im Dialog: ${k.wert}`);
+  }
+  const schwaechste = knoepfe.map((k) => k.wert).sort((a, b) => RANG[a] - RANG[b])[0];
+  assert.deepEqual(
+    knoepfe.filter((k) => k.gehakt).map((k) => k.wert),
+    [schwaechste],
+    "genau ein Haken, und er sitzt auf der schwächsten angebotenen Stufe"
+  );
+});
+
+test("S3 — Die Stufenwahl steht VOR dem Aufklapper, nicht darin", () => {
+  /* e) Bis zum 10.08.2026 lag die Stufe hinter „Dauer und Geltung ändern" und
+     war mit „Nur zusehen" vorbelegt: Der übliche Zwei-Klick-Weg endete damit
+     ausnahmslos in einer Lesesitzung. Gemessen wird die Reihenfolge der
+     Stellen im Text, nicht das bloße Vorkommen — „steht irgendwo im HTML" war
+     schon vorher wahr, als sie eingeklappt war. */
+  const dialogAb = html.indexOf('<section id="dialog"');
+  assert.ok(dialogAb >= 0, "die Dialogkarte muss in panel.html stehen");
+
+  const aufklapper = html.indexOf('id="einstellungen-aendern"', dialogAb);
+  const mehrAuf = html.indexOf('<div id="dialog-mehr"', dialogAb);
+  const mehrZu = html.indexOf("/#dialog-mehr", mehrAuf);
+  assert.ok(aufklapper > dialogAb, "der Aufklapper-Knopf gehört in die Dialogkarte");
+  assert.ok(mehrAuf > aufklapper, "der eingeklappte Teil folgt seinem Knopf");
+  assert.ok(mehrZu > mehrAuf, "der eingeklappte Teil hat ein Ende");
+  assert.match(
+    html.slice(aufklapper, mehrAuf),
+    /Dauer und Geltung ändern/,
+    "Gegenprobe: es ist wirklich der Aufklapper, der hier gemessen wird"
+  );
+
+  const stellen = (name) => [...html.matchAll(new RegExp(`name="${name}"`, "g"))].map((tr) => tr.index);
+
+  const stufen = stellen("stufe");
+  assert.equal(stufen.length, 3, `drei Stufenknöpfe erwartet, gefunden: ${stufen.length}`);
+  for (const i of stufen) {
+    assert.ok(
+      i > dialogAb && i < aufklapper,
+      "jede Stufe steht vor dem Aufklapper, ist also ohne Aufklappen zu sehen"
+    );
+    assert.ok(!(i > mehrAuf && i < mehrZu), "und keine liegt im eingeklappten Teil");
+  }
+
+  /* Gegenprobe, damit der Satz oben etwas misst: Die Dauer liegt sehr wohl im
+     eingeklappten Teil. Wäre der Aufklapper leer oder verschwunden, stünden
+     die Stufen trivial davor. */
+  const dauern = stellen("dauer");
+  assert.ok(dauern.length >= 4, "die Dauerauswahl gibt es weiterhin");
+  for (const i of dauern) {
+    assert.ok(i > mehrAuf && i < mehrZu, "die Dauer bleibt hinter dem Aufklapper");
+  }
+});
+
+test("S4 — Das Etikett „Vollzugriff“ verspricht nichts, was nicht gilt", async (t) => {
+  /* f) Vollzugriff heißt: bedienen dürfen UND nicht bei jedem Schritt gefragt
+     werden. Es heißt NICHT, dass der Agent Passwörter tippt oder sich
+     anmeldet — das kann und darf er nicht, und ein Etikett, das es andeutet,
+     wäre die teuerste Unwahrheit im ganzen Dialog. */
+  const etikett = /<input type="radio" name="stufe" value="voll"[^>]*>\s*([^<]+)/.exec(html);
+  assert.ok(etikett, "die Stufe „voll“ muss in panel.html angeboten werden");
+
+  /* Was der Mensch nach der Wahl WIRKLICH zu lesen bekommt — gefahren, nicht
+     aus dem Quelltext abgeschrieben. */
+  const p = await panelStarten();
+  t.after(p.aufraeumen);
+  await p.klick("verbinden-start");
+  await p.waehlen("stufe", "voll");
+  const fassung = p.el("zusammenfassung").textContent;
+  assert.match(
+    fassung,
+    /selbständig weiterarbeiten/,
+    "Gegenprobe: die Zusammenfassung spricht wirklich von der Vollzugriff-Wahl"
+  );
+
+  const vollBlock = abschnitt("  voll: {", "};");
+  const ZU_VIEL_VERSPROCHEN = [
+    [/passwor|passwör|kennwort/i, "Passwörter"],
+    [/\bmeldet? (sich|dich) an\b/i, "sich anmelden"],
+    [/\bloggt? (sich|dich) ein\b/i, "sich einloggen"],
+    [/\b(darf|kann|übernimmt)[^.]{0,60}\banmeld/i, "die Anmeldung übernehmen"],
+  ];
+  for (const text of [etikett[1].trim(), fassung, vollBlock]) {
+    for (const [muster, was] of ZU_VIEL_VERSPROCHEN) {
+      assert.ok(!muster.test(text), `Vollzugriff verspricht „${was}“: ${text}`);
+    }
+  }
+
+  /* Und der Vorbehalt steht nicht irgendwo, sondern bei der Wahl selbst: Wer
+     sich die Seite vorlesen lässt, hört ihn im selben Atemzug mit den drei
+     Knöpfen. */
+  const feldAb = html.lastIndexOf("<fieldset", html.indexOf('name="stufe"'));
+  const feld = html.slice(feldAb, html.indexOf("</fieldset>", feldAb));
+  assert.match(feld, /name="stufe" value="voll"/, "Gegenprobe: es ist das Feld mit den Stufen");
+  assert.match(feld, /Passwörter tippt der Agent nie/);
+  assert.match(feld, /Anmelden machst du selbst/);
+  assert.match(
+    vollBlock,
+    /Anmelden\s+(machst|übernimmst)\s+du\s+selbst/,
+    "auch die Ansage zur Stufe sagt, was beim Menschen bleibt"
+  );
+});
+
+test("S5 — Die Seitenleiste ist nicht mehr die Reißleine", async (t) => {
+  /* g) und i) — Vorher riss das Schließen der Leiste dem Agenten mitten im
+     Auftrag die Sitzung weg, samt Seitenrecht und Rahmen. Zusammen mit der
+     Einzelfreigabe war damit jede Arbeit im Hintergrund baulich unmöglich. */
+  const p = await panelStarten();
+  t.after(p.aufraeumen);
+  await p.sitzungHerstellen();
+  p.alleSpurenLeeren();
+
+  await p.fensterEreignis("pagehide");
+
+  assert.ok(
+    !p.anWorker().includes("link:trennen"),
+    "das Schließen der Leiste beendet die Sitzung nicht mehr"
+  );
+  assert.ok(p.zustand.sitzung, "die Sitzung gehört dem Hintergrunddienst und läuft weiter");
+  assert.equal(
+    p.rechteRueckgaben(),
+    0,
+    "und das Seitenrecht bleibt: ohne es könnte der Agent nichts mehr tun"
+  );
+  assert.ok(
+    !p.anTab().includes("overlay:aus"),
+    "der Rahmen bleibt gerade dann stehen, wenn niemand zusieht — er sagt „hier arbeitet eine Maschine“"
+  );
+  assert.ok(!p.anTab().includes("overlay:gestoppt"), "und er wird auch nicht auf „gestoppt“ gestellt");
+
+  /* Gegenprobe. Ohne sie wäre oben nur belegt, dass diese Attrappe nichts
+     misst: Über Stopp passiert weiterhin genau das, was pagehide nicht mehr
+     tut. */
+  await p.f.beenden("nutzer");
+  assert.ok(p.anWorker().includes("link:trennen"), "Stopp trennt sehr wohl");
+  assert.ok(p.rechteRueckgaben() > 0, "Stopp gibt das Seitenrecht zurück");
+  assert.ok(p.anTab().includes("overlay:aus"), "und Stopp nimmt den Rahmen weg");
+});
+
+test("S6 — Die Leiste meldet nur noch, ob jemand zusieht", async (t) => {
+  /* h) Statt der Trennung geht eine Auskunft an den Hintergrunddienst: Beim
+     Öffnen sieht wieder jemand zu, beim Schließen nicht mehr. Was ohne
+     Aufsicht noch erlaubt ist, entscheidet dann der Dienst — nicht das
+     Verschwinden eines Fensters. */
+  const p = await panelStarten();
+  t.after(p.aufraeumen);
+  await p.sitzungHerstellen();
+
+  const beimStart = p.anWorkerVoll().filter((n) => n.typ === "link:unbeaufsichtigt");
+  assert.equal(beimStart.length, 1, "beim Öffnen genau eine Meldung");
+  assert.equal(beimStart[0].an, false, "und sie sagt: es sieht wieder jemand zu");
+
+  /* Sie steht vorn. Fragt die Leiste erst nach dem Zustand und meldet sich
+     danach, hat der Dienst dazwischen eine laufende Sitzung als
+     unbeaufsichtigt geführt, obwohl die Leiste schon offen war. */
+  const reihe = p.anWorker();
+  assert.ok(
+    reihe.indexOf("link:unbeaufsichtigt") >= 0 &&
+      reihe.indexOf("link:unbeaufsichtigt") < reihe.indexOf("link:zustand?"),
+    `die Meldung kommt vor der Zustandsfrage, gemessen: ${reihe}`
+  );
+
+  p.alleSpurenLeeren();
+  await p.fensterEreignis("pagehide");
+
+  const beimSchliessen = p.anWorkerVoll().filter((n) => n.typ === "link:unbeaufsichtigt");
+  assert.equal(beimSchliessen.length, 1, "beim Schließen genau eine Meldung");
+  assert.equal(beimSchliessen[0].an, true, "und sie sagt: jetzt sieht niemand mehr zu");
+  assert.equal(
+    beimSchliessen[0].tabId,
+    7,
+    "samt Tab — ohne ihn wüsste der Dienst nicht, welche Arbeit unbeaufsichtigt ist"
+  );
 });

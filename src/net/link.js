@@ -77,8 +77,13 @@ function melden(nachricht) {
 
 function abzeichenSetzen(an) {
   try {
-    chrome.action.setBadgeText({ text: an ? "LIVE" : "" });
-    if (an) chrome.action.setBadgeBackgroundColor({ color: "#2aff2a" });
+    /* Drei Zustände statt zwei: nichts, LIVE (Sitzung mit Zuschauer) und das
+       Auge (Sitzung ohne offene Seitenleiste). Das Auge ist das Zeichen für
+       Arbeit im Hintergrund; es steht auch dann, wenn der Mensch in einem
+       ganz anderen Fenster ist. */
+    const text = an ? (unbeaufsichtigt ? "👁" : "LIVE") : "";
+    chrome.action.setBadgeText({ text });
+    if (an) chrome.action.setBadgeBackgroundColor({ color: unbeaufsichtigt ? "#00d4ff" : "#2aff2a" });
   } catch (_) {
     /* Ältere Chrome-Fassung ohne action-API im Worker: Der Rahmen im Tab
        bleibt das Hauptsignal, kein Grund zum Abbruch. */
@@ -183,7 +188,30 @@ export async function zustand() {
   const gespeichert = await sitzungLesen();
   if (!gespeichert) return { verbunden: false };
   const offen = !!draht && draht.readyState === WebSocket.OPEN;
-  return { ...gespeichert, verbunden: offen };
+  return { ...gespeichert, verbunden: offen, unbeaufsichtigt };
+}
+
+/*
+ * Sieht gerade jemand zu?
+ *
+ * Im Modulspeicher, nicht in der Ablage: Die Frage gilt nur, solange dieser
+ * Dienstprozess lebt. Startet er neu, ist auch die Seitenleiste neu zu fragen,
+ * und bis dahin gilt die vorsichtige Annahme, dass jemand zusieht.
+ */
+let unbeaufsichtigt = false;
+
+export async function unbeaufsichtigtSetzen(an) {
+  unbeaufsichtigt = !!an;
+  /* Das Symbol sagt es mit: LIVE heißt „läuft und du siehst zu", das Auge
+     heißt „läuft, während du woanders bist". Ohne dieses Zeichen wäre eine
+     Sitzung im Hintergrund genau das, was sie nie sein darf: unbemerkt. */
+  const s = await sitzungLesen();
+  if (s) abzeichenSetzen(true);
+  return unbeaufsichtigt;
+}
+
+export function istUnbeaufsichtigt() {
+  return unbeaufsichtigt;
 }
 
 function senden(rahmen) {

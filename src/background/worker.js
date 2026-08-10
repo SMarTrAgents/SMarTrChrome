@@ -276,6 +276,24 @@ chrome.runtime.onMessage.addListener((n, absender, antwort) => {
     return true;
   }
 
+  /*
+   * Die Seitenleiste ist zugegangen oder wieder aufgegangen. Das ist eine
+   * Zustandsmeldung, keine Anweisung: Die Sitzung läuft weiter, nur sieht
+   * gerade niemand zu. Der Dienst merkt es sich, damit die Freigabe je Schritt
+   * weiß, dass sie niemanden erreicht, und damit das Symbol es anzeigen kann.
+   */
+  if (n.typ === "link:unbeaufsichtigt") {
+    if (!ausEigenerOberflaeche(absender)) {
+      antwort({ ok: false });
+      return false;
+    }
+    link
+      .unbeaufsichtigtSetzen(n.an === true)
+      .then(() => antwort({ ok: true }))
+      .catch(() => antwort({ ok: false }));
+    return true;
+  }
+
   return false;
 });
 

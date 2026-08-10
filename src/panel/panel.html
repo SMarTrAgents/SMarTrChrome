@@ -64,7 +64,7 @@
         <span class="haken" aria-hidden="true"></span> Verbindung beenden
       </button>
 
-      <p class="menue-fuss">SMarTrChrome 0.5.1</p>
+      <p class="menue-fuss">SMarTrChrome 0.5.2</p>
     </div>
 
     <!-- Läuft KEINE Sitzung, steht der Weg dorthin hier: sichtbar und
@@ -141,8 +141,27 @@
              übliche Weg zwei Klicks ohne Entscheidung: aufbauen, herstellen. -->
         <p id="zusammenfassung" class="zusammenfassung"></p>
 
+        <!-- Die Stufe steht VOR dem Aufklapper, nicht dahinter.
+             Befund 10.08.2026: Sie lag hinter „Dauer und Stufe ändern" und war
+             mit „Nur zusehen" vorbelegt. Der übliche Zwei-Klick-Weg endete
+             damit ausnahmslos in einer Lesesitzung, und wer bedienen lassen
+             wollte, fand den Weg nicht. Für jemanden, der sich alles vorlesen
+             lässt, war er praktisch nicht begehbar. -->
+        <fieldset class="stufe-vorn">
+          <legend>Was darf der Agent?</legend>
+          <div class="auswahl" role="radiogroup" aria-label="Was der Agent darf">
+            <label><input type="radio" name="stufe" value="read" checked> Nur zusehen, lesen, blättern, zeigen</label>
+            <label><input type="radio" name="stufe" value="write"> Bedienen, zusätzlich klicken und tippen</label>
+            <label><input type="radio" name="stufe" value="voll"> Vollzugriff, bedienen und selbständig weiterarbeiten</label>
+          </div>
+          <p id="stufe-auskunft-vorn" class="stufe-auskunft">
+            Jeden Schritt bestätigst du einzeln. Passwörter tippt der Agent nie. Anmelden machst du selbst.
+            Deine Wahl wird gemerkt und beim nächsten Mal vorbelegt.
+          </p>
+        </fieldset>
+
         <button id="einstellungen-aendern" class="einstellungen-aendern" type="button"
-                aria-expanded="false" aria-controls="dialog-mehr">Dauer und Stufe ändern</button>
+                aria-expanded="false" aria-controls="dialog-mehr">Dauer und Geltung ändern</button>
 
         <div id="dialog-mehr" hidden>
         <!-- ① Die Auswahl ist ein Wunsch, keine Zusage. Der Server entscheidet
@@ -155,7 +174,7 @@
              „Unbegrenzt" heißt: Die Erweiterung erneuert die Freigabe selbst,
              solange die Sitzung läuft, bis der Mensch sie beendet. -->
         <fieldset>
-          <legend>① Wie lange?</legend>
+          <legend>Wie lange?</legend>
           <div class="auswahl" role="radiogroup" aria-label="Dauer der Verbindung">
             <label><input type="radio" name="dauer" value="600" checked> 10 Minuten</label>
             <label><input type="radio" name="dauer" value="1800"> 30 Minuten</label>
@@ -164,27 +183,12 @@
           </div>
         </fieldset>
 
-        <!-- ② Zwei Stufen, beide gebaut: Zusehen (lesen, blättern, zeigen)
-             und Bedienen (zusätzlich klicken und tippen). Anmelden und
-             Geheimfelder bleiben in jeder Stufe Sache des Menschen, und
-             jeder Klick geht einzeln durch die Freigabe. -->
-        <fieldset>
-          <legend>② Was darf der Agent?</legend>
-          <div class="auswahl" role="radiogroup" aria-label="Stufe der Verbindung">
-            <label><input type="radio" name="stufe" value="read" checked> Nur zusehen, lesen, blättern, zeigen</label>
-            <label><input type="radio" name="stufe" value="write"> Bedienen, zusätzlich klicken und tippen</label>
-          </div>
-          <p class="stufe-auskunft">
-            Jeden Schritt bestätigst du einzeln. Passwörter tippt der Agent nie. Anmelden machst du selbst.
-          </p>
-        </fieldset>
-
         <!-- ③ ebenso: Die Sitzungsfreigabe gilt fest nur für den Tab, auf
              dem der Antrag entsteht (E15, allow = [tab_host]). "Diese
              Website" wäre serverseitig dieselbe Sitzung mit engerem
              Bereich — die Wahl hätte also keine Wirkung. -->
         <fieldset>
-          <legend>③ Wo gilt das?</legend>
+          <legend>Wo gilt das?</legend>
           <p class="stufe-auskunft">
             <strong>Nur dieser eine Tab</strong> (<span id="ursprung"></span>).<br>
             Andere Tabs und andere Seiten sieht der Agent nicht.

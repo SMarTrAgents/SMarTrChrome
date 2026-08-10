@@ -534,13 +534,33 @@ test("Markenfilter: auch ein /a0-Pfad im Grund wird umgeschrieben", async () => 
  * 3. Die vier lesenden Befehle
  * ------------------------------------------------------------------ */
 
-test("Auch im Automatikmodus wird gefragt — in dieser Fassung ausnahmslos", async () => {
+test("Im Einzelschritt-Modus wird bei JEDEM Befehl gefragt", async () => {
+  /* Die Vorgabe. Wer nichts wählt, bekommt die Rückfrage — bei Lesebefehlen
+     genauso wie bei bedienenden. */
+  for (const cmd of ["readPage", "click"]) {
+    const { ergebnis, spur } = await laufen(
+      { id: `es-${cmd}`, cmd, reason: "Ich mache das jetzt.", ...(VOLLSTAENDIG[cmd] || {}) },
+      { sitzung: { ...SITZUNG, stufe: "write", schrittmodus: "confirm_each" }, panel: panelSagtNein }
+    );
+    assert.ok(anDasPanel(spur).includes("link:schritt-freigabe"), `${cmd} fragt`);
+    assert.equal(ergebnis.error.code, "user_declined", cmd);
+  }
+});
+
+test("Im Selbständig-Modus läuft der Schritt ohne Rückfrage durch", async () => {
+  /* Seit 0.5.2 (Inhaber-Entscheid 10.08.2026): Der Automatikmodus wirkt
+     wirklich, sonst kann im Hintergrund nichts laufen. Er ist doppelt
+     gesichert — der Mensch muss ihn wählen, UND der Server muss ihn erlauben,
+     sonst kommt die Sitzung gar nicht erst mit `schrittmodus: "auto"` zurück.
+     Der Prüfsatz misst genau das Durchlaufen; die beiden Sicherungen davor
+     sind Sache der Seitenleiste und der Gegenstelle. */
   const { ergebnis, spur } = await laufen(
-    { id: "c-10b", cmd: "readPage", reason: "Ich lese die Seite." },
+    { id: "auto-1", cmd: "readPage", reason: "Ich lese die Seite." },
     { sitzung: { ...SITZUNG, schrittmodus: "auto" }, panel: panelSagtNein }
   );
-  assert.ok(anDasPanel(spur).includes("link:schritt-freigabe"));
-  assert.equal(ergebnis.error.code, "user_declined");
+  assert.ok(!anDasPanel(spur).includes("link:schritt-freigabe"),
+    "im Selbständig-Modus darf keine Freigabekarte gestellt werden");
+  assert.equal(ergebnis.success, true, "und der Schritt läuft durch");
 });
 
 test("readPage liefert den Textbaum", async () => {
@@ -917,16 +937,27 @@ test("Sichtbarkeit: klicken fährt zuerst den Zeiger ans Ziel, dann klickt es", 
   );
 });
 
-test("Invariante: JEDER Befehl trägt freigabe 'immer' — es gibt keinen fragefreien Pfad", () => {
+test("Invariante: der Schrittmodus entscheidet, und er entscheidet für ALLE Befehle", () => {
   /* brauchtFreigabe = eintrag.freigabe === "immer" || schrittmodus !== "auto".
-     Solange ALLE Befehle "immer" tragen, ist der auto-Zweig tot und jeder
-     Schritt geht durch die Rückfrage — das ist die zentrale Sicherheitszusage
-     (TESTPROMPT Punkt 1). Ein künftiger Eintrag mit "schritt" oder "nie" würde
-     im Automatikmodus stumm durchlaufen; dieser Prüfsatz fängt ihn hier ab. */
+     Bis 0.5.1 trugen alle Befehle "immer". Das machte den Schrittmodus
+     wirkungslos UND liess bei geschlossener Seitenleiste jeden Befehl an
+     grant_required scheitern, auch reines Lesen — Arbeit im Hintergrund war
+     damit baulich unmöglich. Seit 0.5.2 trägt jeder Befehl "schritt", die
+     Entscheidung liegt allein am Modus der Sitzung.
+     Ein künftiger Eintrag mit "nie" wäre ein Pfad, der auch im
+     Einzelschritt-Modus nicht fragt; den fängt dieser Prüfsatz ab. */
   for (const cmd of Object.keys(BEFEHLE)) {
-    assert.equal(BEFEHLE[cmd].freigabe, "immer",
-      `${cmd} muss freigabe:"immer" tragen, sonst entsteht ein fragefreier Pfad`);
+    assert.equal(BEFEHLE[cmd].freigabe, "schritt",
+      `${cmd} muss freigabe:"schritt" tragen, damit der Schrittmodus gilt`);
   }
+});
+
+test("Invariante: Geheimfelder bleiben in JEDEM Modus tabu", () => {
+  /* Was der Automatikmodus ausdrücklich NICHT öffnet. Die Zusage hängt nicht
+     am Modus, sondern am Ausführer und am Seitenskript. */
+  const quelle = readFileSync(new URL("../net/ausfuehrer.js", import.meta.url), "utf8");
+  assert.ok(/password|geheim|secret/i.test(quelle),
+    "der Ausführer muss Geheimfelder überhaupt kennen, sonst kann er sie nicht schützen");
 });
 
 test("Sichtbarkeit: auch tippen und auswählen zeigen zuerst den Zeiger", async () => {
@@ -2001,5 +2032,285 @@ test("Schließgrund: jeder Grund aus DRAHTFORMAT §8 hat einen Satz", () => {
     const text = schliessgrund(4999, g);
     assert.ok(text.length > 10, `${g} hat keinen Satz`);
     assert.ok(!text.includes("abgerissen"), `${g} fällt auf den Vorgabesatz zurück`);
+  }
+});
+
+/* ------------------------------------------------------------------ *
+ * 7. Der Arbeitszeiger — Sichtbarkeit für Schritte OHNE Ziel
+ *
+ * Gemessen am 10.08.2026: Von den zehn Befehlen der Lesestufe bewegte genau
+ * EINER den Agentenzeiger, nämlich `highlight` — und der auch nur, wenn der
+ * Agent die Epoche der letzten Wahrnehmung mitschickte. Wer lesen, blättern
+ * oder warten liess, sah den grünen Rahmen und sonst nichts. Für einen
+ * Menschen ist „der Rahmen steht, aber nichts bewegt sich" von „kaputt" nicht
+ * zu unterscheiden, und genau so wurde es gemeldet.
+ *
+ * Diese Prüfsätze messen die Zusage, nicht den Quelltext: Jeder Befehl wird
+ * durchgespielt, und geschaut wird, was WIRKLICH an die Seite ging. Wer die
+ * Zeile `arbeitsZeigerFahren(...)` aus der Befehlsschleife nimmt, färbt jeden
+ * einzelnen von ihnen rot — auch die, deren Kern ein „darf nicht" ist: Sie
+ * tragen ihre Gegenprobe im selben Prüfsatz. Eine Prüfung, die nur „es kam
+ * nichts" verlangt, ist ohne die Zeile ebenfalls grün und belegt damit gar
+ * nichts.
+ * ------------------------------------------------------------------ */
+
+/* Was der Mensch bei welchem Schritt sehen soll. Bewusst hier abgeschrieben
+   und nicht aus ausfuehrer.js gelesen: Die Tabelle im Code ist der Prüfling,
+   nicht der Massstab. Wer sie umbenennt, muss hier vorbeikommen. */
+const ARBEITSMUSTER_ERWARTET = {
+  readPage: "lesen",
+  snapshot: "lesen",
+  get_state: "prüfen",
+  extract: "ablesen",
+  scroll: "blättern",
+  waitFor: "warten",
+  screenshot: "aufnehmen",
+  navigate: "wechseln",
+  back: "zurück",
+};
+
+/* Die vier Befehle mit einem Ziel auf der Seite. Sie fahren den ZIELzeiger
+   (overlay:zeiger) an ein konkretes Element — für sie wäre ein Arbeitszeiger
+   ohne Ort eine zweite, widersprüchliche Bewegung. */
+const MIT_ZIEL = ["highlight", "click", "type", "select"];
+
+/** Alle Arbeitszeiger-Nachrichten dieses Laufs, in der Reihenfolge des Laufs. */
+const arbeitszeigerNachrichten = (spur) =>
+  spur
+    .filter((e) => e.wohin === "seite" && e.nachricht.typ === "overlay:arbeitszeiger")
+    .map((e) => e.nachricht);
+
+/** Wo im Lauf etwas stand — Nachricht an die Seite ODER Griff an den Browser. */
+function stelleImLauf(spur, marke) {
+  return spur.findIndex((e) =>
+    marke.startsWith("overlay:")
+      ? e.wohin === "seite" && e.nachricht.typ === marke
+      : e.wohin === marke
+  );
+}
+
+/** Wo im Lauf der Mensch gefragt wurde. */
+const stelleDerFrage = (spur) =>
+  spur.findIndex((e) => e.wohin === "panel" && e.nachricht.typ === "link:schritt-freigabe");
+
+/* Woran man sieht, dass die AUSFÜHRUNG dieses Befehls begonnen hat. Der
+   Arbeitszeiger muss davor stehen — er kündigt an, er berichtet nicht. */
+const AUSFUEHRUNGSWEG = {
+  readPage: "overlay:baum",
+  snapshot: "overlay:baum",
+  get_state: "overlay:zustand",
+  extract: "overlay:auslesen",
+  scroll: "overlay:scrollen",
+  waitFor: "overlay:warten",
+  screenshot: "tabs.captureVisibleTab",
+  navigate: "tabs.update",
+  back: "tabs.goBack",
+};
+
+function leseRahmen(cmd) {
+  return { id: `az-${cmd}`, cmd, reason: "Ich mache das jetzt.", ...(VOLLSTAENDIG[cmd] || {}) };
+}
+
+test("Arbeitszeiger: JEDER Lesebefehl bewegt den Zeiger — mit genau dem Muster, das zum Schritt gehört", async () => {
+  /* Einzeln, nicht stellvertretend: Ein einziger geprüfter Befehl liesse
+     genau den Zustand vom 10.08. zu — einer bewegt sich, neun nicht. */
+  for (const [cmd, muster] of Object.entries(ARBEITSMUSTER_ERWARTET)) {
+    const { ergebnis, spur } = await laufen(leseRahmen(cmd), { seite: seiteBedient });
+    istErgebnisrahmen(ergebnis, `az-${cmd}`, cmd);
+    assert.equal(ergebnis.success, true, `${cmd} lief gar nicht durch`);
+
+    const gefahren = arbeitszeigerNachrichten(spur);
+    assert.equal(gefahren.length, 1,
+      `${cmd}: genau eine Bewegung erwartet, gesehen ${gefahren.length}`);
+    assert.equal(gefahren[0].muster, muster,
+      `${cmd}: der Mensch sähe „${gefahren[0].muster}" statt „${muster}"`);
+    assert.equal(gefahren[0].typ, "overlay:arbeitszeiger");
+  }
+});
+
+test("Arbeitszeiger: er steht vor der Ausführung — angekündigt wird, nicht nachberichtet", async () => {
+  for (const [cmd, weg] of Object.entries(AUSFUEHRUNGSWEG)) {
+    const { ergebnis, spur } = await laufen(leseRahmen(cmd), { seite: seiteBedient });
+    assert.equal(ergebnis.success, true, cmd);
+
+    const zeiger = stelleImLauf(spur, "overlay:arbeitszeiger");
+    const tat = stelleImLauf(spur, weg);
+    assert.ok(zeiger >= 0, `${cmd}: kein Arbeitszeiger im Lauf`);
+    assert.ok(tat >= 0, `${cmd}: die Ausführung (${weg}) ist im Lauf nicht zu finden`);
+    assert.ok(zeiger < tat,
+      `${cmd}: der Zeiger fährt erst nach ${weg} — dann sieht der Mensch die Arbeit, die schon vorbei ist`);
+
+    /* Und der grüne Rahmen steht vorher: Erst die Bühne, dann die Bewegung. */
+    const rahmen = stelleImLauf(spur, "overlay:ping");
+    assert.ok(rahmen >= 0 && rahmen < zeiger,
+      `${cmd}: der Arbeitszeiger fährt, bevor der Rahmen überhaupt sichergestellt ist`);
+  }
+});
+
+test("Arbeitszeiger: ein abgelehnter Schritt bewegt nichts — die Anzeige steht NACH der Freigabe", async () => {
+  /* Die Kernzusage der Sichtbarkeit. Sie hat zwei Hälften, und beide werden
+     hier gemessen: Ohne die Ja-Hälfte wäre dieser Prüfsatz auch dann grün,
+     wenn der Arbeitszeiger überhaupt nicht existierte. */
+  for (const cmd of Object.keys(ARBEITSMUSTER_ERWARTET)) {
+    const ja = await laufen(leseRahmen(cmd), { seite: seiteBedient, panel: panelSagtJa });
+    assert.equal(ja.ergebnis.success, true, `${cmd}: der freigegebene Schritt lief nicht`);
+    assert.equal(arbeitszeigerNachrichten(ja.spur).length, 1,
+      `${cmd}: nach dem Ja muss sich etwas bewegen`);
+    assert.ok(stelleDerFrage(ja.spur) >= 0, `${cmd}: es wurde gar nicht gefragt`);
+    assert.ok(stelleDerFrage(ja.spur) < stelleImLauf(ja.spur, "overlay:arbeitszeiger"),
+      `${cmd}: der Zeiger fährt, bevor der Mensch gefragt wurde`);
+
+    const nein = await laufen(leseRahmen(cmd), { seite: seiteBedient, panel: panelSagtNein });
+    assert.equal(nein.ergebnis.error.code, "user_declined", cmd);
+    assert.deepEqual(arbeitszeigerNachrichten(nein.spur), [],
+      `${cmd}: ein abgelehnter Schritt hat die Seite bewegt`);
+    assert.ok(!anDieSeite(nein.spur).includes("overlay:arbeitszeiger"),
+      `${cmd}: overlay:arbeitszeiger trotz Ablehnung`);
+  }
+});
+
+test("Arbeitszeiger: die Nachricht trägt nur das Muster — kein Buchstabe von der besuchten Seite", async () => {
+  /* Der Arbeitszeiger geht in eine fremde Seite. Was er mitnimmt, kann diese
+     Seite lesen; deshalb nimmt er nichts mit ausser dem Muster. Geprüft wird
+     die Form der Nachricht, nicht nur ihr Inhalt: Ein neues Feld „text" wäre
+     ein Leck, auch wenn es in diesem Lauf zufällig leer bliebe. */
+  const heimlich = ["Zur Kasse", "Zwischensumme", "428,90", "Hauptmenü", "Startseite",
+    "Warenkorb", "geizhals", "e1", "e2", "s1.abcd"];
+
+  for (const cmd of Object.keys(ARBEITSMUSTER_ERWARTET)) {
+    const { ergebnis, spur } = await laufen(leseRahmen(cmd), { seite: seiteBedient });
+    assert.equal(ergebnis.success, true, cmd);
+    const gefahren = arbeitszeigerNachrichten(spur);
+    assert.equal(gefahren.length, 1, `${cmd}: ohne Nachricht ist hier nichts zu prüfen`);
+
+    const n = gefahren[0];
+    assert.deepEqual(Object.keys(n).sort(), ["muster", "typ"],
+      `${cmd}: die Nachricht trägt mehr als Art und Muster: ${Object.keys(n).join(", ")}`);
+    assert.equal(typeof n.muster, "string");
+    assert.ok(n.muster.length > 0 && n.muster.length <= 20,
+      `${cmd}: „${n.muster}" ist kein Muster, sondern ein Text`);
+
+    const roh = JSON.stringify(n);
+    for (const wort of heimlich) {
+      assert.equal(roh.includes(wort), false,
+        `${cmd}: „${wort}" von der Seite reist im Arbeitszeiger mit`);
+    }
+  }
+
+  /* Auch nichts vom AGENTEN: Der Suchtext eines `waitFor` ist zwar nicht von
+     der Seite, aber er gehört in die Freigabefrage und nicht in eine Nachricht
+     an die Seite. */
+  const { spur } = await laufen(
+    { id: "az-w", cmd: "waitFor", textPresent: "GEHEIMWORT-XY", waitSeconds: 2, reason: "Ich warte." },
+    { seite: seiteBedient }
+  );
+  const w = arbeitszeigerNachrichten(spur);
+  assert.equal(w.length, 1);
+  assert.equal(JSON.stringify(w[0]).includes("GEHEIMWORT-XY"), false,
+    "der Arbeitszeiger reicht den Suchtext des Agenten an die Seite weiter");
+});
+
+test("Arbeitszeiger: Bedienbefehle behalten den ZIELzeiger — zwei Zeiger, zwei Aufgaben", async () => {
+  for (const cmd of MIT_ZIEL) {
+    const sitzung = BEFEHLE[cmd].stufe === "write" ? { ...SITZUNG, stufe: "write" } : SITZUNG;
+    const { ergebnis, spur } = await laufen(
+      { id: `azz-${cmd}`, cmd, reason: "Ich mache das jetzt.", ...VOLLSTAENDIG[cmd] },
+      { sitzung, seite: seiteBedient }
+    );
+    assert.equal(ergebnis.success, true, cmd);
+    assert.ok(anDieSeite(spur).includes("overlay:zeiger"),
+      `${cmd} fährt den Zielzeiger nicht mehr ans Element`);
+    assert.deepEqual(arbeitszeigerNachrichten(spur), [],
+      `${cmd} hat ein Ziel — ein Arbeitszeiger ohne Ort wäre eine zweite, falsche Bewegung`);
+  }
+
+  /* Die Gegenprobe im selben Prüfsatz: Ein Schritt ohne Ziel macht es genau
+     andersherum. Ohne sie bliebe dieser Prüfsatz auch dann grün, wenn es den
+     Arbeitszeiger gar nicht gäbe. */
+  const { ergebnis, spur } = await laufen(
+    { id: "azz-lesen", cmd: "readPage", reason: "Ich lese." },
+    { seite: seiteBedient }
+  );
+  assert.equal(ergebnis.success, true);
+  assert.equal(arbeitszeigerNachrichten(spur).length, 1, "readPage bewegt den Arbeitszeiger");
+  assert.ok(!anDieSeite(spur).includes("overlay:zeiger"),
+    "und braucht keinen Zielzeiger, denn es hat kein Ziel");
+});
+
+test("Invariante: KEIN Befehl läuft unsichtbar — entweder Zielzeiger oder Arbeitszeiger", async () => {
+  /* Die eigentliche Zusage der Oberfläche („lesen, blättern, zeigen") als
+     Aussage über ALLE Befehle. Ein künftiger Befehl ohne Eintrag in
+     ARBEITSMUSTER fällt hier auf, ohne dass jemand diese Datei anfasst — genau
+     die Lücke, aus der der Befund vom 10.08. entstanden ist. */
+  for (const cmd of Object.keys(BEFEHLE)) {
+    const sitzung = BEFEHLE[cmd].stufe === "write" ? { ...SITZUNG, stufe: "write" } : SITZUNG;
+    const { ergebnis, spur } = await laufen(
+      { id: `azi-${cmd}`, cmd, reason: "Ich mache das jetzt.", ...(VOLLSTAENDIG[cmd] || {}) },
+      { sitzung, seite: seiteBedient }
+    );
+    assert.equal(ergebnis.success, true, `${cmd} lief gar nicht durch`);
+
+    const arbeit = arbeitszeigerNachrichten(spur).length;
+    const ziel = anDieSeite(spur).filter((t) => t === "overlay:zeiger").length;
+    assert.ok(arbeit + ziel > 0,
+      `${cmd} läuft ohne jede sichtbare Bewegung — für den Menschen nicht von „kaputt" zu unterscheiden`);
+    if (MIT_ZIEL.includes(cmd)) {
+      assert.equal(arbeit, 0, `${cmd} hat ein Ziel und braucht keinen Arbeitszeiger`);
+      assert.ok(ziel > 0, `${cmd} zeigt nicht, worauf es zielt`);
+    } else {
+      assert.equal(arbeit, 1, `${cmd}: genau eine Bewegung, gesehen ${arbeit}`);
+      assert.equal(ziel, 0, `${cmd} hat kein Ziel, fährt aber den Zielzeiger`);
+    }
+  }
+});
+
+test("Arbeitszeiger: er ist Anzeige, keine Bedingung — misslingt er, läuft der Schritt trotzdem", async () => {
+  /* Drei Arten, wie die Seite die Anzeige nicht annehmen kann: Sie hört gar
+     nicht zu (Chrome wirft), sie antwortet mit nichts, sie sagt ab. In allen
+     dreien darf der Befehl nicht daran scheitern — sonst wäre eine reine
+     Anzeige zur Voraussetzung des Lesens geworden. */
+  const arten = {
+    kein_empfaenger: () => { throw new Error("Receiving end does not exist."); },
+    keine_antwort: () => undefined,
+    absage: () => ({ ok: false, fehler: "unbekannte_nachricht" }),
+  };
+
+  for (const [name, antwort] of Object.entries(arten)) {
+    for (const cmd of ["readPage", "scroll"]) {
+      const seite = (n) => (n.typ === "overlay:arbeitszeiger" ? antwort() : seiteBedient(n));
+      const { ergebnis, spur } = await laufen(leseRahmen(cmd), { seite });
+      assert.ok(anDieSeite(spur).includes("overlay:arbeitszeiger"),
+        `${cmd}/${name}: versucht wurde die Anzeige nicht einmal`);
+      istErgebnisrahmen(ergebnis, `az-${cmd}`, cmd);
+      assert.equal(ergebnis.success, true,
+        `${cmd}/${name}: der Schritt hängt an der Anzeige statt an der Arbeit`);
+      assert.ok(ergebnis.data.snapshot.text.length > 0,
+        `${cmd}/${name}: gelesen wurde trotzdem nichts`);
+    }
+  }
+});
+
+test("Arbeitszeiger: hängt die Seite an der Anzeige, endet der Befehl trotzdem in der Frist", async () => {
+  /* Der härteste Fall: Die Seite nimmt die Nachricht an und antwortet nie.
+     Ohne eigene Frist bliebe der Ausführer daran kleben, und der Agent bekäme
+     „keine Antwort vom Browser" statt eines Zustands. Die Frist des Befehls
+     wird für diesen Lauf gekürzt — geprüft wird nicht, wie lang sie ist,
+     sondern dass es sie gibt. */
+  const alt = BEFEHLE.get_state.frist;
+  BEFEHLE.get_state.frist = 5000; // 5000 − 1500 Puffer = 3500 eigene Frist
+  try {
+    const seite = (n) => (n.typ === "overlay:arbeitszeiger" ? new Promise(() => {}) : seiteBedient(n));
+    const begonnen = Date.now();
+    const { ergebnis, spur } = await laufen(
+      { id: "az-hang", cmd: "get_state", reason: "Ich sehe nach, wo wir stehen." },
+      { seite }
+    );
+    assert.equal(arbeitszeigerNachrichten(spur).length, 1, "die Anzeige wurde versucht");
+    istErgebnisrahmen(ergebnis, "az-hang", "get_state");
+    assert.equal(ergebnis.success, true, "und der Zustand kommt trotzdem zurück");
+    assert.equal(ergebnis.data.state.readyState, "complete");
+    assert.ok(Date.now() - begonnen < 5000, "die Antwort kommt vor der Frist des Relays");
+  } finally {
+    BEFEHLE.get_state.frist = alt;
   }
 });

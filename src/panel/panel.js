@@ -562,7 +562,34 @@ const STUFENTEXT = {
     tut: "für dich klicken, tippen und ausfüllen",
     ansage: "Er darf für dich klicken und tippen. Anmelden machst du selbst.",
   },
+  voll: {
+    etikett: "Vollzugriff",
+    tut: "für dich klicken, tippen und selbständig weiterarbeiten",
+    ansage: "Er arbeitet selbständig weiter und fragt nicht bei jedem Schritt. Anmelden machst du selbst.",
+  },
 };
+
+/*
+ * „Vollzugriff" ist die Wahl des Menschen, nicht eine dritte Stufe auf der
+ * Leitung.
+ *
+ * Auf der Leitung gibt es read, write und full. Was `full` dort zusätzlich
+ * freigäbe, sind ausschließlich `eval`, `terminal` und `maintenance` — Befehle,
+ * die diese Erweiterung gar nicht kennt und auch nicht bekommen darf: Ein
+ * `eval` würde vom Server geliefertes JavaScript auf der Kundenseite ausführen,
+ * das verbietet Manifest V3, und es machte die besuchte Seite zur Befehlsquelle.
+ * Die Stufe `full` wäre hier also entweder wirkungslos oder gefährlich.
+ *
+ * Was der Inhaber mit „Vollzugriff" meint, ist etwas anderes und Sinnvolles:
+ * bedienen dürfen UND nicht bei jedem Schritt gefragt werden. Genau das ist
+ * diese Wahl — Stufe `write` auf der Leitung, Schrittmodus `auto`. Sie ist
+ * doppelt gesichert: Der Mensch muss sie ausdrücklich wählen, und die
+ * Gegenstelle muss den Selbständig-Modus überhaupt erlauben, sonst fällt die
+ * Sitzung dort auf Einzelfreigabe zurück und die Seitenleiste sagt es an.
+ */
+const VOLL = "voll";
+const stufeAufDerLeitung = (wahl) => (wahl === VOLL ? "write" : wahl === "write" ? "write" : "read");
+const schrittmodusAus = (wahl) => (wahl === VOLL ? "auto" : "confirm_each");
 
 /*
  * Stufe und Dauer sind seit dem 29.07.2026 wieder echte Auswahlen.
@@ -590,7 +617,10 @@ const STUFENTEXT = {
 const VERLAENGERN_AB_SEKUNDEN = 75;
 const VERLAENGERUNGS_DAUER = 3600;
 
-const gewaehlteStufe = () => (gewaehlt("stufe") === "write" ? "write" : "read");
+const gewaehlteStufe = () => {
+  const w = gewaehlt("stufe");
+  return w === "write" || w === VOLL ? w : "read";
+};
 const gewaehlteDauer = () => {
   const wert = gewaehlt("dauer");
   if (wert === "unbegrenzt") return { sekunden: VERLAENGERUNGS_DAUER, unbegrenzt: true };
@@ -988,16 +1018,20 @@ function geltungsbereichVorschlag() {
      bestätigen könnte, obwohl es garantiert nicht funktioniert. */
   const host = rechte.bereichHost(zustand.ursprung);
   const dauer = gewaehlteDauer();
+  const wahl = gewaehlteStufe();
   return {
-    access: gewaehlteStufe(),
+    /* Auf der Leitung gibt es nur read und write. „Vollzugriff" ist write mit
+       Selbständig-Modus, siehe die Begründung bei STUFENTEXT. */
+    access: stufeAufDerLeitung(wahl),
     duration: dauer.sekunden,
     unbegrenzt: dauer.unbegrenzt,
     mode: "tab",
     allow: host ? [host] : [],
     tab_host: host,
-    /* Jeder Schritt wird einzeln bestätigt. Etwas anderes schlägt diese
-       Erweiterung nicht vor. */
-    step_mode: "confirm_each",
+    /* Vorgabe bleibt die Einzelbestätigung. Nur wer ausdrücklich „Vollzugriff"
+       wählt, beantragt den Selbständig-Modus — und auch dann entscheidet die
+       Gegenstelle, ob sie ihn erteilt. */
+    step_mode: schrittmodusAus(wahl),
   };
 }
 
@@ -1112,7 +1146,13 @@ async function sitzungAnzeigen(serverSitzung, { verlaengern = false } = {}) {
   /* Die Zusage, an der die Schrittfreigabe hängt, steht in der Ansage selbst:
      Verbunden — und vor jedem Schritt wird gefragt. Nur im (serverseitig
      erteilten) Automatikmodus entfällt der Satz, damit die Anzeige nicht lügt. */
-  const schrittSatz = zustand.sitzung.modus === "auto" ? "" : "Ich frage dich vor jedem Schritt. ";
+  /* Im Selbständig-Modus wurde der Satz bisher nur weggelassen. Eine
+     Auslassung ist aber keine Aussage, und gerade wer sich alles vorlesen
+     lässt, muss hören, dass jetzt NICHT mehr gefragt wird. */
+  const schrittSatz =
+    zustand.sitzung.modus === "auto"
+      ? "Ich arbeite selbständig weiter und frage nicht bei jedem Schritt. "
+      : "Ich frage dich vor jedem Schritt. ";
   sagen("niemand", `Verbunden. ${schrittSatz}Ich bin noch etwa ${rest} Minuten für dich da.`);
   ansagen(
     `Verbunden. ${schrittSatz}Der Agent ist jetzt auf diesem Tab. Noch etwa ${rest} Minuten. ` +
@@ -2259,28 +2299,41 @@ window.addEventListener("keydown", (e) => {
  * weder Restzeit noch Stopp-Knopf, und eine Steuersitzung, die niemand
  * beaufsichtigt, ist genau das, was die Vorgabe ausschließt.
  */
+/*
+ * Die Seitenleiste geht zu. Das beendet die Sitzung NICHT mehr.
+ *
+ * Vorher stand hier `link:trennen`, und das war die eingebaute Sperre gegen
+ * jede Arbeit im Hintergrund: Wer die Leiste zuklappte oder das Fenster
+ * wechselte, riss dem Agenten mitten im Auftrag die Sitzung weg, samt
+ * Seitenrecht und laufender Arbeit. Zusammen mit der zweiten Sperre (jeder
+ * Befehl brauchte eine Karte in genau dieser Leiste) konnte SMarTrChrome
+ * baulich nichts tun, sobald der Mensch woanders hinsah.
+ *
+ * Jetzt gilt: Die Sitzung gehört dem Hintergrunddienst und läuft weiter. Die
+ * Leiste meldet nur, dass gerade niemand zusieht. Der Dienst entscheidet
+ * daraufhin, was ohne Aufsicht noch erlaubt ist: im Selbständig-Modus arbeitet
+ * der Agent weiter, im Einzelschritt-Modus wartet er und macht mit dem
+ * Fragezeichen am Symbol auf sich aufmerksam.
+ *
+ * Der grüne Rahmen bleibt ausdrücklich stehen. Er sagt „hier arbeitet eine
+ * Maschine", und das gilt weiter, gerade wenn der Mensch nicht hinsieht.
+ */
 window.addEventListener("pagehide", () => {
   chrome.runtime
     .sendMessage({
-      typ: "link:trennen",
-      grund: "nutzer",
-      ausweis: zustand.ausweis ? zustand.ausweis.token : null,
+      typ: "link:unbeaufsichtigt",
+      an: true,
+      tabId: Number.isInteger(zustand.tabId) ? zustand.tabId : null,
     })
     .catch(() => {});
-  /* Das Recht nimmt der Hintergrunddienst zurück, sobald die Sitzung endet
-     (net/link.js). Der Aufruf hier ist der schnellere, nicht der tragende
-     Weg — er läuft im Abbau der Seite und kommt vielleicht nicht mehr durch. */
-  if (zustand.ursprungMuster) {
-    rechte.rechtZurueckgeben(zustand.ursprungMuster).catch(() => {});
-  }
-  if (zustand.tabId) {
-    chrome.tabs.sendMessage(zustand.tabId, { typ: "overlay:aus" }).catch(() => {});
-  }
 });
 
 setzeZustand("bereit");
 eingabePlatzhalterSetzen();
 einstellungenLaden();
+/* Die Leiste ist offen, es sieht also wieder jemand zu. Gegenstück zum
+   pagehide weiter unten. */
+chrome.runtime.sendMessage({ typ: "link:unbeaufsichtigt", an: false }).catch(() => {});
 /* Die Reihenfolge ist Absicht: Erst nachsehen, ob eine Sitzung läuft — eine
    Erklärung darf niemals eine laufende Sitzung überblenden. Danach das
    Guthaben, das ohne Ausweis von sich aus erklärt, woran es liegt. Ohne diese
