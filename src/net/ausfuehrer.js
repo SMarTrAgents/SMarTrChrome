@@ -58,6 +58,12 @@ import {
   refPruefen,
 } from "./befehle.js";
 import { anSeite, overlaySicherstellen, tabAdresse } from "./seite.js";
+/* Der Markenfilter des Chatwegs gilt auch hier: Der Satz des Agenten aus dem
+   Befehlsrahmen landet in der Freigabekarte UND wird vorgelesen. Ohne diesen
+   Import stand „A0" auf der prominentesten Fläche der Erweiterung, genau an
+   der Stelle, an der jeder Schritt einzeln vorgelesen wird. Vier Eintritts-
+   punkte waren gedeckt, dieser fünfte nicht. */
+import { entmarken } from "./chat.js";
 
 /* --------------------------------------------------------------------- *
  * Zustand des Ausführers. Alles im Modul, nichts auf Platte: Stirbt der
@@ -998,6 +1004,31 @@ async function tabFertigAbwarten(tabId, fristMs) {
 }
 
 /**
+ * Schaltet den grünen Rahmen an, wenn das Inhaltsskript gerade neu eingespielt
+ * wurde. Ein frisch eingespieltes Overlay startet unsichtbar (opacity 0), erst
+ * `overlay:an` setzt `data-an` und damit die Deckkraft.
+ *
+ * Diese Funktion gibt es, weil es die Stelle ZWEIMAL braucht und sie beim
+ * ersten Mal nur an einer von beiden stand: Schritt 7 der Befehlsschleife hatte
+ * sie, der gemeinsame Nachlauf von `navigate` und `back` nicht. Ein Agent, der
+ * einmal selbst navigierte, arbeitete danach für den Rest der Sitzung ohne
+ * Rahmen, ohne Schild und ohne Titel-Präfix — denn beim nächsten Befehl meldet
+ * `overlaySicherstellen` `schonDa: true` und der Zweig greift nie mehr. Genau
+ * die Regression „nichts passiert sichtbar", die für behoben erklärt war, stand
+ * über den Ortswechsel wieder offen. Zwei Aufrufer, eine Quelle: so können die
+ * beiden Stellen nicht erneut auseinanderlaufen.
+ */
+async function rahmenWiederAnschalten(tabId, overlay) {
+  if (!overlay || overlay.schonDa) return;
+  const gross = await grosseSichtLesen();
+  await anSeite(tabId, {
+    typ: "overlay:an",
+    gross,
+    text: "SMarTrAgent steuert diesen Tab, Esc Esc = Stopp",
+  }, 2000).catch(() => {});
+}
+
+/**
  * Der gemeinsame Nachlauf von `navigate` und `back`.
  *
  * @returns {{ok:true, kopf:object, snapshot:object|null, fertig:boolean}
@@ -1047,6 +1078,10 @@ async function nachDemWechsel(lage, fristMs) {
       retryable: overlay.fehler !== "ursprung_gesperrt",
     };
   }
+
+  /* Vor der Wahrnehmung, nicht danach: schon der erste Blick auf die neue Seite
+     soll unter sichtbarem Rahmen geschehen. */
+  await rahmenWiederAnschalten(lage.tabId, overlay);
 
   const kopf = { url: adresse, titel: await tabTitel(lage.tabId) };
   const w = await wahrnehmen(lage.tabId, kopf, lage.seitenfrist()).catch(() => ({ ok: false }));
@@ -1231,7 +1266,7 @@ async function einzeln(rahmen, sitzung, { id, cmd, begonnen, meineGeneration }) 
         wüsste der Inhaber nicht, wofür er gerade freigibt. Das ist eine
         Barrierefreiheits-Erzwingung im Protokoll, keine Höflichkeit
         (spec-01 §3.6.2). */
-  const grund = typeof (rahmen && rahmen.reason) === "string" ? saeubern(rahmen.reason, 200) : "";
+  const grund = typeof (rahmen && rahmen.reason) === "string" ? entmarken(saeubern(rahmen.reason, 200)) : "";
   if (!grund) {
     return misslungen(id, cmd, "reason_required",
       "Zu diesem Schritt fehlt der Satz, der dem Menschen vorgelesen wird.",
@@ -1297,14 +1332,7 @@ async function einzeln(rahmen, sitzung, { id, cmd, begonnen, meineGeneration }) 
      die Seite nach dem ersten Seitenwechsel unsichtbar bedient. Das ist der
      Kern der Meldung „nichts passiert sichtbar". Jetzt wird der Rahmen bei
      jeder Neu-Einspielung wiederhergestellt. */
-  if (!overlay.schonDa) {
-    const gross = await grosseSichtLesen();
-    await anSeite(tabId, {
-      typ: "overlay:an",
-      gross,
-      text: "SMarTrAgent steuert diesen Tab — Esc Esc = Stopp",
-    }, 2000).catch(() => {});
-  }
+  await rahmenWiederAnschalten(tabId, overlay);
 
   const kopf = { url: adresse, titel: await tabTitel(tabId) };
 

@@ -480,6 +480,56 @@ test("Die Freigabefrage enthält den Satz des Agenten — Seitentext nur daneben
   assert.equal(frage.nachricht.quelle, "Zur Kasse", "sondern abgesetzt in 'quelle'");
 });
 
+/** Alle Protokollzeilen, die an die Seitenleiste gingen. */
+const protokollzeilen = (spur) =>
+  spur
+    .filter((e) => e.wohin === "panel" && e.nachricht.typ === "link:protokoll")
+    .map((e) => e.nachricht.text);
+
+test("Markenfilter: „A0\" aus dem Befehlsrahmen erreicht weder die Freigabekarte noch das Protokoll", async () => {
+  /* Der Steuerweg war der fünfte Eintrittspunkt und der einzige ungedeckte:
+     Der Satz des Agenten steht auf der prominentesten Fläche der Erweiterung
+     UND wird dem Menschen vorgelesen. „A0 klickt jetzt" wäre also nicht nur
+     zu lesen, sondern zu hören gewesen. Geprüft werden beide Ziele desselben
+     Wertes — Karte und Protokollzeile —, denn beide holen ihn aus `grund`. */
+  const { ergebnis, spur } = await laufen({
+    id: "mk-1", cmd: "readPage", reason: "A0 klickt jetzt auf Anmelden",
+  });
+  assert.equal(ergebnis.success, true);
+
+  const frage = freigabefrage(spur).frage;
+  assert.ok(!frage.includes("A0"), `„A0" steht in der Freigabefrage: ${frage}`);
+  assert.ok(frage.includes("SMarTrAgent klickt jetzt auf Anmelden"),
+    "der Satz bleibt derselbe, nur der Name ist unserer");
+
+  const zeilen = protokollzeilen(spur);
+  assert.ok(zeilen.length > 0, "der Schritt wird protokolliert");
+  for (const zeile of zeilen) {
+    assert.ok(!zeile.includes("A0"), `„A0" steht in der Protokollzeile: ${zeile}`);
+  }
+  assert.ok(zeilen.some((z) => z.includes("SMarTrAgent klickt jetzt auf Anmelden")),
+    "auch das Protokoll trägt den entmarkten Satz");
+});
+
+test("Markenfilter: auch ein /a0-Pfad im Grund wird umgeschrieben", async () => {
+  /* Pfade sind der Fall, den eine reine Wortregel verfehlt: „/a0/tmp" trägt
+     keine Wortgrenze vor der 0 und bliebe ohne die eigene Pfadregel stehen. */
+  const { ergebnis, spur } = await laufen({
+    id: "mk-2", cmd: "readPage", reason: "Ich lege den Bericht unter /a0/tmp/bericht.txt ab",
+  });
+  assert.equal(ergebnis.success, true);
+
+  const frage = freigabefrage(spur).frage;
+  assert.ok(!frage.includes("/a0"), `„/a0" steht in der Freigabefrage: ${frage}`);
+  assert.ok(frage.includes("/sa/tmp/bericht.txt"), "der Pfad wird auf /sa umgeschrieben");
+
+  for (const zeile of protokollzeilen(spur)) {
+    assert.ok(!zeile.includes("/a0"), `„/a0" steht in der Protokollzeile: ${zeile}`);
+  }
+  assert.ok(protokollzeilen(spur).some((z) => z.includes("/sa/tmp/bericht.txt")),
+    "und im Protokoll steht derselbe umgeschriebene Pfad");
+});
+
 /* ------------------------------------------------------------------ *
  * 3. Die vier lesenden Befehle
  * ------------------------------------------------------------------ */
@@ -921,6 +971,139 @@ test("Sichtbarkeit: war der Rahmen schon da, wird er NICHT doppelt angeschaltet"
   assert.equal(ergebnis.success, true);
   assert.ok(!anDieSeite(spur).includes("overlay:an"),
     "ohne Neu-Einspielung bleibt der laufende Rahmen unberührt");
+});
+
+/* ------------------------------------------------------------------ *
+ * 3f. Der grüne Rahmen ÜBER den Ortswechsel hinweg
+ *
+ * Der Befund, der diese Prüfsätze nötig machte: Schritt 7 der Befehlsschleife
+ * schaltete den Rahmen nach einer Neu-Einspielung wieder an, der gemeinsame
+ * Nachlauf von `navigate` und `back` nicht. Wer einmal selbst navigierte,
+ * arbeitete für den Rest der Sitzung unsichtbar — denn beim nächsten Befehl
+ * meldet `overlaySicherstellen` `schonDa: true`, und der Zweig in Schritt 7
+ * greift nie wieder.
+ *
+ * Warum der vorhandene Prüfsatz „navigate ruft die Adresse auf" das nicht
+ * sieht: Die Standard-Attrappe beantwortet `overlay:ping` IMMER mit Ja. Damit
+ * ist das Overlay nach dem Wechsel scheinbar schon da, `overlay:an` wäre auch
+ * im heilen Code überflüssig, und die Zusicherung bleibt ungemessen.
+ * ------------------------------------------------------------------ */
+
+/**
+ * Baut die Lage nach: Beim Ortswechsel stirbt das alte Inhaltsskript, und das
+ * frisch eingespielte startet unsichtbar (overlay.js: `.rahmen` hat opacity 0,
+ * erst `data-an` gibt Deckkraft).
+ *
+ * Bewusst NICHT über das Zählen von Pings gebaut: Wie oft der Ausführer pingt,
+ * ist seine Sache und darf sich ändern; dass das Skript beim Wechsel weg ist,
+ * ist die Tatsache, um die es geht. `tabs.update` und `tabs.goBack` töten es,
+ * `scripting.executeScript` bringt es zurück — genauso wie im Browser.
+ */
+async function laufenMitSkripttodBeimWechsel(rahmen, {
+  sitzung = SITZUNG,
+  verlauf = null,
+  lebtAnfangs = true,
+} = {}) {
+  const stand = { lebt: lebtAnfangs };
+  const angaben = {
+    tab: { ...TAB },
+    seiteAntwortet: (n) => (n.typ === "overlay:ping" && !stand.lebt ? { ok: false } : seiteStandard(n)),
+    panelAntwortet: panelSagtJa,
+  };
+  if (verlauf) angaben.verlauf = verlauf;
+  const { chrome, spur } = attrappeSetzen(angaben);
+
+  for (const name of ["update", "goBack"]) {
+    const echt = chrome.tabs[name].bind(chrome.tabs);
+    chrome.tabs[name] = async (...args) => {
+      const r = await echt(...args);
+      stand.lebt = false; // nach dem Wechsel ist das alte Skript weg
+      return r;
+    };
+  }
+  const echtEinspielen = chrome.scripting.executeScript.bind(chrome.scripting);
+  chrome.scripting.executeScript = async (auftrag) => {
+    const r = await echtEinspielen(auftrag);
+    stand.lebt = true; // wieder da — aber unsichtbar, bis „overlay:an" kommt
+    return r;
+  };
+
+  zaehlerNeu();
+  const ergebnis = await befehlAusfuehren(rahmen, sitzung);
+  return { ergebnis, spur };
+}
+
+/* Stellen in der GANZEN Spur — nur so lässt sich „vor der Wahrnehmung" und
+   „nach dem Wechsel" wirklich messen und nicht nur behaupten. */
+const stelleSeite = (spur, typ) =>
+  spur.findIndex((e) => e.wohin === "seite" && e.nachricht.typ === typ);
+const zaehleSeite = (spur, typ) =>
+  spur.filter((e) => e.wohin === "seite" && e.nachricht.typ === typ).length;
+
+test("Ortswechsel: navigate schaltet den Rahmen der NEUEN Seite an — vor dem Lesen", async () => {
+  const { ergebnis, spur } = await laufenMitSkripttodBeimWechsel({
+    id: "sw-1", cmd: "navigate", url: "https://geizhals.de/kasse",
+    reason: "Ich gehe zur Kasse.",
+  });
+  assert.equal(ergebnis.success, true);
+
+  /* Erst der Beleg, dass die Lage überhaupt eintrat: Ohne Neu-Einspielung
+     misst dieser Prüfsatz nichts. */
+  assert.ok(spur.some((e) => e.wohin === "executeScript"),
+    "das Overlay wurde nach dem Wechsel wirklich neu eingespielt");
+
+  assert.equal(zaehleSeite(spur, "overlay:an"), 1,
+    "genau EIN overlay:an — der Rahmen der neuen Seite, und kein Flackern");
+
+  const wechsel = spur.findIndex((e) => e.wohin === "tabs.update");
+  const an = stelleSeite(spur, "overlay:an");
+  const baum = stelleSeite(spur, "overlay:baum");
+  assert.ok(wechsel >= 0 && an > wechsel,
+    "das overlay:an gehört zum Nachlauf des Wechsels, nicht zu Schritt 7 davor");
+  assert.ok(baum >= 0 && an < baum,
+    "schon der erste Blick auf die neue Seite geschieht unter sichtbarem Rahmen");
+
+  const nachher = nachricht(spur, "overlay:an");
+  assert.ok(nachher.text.includes("SMarTrAgent steuert diesen Tab"),
+    "der Rahmen trägt das Schild, das dem Menschen sagt, wer hier arbeitet");
+});
+
+test("Ortswechsel: back schaltet den Rahmen der Seite davor an — vor dem Lesen", async () => {
+  const { ergebnis, spur } = await laufenMitSkripttodBeimWechsel(
+    { id: "sw-2", cmd: "back", reason: "Ich gehe zur Liste zurück." },
+    { verlauf: ["https://geizhals.de/liste"] }
+  );
+  assert.equal(ergebnis.success, true);
+  assert.equal(ergebnis.data.url, "https://geizhals.de/liste");
+
+  assert.ok(spur.some((e) => e.wohin === "executeScript"),
+    "das Overlay wurde nach dem Zurückgehen wirklich neu eingespielt");
+  assert.equal(zaehleSeite(spur, "overlay:an"), 1,
+    "genau EIN overlay:an — auch der Rückweg ist ein Ortswechsel");
+
+  const wechsel = spur.findIndex((e) => e.wohin === "tabs.goBack");
+  const an = stelleSeite(spur, "overlay:an");
+  const baum = stelleSeite(spur, "overlay:baum");
+  assert.ok(wechsel >= 0 && an > wechsel, "erst zurück, dann den Rahmen anschalten");
+  assert.ok(baum >= 0 && an < baum, "erst der Rahmen, dann das Lesen");
+});
+
+test("Ortswechsel: war das Overlay auch danach schon da, kommt KEIN overlay:an", async () => {
+  /* Die Gegenprobe zum Flackern: `rahmenWiederAnschalten` darf nur bei
+     `schonDa: false` etwas schicken. Hier lebt das Skript den Wechsel über
+     (die Standard-Attrappe sagt auf jeden Ping Ja) — dann läuft der Rahmen
+     bereits, und eine weitere Nachricht wäre nur ein Zucken auf der Seite. */
+  for (const rahmen of [
+    { id: "sw-3", cmd: "navigate", url: "https://geizhals.de/kasse", reason: "Ich gehe zur Kasse." },
+    { id: "sw-4", cmd: "back", reason: "Ich gehe zurück." },
+  ]) {
+    const { ergebnis, spur } = await laufen(rahmen, { verlauf: ["https://geizhals.de/liste"] });
+    assert.equal(ergebnis.success, true, rahmen.cmd);
+    assert.ok(!spur.some((e) => e.wohin === "executeScript"),
+      `${rahmen.cmd}: nichts wurde neu eingespielt`);
+    assert.equal(zaehleSeite(spur, "overlay:an"), 0,
+      `${rahmen.cmd}: der laufende Rahmen bleibt unberührt`);
+  }
 });
 
 test("navigate außerhalb des Bereichs wird abgelehnt, BEVOR jemand zustimmt", async () => {

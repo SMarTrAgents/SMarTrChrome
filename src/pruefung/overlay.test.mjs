@@ -165,7 +165,12 @@ function mitWertSetter() {
 }
 
 function umgebungBauen(elemente, etiketten = []) {
-  const zustand = { scrollY: 0, geschrieben: [], beobachter: [] };
+  /* `erzeugt` und `angehaengt` halten fest, WAS das Skript in die fremde
+     Seite baut. Ohne diese zwei Listen war der Wirt-Knoten des Overlays
+     (#smartrchrome-host) für keine Prüfung erreichbar — createElement gab ein
+     namenloses Objekt zurück und appendChild warf es weg. Genau an diesem
+     Knoten hängt aber die Abwehr gegen Seiten-CSS. */
+  const zustand = { scrollY: 0, geschrieben: [], beobachter: [], erzeugt: [], angehaengt: [] };
 
   /* Eine Änderung am Seitenbaum melden — für die Ruhe-Bedingung von
      overlay:warten. */
@@ -178,28 +183,41 @@ function umgebungBauen(elemente, etiketten = []) {
     readyState: "complete",
     activeElement: null,
     body: { innerText: "" },
-    documentElement: { appendChild: () => {}, scrollHeight: 4000 },
-    createElement: () => ({
-      style: { cssText: "" },
-      className: "",
-      id: "",
-      innerHTML: "",
-      textContent: "",
-      dataset: {},
-      setAttribute() {},
-      removeAttribute() {},
-      getAttribute: () => null,
-      /* Der eigene Rahmen erkennt seine eigenen Knoten — overlay:warten darf
-         die eigene Anzeige nicht für Bewegung der Seite halten. */
-      contains: (n) => !!(n && n.__eigen),
-      querySelector: () => ({ textContent: "" }),
-      append() {},
-      appendChild() {},
-      attachShadow: () => ({
-        adoptedStyleSheets: [],
+    documentElement: {
+      /* Der Wirt ist der einzige Knoten, den das Overlay in die fremde Seite
+         hängt. Er wird hier aufbewahrt statt verworfen, damit prüfbar bleibt,
+         womit er sich gegen das CSS dieser Seite wehrt. */
+      appendChild(n) {
+        zustand.angehaengt.push(n);
+        return n;
+      },
+      scrollHeight: 4000,
+    },
+    createElement: () => {
+      const el = {
+        style: { cssText: "" },
+        className: "",
+        id: "",
+        innerHTML: "",
+        textContent: "",
+        dataset: {},
+        setAttribute() {},
+        removeAttribute() {},
+        getAttribute: () => null,
+        /* Der eigene Rahmen erkennt seine eigenen Knoten — overlay:warten darf
+           die eigene Anzeige nicht für Bewegung der Seite halten. */
+        contains: (n) => !!(n && n.__eigen),
+        querySelector: () => ({ textContent: "" }),
         append() {},
-      }),
-    }),
+        appendChild() {},
+        attachShadow: () => ({
+          adoptedStyleSheets: [],
+          append() {},
+        }),
+      };
+      zustand.erzeugt.push(el);
+      return el;
+    },
     querySelectorAll: () => elemente,
     /* Befund M4: Beide gaben immer null zurück — damit waren `aria-labelledby`
        und `label[for=…]` als Beschriftungsquellen der Geheim-Erkennung nicht
@@ -1577,4 +1595,147 @@ test("Auch der wartende Weg bleibt nie stumm", async () => {
   assert.equal(typeof a.ok, "boolean");
   const b = await fragenSpaeter({ typ: "overlay:warten", bedingung: "idle", fristMs: 200 });
   assert.equal(typeof b.ok, "boolean");
+});
+
+/* ------------------------------------------------------------------ *
+ * Abwehr des Seiten-CSS am Wirt-Knoten
+ *
+ * Im echten Chrome gemessen: Ein `#smartrchrome-host{display:none!important}`
+ * oder schlicht ein `*{display:none!important}` im Stylesheet der Seite
+ * schaltete den grünen Rahmen, das Schild und den Agentenzeiger vollständig
+ * ab — der Agent bediente unverändert weiter, nur eben unsichtbar. Damit fiel
+ * genau die Zusage, für die es das Overlay überhaupt gibt.
+ *
+ * Die Gegenwehr ist ein Inline-Stil, in dem JEDE Deklaration !important trägt:
+ * die steht in der Autoren-Kaskade über jeder Regel eines Seiten-Stylesheets,
+ * auch über deren !important. Zwei Dinge müssen dafür stimmen, und beide
+ * werden hier einzeln gemessen — eine Textsuche nach dem Wort „important"
+ * bliebe grün, sobald auch nur eine Zeile es verlöre:
+ *
+ *   1. Keine Deklaration ohne !important. Eine einzige schwache genügt.
+ *   2. display, visibility und opacity müssen ÜBERHAUPT dastehen. Was nicht
+ *      deklariert ist, kann auch nicht mit !important gewinnen — gegen
+ *      `*{display:none!important}` hilft nur ein eigenes display.
+ *
+ * Die Nachbildung kennt kein Layout und keine Kaskade, deshalb wird der
+ * Inline-Stil selbst gelesen, aber Deklaration für Deklaration.
+ * ------------------------------------------------------------------ */
+
+/* Der höchste Wert, den z-index in Chrome annimmt (2^31 - 1). Darüber liegt
+   nichts mehr, was eine Seite auf sich stapeln könnte. */
+const HOECHSTE_EBENE = "2147483647";
+
+/* Den Wirt aus dem holen, was das Skript in die Seite gehängt hat. Absichtlich
+   über den angehängten Knoten und nicht über die Reihenfolge der Erzeugung:
+   Ein Stil, der nur an einem nie eingehängten Knoten hinge, wäre wertlos. */
+function wirtHolen(zustand) {
+  const wirt = zustand.angehaengt.find((n) => n && n.id === "smartrchrome-host");
+  assert.ok(wirt, "der Wirt #smartrchrome-host muss in die Seite gehängt werden");
+  return wirt;
+}
+
+/* Einen Inline-Stil in seine einzelnen Deklarationen zerlegen.
+   Nur so ist „jede einzelne trägt !important" überhaupt eine Aussage: Ein
+   indexOf("important") wäre schon bei einer einzigen wichtigen Zeile zufrieden
+   und bliebe damit auch grün, wenn dreizehn andere schwach würden. */
+function stilZerlegen(cssText) {
+  return String(cssText || "")
+    .split(";")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((stueck) => {
+      const trenn = stueck.indexOf(":");
+      const eigenschaft = (trenn < 0 ? stueck : stueck.slice(0, trenn)).trim().toLowerCase();
+      const rohwert = trenn < 0 ? "" : stueck.slice(trenn + 1).trim();
+      return {
+        roh: stueck,
+        eigenschaft,
+        wichtig: /!\s*important$/i.test(rohwert),
+        wert: rohwert.replace(/!\s*important$/i, "").trim().toLowerCase(),
+      };
+    });
+}
+
+/* Den zerlegten Wirt-Stil eines frisch gestarteten Overlays holen. */
+async function wirtStil() {
+  const seite = seiteBauen();
+  const { zustand } = await overlayStarten(seite.alle);
+  return stilZerlegen(wirtHolen(zustand).style.cssText);
+}
+
+test("Abwehr: jede einzelne Deklaration am Wirt trägt !important", async () => {
+  const stil = await wirtStil();
+
+  /* Erst zählen, dann prüfen: Ein leerer oder auf zwei Zeilen zusammen-
+     gestrichener Stil darf diesen Prüfsatz nicht dadurch bestehen, dass es
+     nichts zu beanstanden gibt. */
+  assert.ok(
+    stil.length >= 10,
+    `der Wirt muss sich mit einer vollständigen Liste wehren, gefunden: ${stil.length}`
+  );
+
+  /* Jede Zeile muss auch wirklich eine Deklaration sein — sonst hätte das
+     Zerlegen danebengegriffen und die Zählung oben wäre wertlos. */
+  const kaputt = stil.filter((d) => !d.eigenschaft || !d.wert).map((d) => d.roh);
+  assert.deepEqual(kaputt, [], "jede Zeile muss Eigenschaft und Wert tragen");
+
+  /* Der Kern: nicht „irgendwo steht important", sondern keine einzige Zeile
+     ohne. Die Fehlermeldung nennt die schwachen Zeilen beim Namen. */
+  const schwach = stil.filter((d) => !d.wichtig).map((d) => d.eigenschaft);
+  assert.deepEqual(
+    schwach,
+    [],
+    `ohne !important verliert diese Deklaration gegen das Seiten-CSS: ${schwach.join(", ")}`
+  );
+  assert.equal(
+    stil.filter((d) => d.wichtig).length,
+    stil.length,
+    "die Zahl der wichtigen Deklarationen muss der Gesamtzahl entsprechen"
+  );
+
+  /* Doppelt gesetzte Eigenschaften wären ein stiller Widerspruch: Die zweite
+     gewinnt, und welche das ist, sieht beim Lesen niemand. */
+  const namen = stil.map((d) => d.eigenschaft);
+  assert.equal(new Set(namen).size, namen.length, `doppelte Eigenschaft in: ${namen.join(", ")}`);
+});
+
+test("Abwehr: display, visibility und opacity stehen ausdrücklich am Wirt", async () => {
+  const stil = await wirtStil();
+  const karte = new Map(stil.map((d) => [d.eigenschaft, d]));
+
+  /* Genau diese drei schalten das Overlay ab, wenn die Seite sie greift. Eine
+     fehlende Angabe reicht: Gegen `*{display:none!important}` gewinnt nur ein
+     eigenes display, ein nicht deklariertes kann nichts überstimmen. */
+  for (const [eigenschaft, erwartet] of [
+    ["display", "block"],
+    ["visibility", "visible"],
+    ["opacity", "1"],
+  ]) {
+    const d = karte.get(eigenschaft);
+    assert.ok(
+      d,
+      `${eigenschaft} fehlt am Wirt — damit schaltet das Seiten-CSS das Overlay ab`
+    );
+    assert.equal(d.wert, erwartet, `${eigenschaft} muss ausdrücklich auf ${erwartet} stehen`);
+    assert.equal(d.wichtig, true, `${eigenschaft} ohne !important verliert gegen das Seiten-CSS`);
+  }
+});
+
+test("Abwehr: der Wirt liegt fixiert und auf der höchsten Ebene", async () => {
+  const stil = await wirtStil();
+  const karte = new Map(stil.map((d) => [d.eigenschaft, d]));
+
+  const lage = karte.get("position");
+  assert.ok(lage, "position fehlt am Wirt");
+  assert.equal(lage.wert, "fixed", "der Wirt muss am Sichtfenster hängen, nicht am Seitenfluss");
+  assert.equal(lage.wichtig, true, "position ohne !important kann die Seite verschieben");
+
+  const ebene = karte.get("z-index");
+  assert.ok(ebene, "z-index fehlt am Wirt");
+  assert.equal(
+    ebene.wert,
+    HOECHSTE_EBENE,
+    "der Rahmen muss über allem liegen, sonst deckt ein Seitenelement ihn zu"
+  );
+  assert.equal(ebene.wichtig, true, "z-index ohne !important kann die Seite überstapeln");
 });

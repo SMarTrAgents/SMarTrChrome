@@ -26,13 +26,10 @@
  * fortgesetzt. Das ist hier — anders als bei der Steuersitzung — erlaubt:
  * Eine Chat-Antwort abzuholen ist keine Befugnis, sie ist ein Botengang.
  *
- * Das Zugangstor des Gateways (`_chat_access_gate`): Seit dem H-70-Fix vom
- * 05.08.2026 braucht der CHAT IMMER ein aktives Abo — die `-app`-Ausnahme
- * gilt nur noch für die reinen Datenwege (Verlauf, Liste, Löschen, Teilen).
- * Dieser Client nennt sich weiterhin `smartrchrome-app`; ohne Abo antwortet das
- * Gateway mit 402, den Satz dazu trägt `chatFehlerText`. Der Modus (Normal oder
- * SMarTr) reist als `model_id` mit — kein Modellname wird angezeigt, nur der
- * Produktname des Modus (siehe `panel.js`).
+ * Der Chat verlangt ein aktives Abo. Fehlt es, antwortet der Dienst mit 402,
+ * den Satz dazu trägt `chatFehlerText`. Der Modus (Normal oder SMarTr) reist
+ * als `model_id` mit, kein Modellname wird angezeigt, nur der Produktname des
+ * Modus (siehe `panel.js`).
  *
  * Backend-Interna werden hier nie angezeigt. Der Framework-Name des Agenten
  * (intern „A0", Pfade unter „/a0") wird serverseitig gefiltert; `entmarken()`

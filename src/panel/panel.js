@@ -210,6 +210,23 @@ function ansagen(text, dringend = false) {
 }
 
 /*
+ * Wie `ansagen`, aber ohne die Ansagezone zu beschreiben.
+ *
+ * Für Texte, die schon als Blase im Verlauf stehen. `#verlauf` trägt selbst
+ * `aria-live="polite"`, `#ansage` ebenso: Derselbe Satz in beiden Zonen wurde
+ * dem Bildschirmleser zweimal vorgelesen, einmal als Blase und einmal als
+ * Statusmeldung. Die eigene Sprachausgabe (`sprich`) und der Vorlesen-Knopf
+ * (`zustand.letzteRede`) arbeiten unverändert weiter, nur die zweite
+ * Vorlesezone bleibt still.
+ */
+function merkenUndSprechen(text, dringend = false) {
+  zustand.letzteRede = text;
+  if (zustand.vorlesen === "alles" || (zustand.vorlesen === "sicher" && dringend)) {
+    sprich(text);
+  }
+}
+
+/*
  * Das Eingabefeld sagt, wohin die nächste Frage geht.
  *
  * Ist die Sitzung an den Agenten gebunden, landet sie beim Agenten, der genau
@@ -437,6 +454,12 @@ function menueSpiegeln() {
 }
 
 function menueOeffnen(offen) {
+  /* Beim Schließen den Fokus zurückgeben, BEVOR das Menü versteckt wird: Der
+     Fokus stand noch in einem Punkt darin, und ein verstecktes Element kann
+     ihn nicht halten. Er fiel damit auf `body`, und wer mit Tastatur oder
+     Bildschirmleser arbeitet, stand danach am Seitenanfang statt am Knopf, den
+     er gerade gedrückt hatte. */
+  if (!offen && $("menue").contains(document.activeElement)) $("menue-knopf").focus();
   $("menue").hidden = !offen;
   $("menue-knopf").setAttribute("aria-expanded", String(offen));
   if (offen) $("menue").querySelector(".menue-punkt")?.focus();
@@ -1313,8 +1336,8 @@ async function beenden(grund, klartext = null) {
     nutzer: "Beendet. Die Freigabe habe ich zurückgegeben.",
   };
   const text = klartext || texte[grund] || texte.nutzer;
-  ansagen(text, true);
   sagen("niemand", text);
+  merkenUndSprechen(text, true);
   setTimeout(() => setzeZustand("bereit"), 1200);
 }
 
@@ -1528,7 +1551,11 @@ chrome.runtime.onMessage.addListener((n) => {
      passiert ist. */
   if (n.typ === "link:befehl") {
     if (n.erfolg) protokollieren(`Erledigt: ${String(n.cmd || "").slice(0, 40)}`);
-    else protokollieren(`Nicht ausgeführt: ${String(n.fehler || "unbekannt").slice(0, 60)}`);
+    /* Der Satz, nicht die Kennung. Hier stand `n.fehler`, also der reine
+       Maschinencode, und der Mensch las „Nicht ausgeführt: tab_gone". Der
+       fertige Satz kommt jetzt als `klartext` mit; die Kennung bleibt für den
+       Fall, dass einmal keiner mitkommt. */
+    else protokollieren(`Nicht ausgeführt: ${String(n.klartext || n.fehler || "Der Schritt hat nicht geklappt.").slice(0, 160)}`);
     return false;
   }
 
@@ -2047,7 +2074,7 @@ chrome.runtime.onMessage.addListener((n) => {
       chatWartenZeigen(false);
       if (n.contextId && n.contextId !== zustand.browserKontext) chatKontextMerken(n.contextId);
       sagen("niemand", String(n.text || ""));
-      ansagen(String(n.text || ""));
+      merkenUndSprechen(String(n.text || ""));
       guthabenLaden();
     } else {
       chatFehlerZeigen(n.kennung, n.klartext);
@@ -2111,12 +2138,19 @@ chrome.runtime.onMessage.addListener((n) => {
 async function zustandNachfragen() {
   const laufend = await anWorker({ typ: "link:zustand?" });
   if (!laufend || !laufend.verbunden) return;
+  /* Die Sitzung sagt selbst, an welchem Tab sie hängt. Genau das wurde hier
+     übergangen: Es zählte der gerade aktive Tab. Wer die Seitenleiste in einem
+     anderen Tab wieder öffnete, band die Oberfläche an den falschen, und das
+     Abschalten des Rahmens traf danach die falsche Seite. Der aktive Tab ist
+     nur noch der Rückfall für den Fall, dass die Sitzung nichts mitbringt. */
   const tab = await aktiverTab();
   const u = tab ? ursprungAus(tab.url || "") : null;
-  if (tab && u) {
-    zustand.tabId = tab.id;
+  if (Number.isInteger(laufend.tabId)) zustand.tabId = laufend.tabId;
+  else if (tab) zustand.tabId = tab.id;
+  if (laufend.ursprungMuster) zustand.ursprungMuster = laufend.ursprungMuster;
+  else if (u) zustand.ursprungMuster = u.muster;
+  if (u && (!Number.isInteger(laufend.tabId) || laufend.tabId === (tab && tab.id))) {
     zustand.ursprung = u.ursprung;
-    zustand.ursprungMuster = u.muster;
   }
   zustand.ausweis = await konto.ausweisBesorgen();
   await sitzungAnzeigen(laufend);

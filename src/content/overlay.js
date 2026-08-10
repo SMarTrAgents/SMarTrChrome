@@ -30,8 +30,22 @@
 
   const host = document.createElement("div");
   host.id = "smartrchrome-host";
+  /* Jede Deklaration mit !important, und display/visibility/opacity ausdrücklich
+     dazu. Grund, im echten Chrome gemessen: Ohne !important genügte der Seite
+     ein `#smartrchrome-host{display:none!important}` oder schlicht
+     `*{display:none!important}`, um den grünen Rahmen, das Schild und den
+     Agentenzeiger vollständig abzuschalten — der Agent bediente weiter, nur
+     eben unsichtbar. Damit fiel genau die Zusage, für die es dieses Overlay
+     gibt. Ein Inline-Stil mit !important steht in der Autoren-Kaskade über
+     jeder Regel aus einem Seiten-Stylesheet, auch über deren !important. Die
+     Deckkraft des Rahmens wird davon nicht berührt, die steuert `data-an` im
+     Schattenbaum. */
   host.style.cssText =
-    "position:fixed;inset:0;z-index:2147483647;pointer-events:none;border:0;margin:0;padding:0;";
+    "position:fixed !important;inset:0 !important;z-index:2147483647 !important;" +
+    "pointer-events:none !important;border:0 !important;margin:0 !important;" +
+    "padding:0 !important;display:block !important;visibility:visible !important;" +
+    "opacity:1 !important;clip-path:none !important;transform:none !important;" +
+    "filter:none !important;contain:none !important;";
   const root = host.attachShadow({ mode: "closed" });
 
   const stil = new CSSStyleSheet();
@@ -212,7 +226,7 @@
   const gestoppt = () => {
     rahmen.setAttribute("data-zustand", "gestoppt");
     schild.setAttribute("data-zustand", "gestoppt");
-    schild.querySelector(".text").textContent = "GESTOPPT — der Agent steuert nicht mehr";
+    schild.querySelector(".text").textContent = "GESTOPPT, der Agent steuert nicht mehr";
     zeiger.setAttribute("data-an", "0");
     fahne.setAttribute("data-an", "0");
     ziel.setAttribute("data-an", "0");
@@ -1397,7 +1411,7 @@
     switch (n.typ) {
       case "overlay:an":
         grossSetzen(n.gross);
-        anzeigen(true, n.text || "SMarTrAgent steuert diesen Tab — Esc Esc = Stopp");
+        anzeigen(true, n.text || "SMarTrAgent steuert diesen Tab, Esc Esc = Stopp");
         antwort({ ok: true });
         break;
       case "overlay:aus":

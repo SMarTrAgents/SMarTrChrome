@@ -562,6 +562,13 @@ export function verbinden({ ticket, ausweis, ursprungMuster = null, tabId = null
         cmd: ergebnis.cmd,
         erfolg: !!ergebnis.success,
         fehler: ergebnis.error ? ergebnis.error.code : null,
+        /* Der fertige deutsche Satz reist mit. Er wurde bisher weggeworfen, und
+           die Seitenleiste zeigte dem Menschen stattdessen den Maschinencode,
+           also Zeilen wie „Nicht ausgeführt: scope_violation_local". Der Satz
+           daneben lautet „Nach dem Wechsel steht dieser Tab auf einer Seite,
+           die nicht freigegeben ist. Ich lese sie nicht." Genau der gehört ins
+           Protokoll (Hausregel: Klartext statt Fehlernummer). */
+        klartext: ergebnis.error ? ergebnis.error.message : null,
       });
     };
 
@@ -613,6 +620,13 @@ export async function verlaengernMit({ ticket, ausweis }) {
   alterDraht.onerror = null;
   alterDraht.onmessage = null;
   uhrenStoppen();
+  /* Der Wecker gehört mit stillgelegt. `uhrenStoppen()` räumt nur Herzschlag
+     und Auth-Frist weg, den 30-Sekunden-Wecker löscht sonst allein
+     `aufraeumen()`, und das läuft bei einer Verlängerung nicht. Feuerte er
+     während des Handschlags, sah `wacheLaufen` eine Sitzung ohne Leitung,
+     riss den Tausch ab und gab das Seitenrecht zurück. Nach dem gelungenen
+     Tausch legt `verbinden()` ihn selbst wieder an. */
+  await Promise.resolve(chrome.alarms.clear(WECKER)).catch(() => {});
   draht = null;
 
   try {

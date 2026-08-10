@@ -382,6 +382,11 @@ const steuerzeichenDrin = (text) =>
 /* Ein Element des Seitenbaums. `textContent` verhält sich wie im Browser:
    Setzen wirft die Kinder weg, Lesen setzt sie wieder zusammen — sonst ließe
    sich `protokollieren()` (Kopf als <strong>, Rest als Text) nicht lesen. */
+/* Wo der Fokus gerade steht. Der Browser fuehrt das als document.activeElement,
+   die Nachbildung fuehrt es hier, damit Pruefsaetze die Fokusfuehrung wirklich
+   messen koennen statt sie nur zu behaupten. */
+const fokusStand = { aktiv: null };
+
 function knoten(tag = "div", id = "") {
   const el = {
     tagName: String(tag).toUpperCase(),
@@ -418,10 +423,35 @@ function knoten(tag = "div", id = "") {
       el.kinder.length = 0;
       for (const t of teile) el.kinder.push(t);
     },
-    querySelector: () => null,
+    /* Sucht in den eigenen Kindern nach einer Klasse. Vorher gab diese Stelle
+       ausnahmslos null zurueck, damit fand `menueOeffnen` nie einen Menuepunkt
+       und die ganze Fokusfuehrung des Menues war unpruefbar. Mehr als die
+       Klassensuche kann die Nachbildung weiterhin nicht, und das ist Absicht:
+       ein unbekannter Selektor bleibt null statt still etwas Falsches zu
+       liefern. */
+    querySelector: (wahl) => {
+      const w = String(wahl || "");
+      if (!w.startsWith(".")) return null;
+      const klasse = w.slice(1);
+      for (const k of el.kinder) {
+        if (String(k.className || "").split(/\s+/).includes(klasse)) return k;
+        const tiefer = typeof k.querySelector === "function" ? k.querySelector(w) : null;
+        if (tiefer) return tiefer;
+      }
+      return null;
+    },
     closest: () => null,
+    /* Enthaelt dieser Knoten den anderen? Der Browser kann das, die Nachbildung
+       konnte es nicht, und deshalb war jede Zusicherung ueber die Fokusfuehrung
+       hier blind. `contains(el)` ist im Browser wahr fuer den Knoten selbst. */
+    contains(anderer) {
+      if (!anderer) return false;
+      if (anderer === el) return true;
+      return el.kinder.some((k) => (typeof k.contains === "function" ? k.contains(anderer) : k === anderer));
+    },
     focus() {
       el.fokusse += 1;
+      fokusStand.aktiv = el;
     },
     scrollIntoView() {},
     addEventListener(art, f) {
@@ -544,6 +574,13 @@ async function panelStarten({
         const neu = knoten("div", id);
         /* Der Ausgangszustand kommt aus panel.html, nicht aus der Attrappe. */
         neu.hidden = VERSTECKT_IM_HTML.has(id);
+        /* Das Menue traegt in panel.html Menuepunkte. Ohne sie kann kein
+           Pruefsatz sehen, wohin der Fokus beim Oeffnen wandert. */
+        if (id === "menue") {
+          const punkt = knoten("button", "menue-punkt-1");
+          punkt.className = "menue-punkt";
+          neu.appendChild(punkt);
+        }
         elemente.set(id, neu);
       }
       return elemente.get(id);
@@ -569,6 +606,9 @@ async function panelStarten({
         return radioFelder.find((r) => r.name === nachWert[1] && r.value === nachWert[2]) || null;
       }
       return null;
+    },
+    get activeElement() {
+      return fokusStand.aktiv;
     },
     addEventListener() {},
   };
@@ -1778,6 +1818,41 @@ test("M2e — Läuft eine Sitzung, bietet KEIN Zustand einen zweiten Aufbau an",
       `im Zustand „${name}" darf bei laufender Sitzung kein zweiter Aufbau angeboten werden`
     );
   }
+});
+
+/*
+ * Fokusfuehrung des Menues.
+ *
+ * Vorlesen ist der Haupt-Bedienweg des Inhabers, die Fokusfuehrung entscheidet
+ * also darueber, wo ein Bildschirmleser nach dem Schliessen weiterliest. Beim
+ * Schliessen wurde das Menue schlicht versteckt, waehrend der Fokus noch in
+ * einem seiner Punkte stand: Er fiel damit auf den Seitenanfang statt auf den
+ * Knopf, den der Mensch gerade gedrueckt hatte. Gemessen wird beides, das
+ * Hineinwandern beim Oeffnen und das Zurueckgeben beim Schliessen.
+ */
+test("Menue — der Fokus wandert hinein und kommt beim Schliessen zurueck", async (t) => {
+  const p = await panelStarten({});
+  t.after(p.aufraeumen);
+
+  const knopfVorher = p.el("menue-knopf").fokusse;
+  await p.klick("menue-knopf");
+  assert.equal(p.el("menue").hidden, false, "Vorbedingung: das Menue ist offen");
+  assert.equal(
+    p.el("menue").getAttribute("aria-expanded"),
+    null,
+    "das aria-expanded gehoert an den Knopf, nicht an das Menue"
+  );
+  assert.equal(p.el("menue-knopf").getAttribute("aria-expanded"), "true", "der Knopf meldet den offenen Zustand");
+
+  /* Jetzt schliessen. Der Fokus steht in einem Menuepunkt, weil menueOeffnen
+     ihn dorthin gesetzt hat. */
+  await p.klick("menue-knopf");
+  assert.equal(p.el("menue").hidden, true, "das Menue ist wieder zu");
+  assert.ok(
+    p.el("menue-knopf").fokusse > knopfVorher,
+    "beim Schliessen muss der Fokus auf den Menue-Knopf zurueckgegeben werden"
+  );
+  assert.equal(p.el("menue-knopf").getAttribute("aria-expanded"), "false", "der Knopf meldet den geschlossenen Zustand");
 });
 
 test("M2f — Der Menüpunkt öffnet während einer Sitzung keinen zweiten Antrag", async (t) => {

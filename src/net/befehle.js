@@ -951,7 +951,9 @@ export function frageZusatz(cmd, plan) {
     const anfang = plan.leeren ? "Er will schreiben" : "Er will an den vorhandenen Text anhängen";
     let s = ` ${anfang}: „${v.gezeigt}"`;
     if (v.rest) s += ` … und weitere ${v.rest} Zeichen`;
-    s += plan.absenden ? " — und die Eingabe dann absenden." : ".";
+    /* Komma statt Gedankenstrich: dieser Zusatz wird dem Menschen vorgelesen,
+       und ein Gedankenstrich wird als Wort gesprochen. */
+    s += plan.absenden ? ", und die Eingabe dann absenden." : ".";
     return s;
   }
   if (cmd === "select") return ` Er will ${plan.anzeige} auswählen.`;
