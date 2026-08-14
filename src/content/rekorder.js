@@ -68,6 +68,13 @@
      wäre eine zweite Wahrheit über denselben Draht. */
   const BILD_ANLASS = "user_request";
 
+  /* Wie weit vor einem Bild geschaut wird. Beide Zahlen sind Deckel für den
+     Rechner des Nutzers und nicht für die Wache: Wird einer erreicht, wird
+     KEIN Bild angefordert. Eine Seite, die zu gross zum Ansehen ist, ist
+     nicht deshalb harmlos. */
+  const BILD_FELDER_HOECHSTENS = 200;
+  const BILD_TEXT_ZEICHEN = 200000;
+
   /* §7.2 wörtlich: die Begründung, die an die Stelle des Geheimnisses tritt. */
   const VERBOT_GRUND = "Login/2FA";
 
@@ -197,6 +204,20 @@
     }
   };
 
+  /* Darf dieser FELDINHALT in den Ablauf? Die andere Hälfte derselben Frage,
+     und ausdrücklich nicht dieselbe Antwort: Eine reine Ziffernkette IST der
+     Inhalt einer Artikelnummer. Entschieden wird auch das in
+     `content/geheim.js`; fehlt sie, wird nicht geraten. */
+  const wertOffen = (roh) => {
+    const G = quelle();
+    if (!G || typeof G.wertHarmlos !== "function") return false;
+    try {
+      return G.wertHarmlos(roh) === true;
+    } catch (_) {
+      return false;
+    }
+  };
+
   const jetzt = () =>
     typeof performance !== "undefined" && performance && typeof performance.now === "function"
       ? performance.now()
@@ -237,10 +258,19 @@
       try {
         return G.beschreibungVon(el, BESCHREIBUNG_ZEICHEN);
       } catch (_) {
-        /* dann der nackte Elementname */
+        /* dann gar keine Beschreibung, siehe unten */
       }
     }
-    return kuerzen(String((el && el.tagName) || "").toLowerCase(), BESCHREIBUNG_ZEICHEN);
+    /* Vorher stand hier der nackte Elementname („input", „button"). Genau der
+       war Befund TEACH-1 vom 14.08.2026: Zwei verschiedene Felder hiessen
+       beide „input", der Identitätsvergleich aus F3 fand keinen Unterschied,
+       und die Artikelnummer wurde ins Titelfeld getippt.
+       Ohne die eine Quelle wird deshalb kein Name mehr erfunden. Ein Schritt
+       ohne Beschreibung sagt „ich weiss nicht, wie das Element heisst"; ein
+       Schritt mit „input" behauptet einen Namen. Der Fall ist ohnehin
+       theoretisch: Ohne `content/geheim.js` startet gar keine Aufnahme
+       (`geheimBereit`). */
+    return "";
   }
 
   function rechteckVon(el) {
@@ -257,9 +287,102 @@
     }
   }
 
+  /* Prozentzeichen zurückdrehen, so weit es geht. Eine Seite, die ihren
+     Einmalcode als `%38%34%39%32%37%31` in die Adresse schreibt, hat ihn
+     immer noch in der Adresse. Misslingt das Zurückdrehen, wird die rohe
+     Fassung gemessen und nicht die halbe. */
+  function ausgepackt(roh) {
+    let s = String(roh == null ? "" : roh);
+    for (let runde = 0; runde < 3 && /%[0-9a-fA-F]{2}/.test(s); runde++) {
+      try {
+        const naechste = decodeURIComponent(s);
+        if (naechste === s) break;
+        s = naechste;
+      } catch (_) {
+        break;
+      }
+    }
+    return s;
+  }
+
+  /**
+   * Trägt dieses Stück Adresse ein Geheimnis?
+   *
+   * Gefragt wird beides, der NAME des Parameters und sein WERT, und beide in
+   * ausgepackter Fassung. Für den Namen gilt dieselbe Wortliste, mit der ein
+   * Feld als geheim erkannt wird (`?token=`, `?otp=`, `?code=`, `#id_token=`);
+   * für den Wert die Gestaltprüfung eines Feldinhalts und nicht die eines
+   * Textes. Der Unterschied ist gemessen: `https://www.ebay.de/itm/123456789012`
+   * ist der Alltag dieses Produkts, und wer reine Ziffern in einer Adresse
+   * verbietet, schickt jedes Abspielen auf die Startseite.
+   */
+  function adressteilGeheim(stueck) {
+    const G = quelle();
+    if (!G || typeof G.bezeichnungGeheim !== "function") return true; // im Zweifel weg
+    const roh = String(stueck == null ? "" : stueck);
+    const trennung = roh.indexOf("=");
+    const name = trennung < 0 ? "" : ausgepackt(roh.slice(0, trennung));
+    const wert = trennung < 0 ? ausgepackt(roh) : ausgepackt(roh.slice(trennung + 1));
+    try {
+      if (name && G.bezeichnungGeheim(name) === true) return true;
+    } catch (_) {
+      return true;
+    }
+    return !wertOffen(wert);
+  }
+
+  /**
+   * Die Adresse, wie sie in den Ablauf darf.
+   *
+   * Befund derselben Bauart wie TEACH-2, an einer Stelle, die noch niemand
+   * gemessen hat: `navigate` schrieb `location.href` ungeprüft in den Ablauf.
+   * Ein Bestätigungslink aus der E-Mail (`?token=…`), eine
+   * OAuth-Rückleitung (`#access_token=…`) und ein Zurücksetzen-Link
+   * (`?code=…`) sind genau das, worüber ein Mensch beim Aufzeichnen geht, und
+   * sie lagen danach unverschlüsselt in `sa_workflows`.
+   *
+   * Weggeworfen wird so wenig wie möglich: nur der einzelne Parameter, der
+   * nicht durchgeht. Pfad und Wirt bleiben immer stehen, denn ohne sie findet
+   * der Ablauf seine Seite nicht wieder, und ein Schritt, der auf die falsche
+   * Seite führt, ist schlimmer als einer, dem ein Parameter fehlt.
+   *
+   * @returns {{url: string, gekuerzt: boolean}}
+   */
+  function adresseFuerAblauf(roh) {
+    const ganz = String(roh == null ? "" : roh);
+    const raute = ganz.indexOf("#");
+    const ohneRaute = raute < 0 ? ganz : ganz.slice(0, raute);
+    const fragment = raute < 0 ? "" : ganz.slice(raute + 1);
+    const frage = ohneRaute.indexOf("?");
+    const basis = frage < 0 ? ohneRaute : ohneRaute.slice(0, frage);
+    const suche = frage < 0 ? "" : ohneRaute.slice(frage + 1);
+
+    let gekuerzt = false;
+    const sieben = (teil) => {
+      if (!teil) return "";
+      const stuecke = teil.split("&");
+      const bleibt = stuecke.filter((s) => {
+        if (!s) return false;
+        if (adressteilGeheim(s)) {
+          gekuerzt = true;
+          return false;
+        }
+        return true;
+      });
+      return bleibt.join("&");
+    };
+
+    const neueSuche = sieben(suche);
+    const neuesFragment = sieben(fragment);
+    let url = basis;
+    if (neueSuche) url += `?${neueSuche}`;
+    if (neuesFragment) url += `#${neuesFragment}`;
+    return { url, gekuerzt };
+  }
+
   function adresse() {
     try {
-      return kuerzen(location.href, ADRESSE_ZEICHEN);
+      return String(location.href || "");
     } catch (_) {
       return "";
     }
@@ -383,6 +506,64 @@
     melden({ typ: "rekorder:stand", anzahl: schritte.length, laeuft });
   }
 
+  /**
+   * Darf gerade ein Bild des sichtbaren Tabs angefordert werden?
+   *
+   * Befund TEACH-8 vom 14.08.2026: Zu jedem Klick- und Auswahlschritt wurde
+   * ein JPEG des GANZEN sichtbaren Tabs nach `chrome.storage.local`
+   * geschrieben, ohne jede Geheimprüfung. Gemessen: Der Klick auf den
+   * Hinweistext einer 2FA-Seite ergab `"screenshot": "s1.webp"` — eine
+   * Bildanforderung genau in dem Augenblick, in dem der Einmalcode auf dem
+   * Schirm stand. `geheimUmfeld` schützt nur Elemente IM Geheimabschnitt;
+   * jeder Klick daneben, etwa auf ein Zustimmungshäkchen, ging durch.
+   *
+   * Ein Bild ist keine Zeile im Ablauf, sondern ein Abbild des Bildschirms:
+   * Die Wache dafür kann nicht am angeklickten Element hängen, sie muss die
+   * SEITE ansehen. Drei Fragen, jede mit einem eigenen Grund:
+   *
+   *  1. Steht auf dieser Seite ein Geheimfeld oder eine Reihe von
+   *     Codekästchen? Dann ist es eine Anmelde-, 2FA- oder Zahlungsmaske,
+   *     und was darauf zu sehen ist, gehört nicht auf die Platte.
+   *  2. Steht im SICHTBAREN Text irgendwo eine Kartennummer, ein Mischcode
+   *     oder ein Wiederherstellungsschlüssel? Dann zeigt der Bildschirm ihn
+   *     gerade. Gemessen wird hier mit der Wertregel und nicht mit der
+   *     Textregel: Eine Preisliste voller Zahlen ist kein Geheimnis, sonst
+   *     gäbe es auf keiner echten Seite je wieder ein Bild.
+   *  3. Und im Abschnitt um das angeklickte Element herum gilt die strenge
+   *     Textregel, denn dort schaut der Mensch gerade hin — das ist die
+   *     Stelle, an der der Einmalcode steht, wenn er auf „Kopieren" drückt.
+   *
+   * Ein Bild weniger kostet ein Vorschaubild, das heute ohnehin niemand
+   * anzeigt (OFFEN 3.4). Ein Bild zu viel kostet den Einmalcode als JPEG.
+   */
+  function bildErlaubt(el) {
+    const G = quelle();
+    if (!G || typeof G.geheim !== "function") return false;
+    try {
+      const felder = Array.prototype.slice.call(
+        document.querySelectorAll("input, textarea, select"),
+        0,
+        BILD_FELDER_HOECHSTENS
+      );
+      for (const feld of felder) {
+        if (G.geheim(feld) === true) return false;
+        if (typeof G.zifferngruppe === "function" && G.zifferngruppe(feld) === true) return false;
+      }
+      const koerper = document.body || document.documentElement;
+      const text = String((koerper && koerper.textContent) || "");
+      if (text.length > BILD_TEXT_ZEICHEN) return false;
+      if (!wertOffen(text)) return false;
+      if (typeof G.abschnitteVon === "function") {
+        for (const abschnitt of G.abschnitteVon(el)) {
+          if (!textOffen(String(abschnitt.textContent || ""))) return false;
+        }
+      }
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /* Das Miniaturbild: Dieses Skript nennt Name, Rechteck und Anlass, die
      Aufnahme selbst macht der Ausführer über `captureVisibleTab` — mit seiner
      Qualitätsleiter aus Befund M7 vom 29.07.2026. Ein zweiter Bildweg im
@@ -484,7 +665,11 @@
       const bez = beschreibungVon(angaben.el);
       if (bez) schritt.beschreibung = bez;
     }
-    if (angaben.bild && angaben.el) {
+    /* Das Bild wird angefordert, wenn die Seite es zulässt. Die Frage steht
+       HIER und nicht im Ausführer: Nur dieses Skript sieht, was auf der Seite
+       steht, und der Ausführer prüft Name, Tab, Ursprung, Grösse und Anzahl,
+       aber nie den Inhalt (Befund TEACH-8). */
+    if (angaben.bild && angaben.el && bildErlaubt(angaben.el)) {
       bildNr += 1;
       schritt.screenshot = `s${bildNr}.webp`;
       bildMelden(schritt.screenshot, angaben.el, schritte.length + 1);
@@ -515,15 +700,31 @@
   }
 
   function navigationMerken() {
-    const url = adresse();
-    if (!url || !/^https?:/i.test(url)) return null;
+    const roh = adresse();
+    if (!roh || !/^https?:/i.test(roh)) return null;
+    /* Gemessen wird die GANZE Adresse, gekürzt wird danach. Andersherum wäre
+       die Kürzung die Wache, und ein Bestätigungslink von 2200 Zeichen fiele
+       genau hinter dem Deckel auseinander (dieselbe Bauform wie
+       AUTOMODUS-2). */
+    const gesiebt = adresseFuerAblauf(roh);
+    const url = kuerzen(gesiebt.url, ADRESSE_ZEICHEN);
+    if (!url) return null;
     for (let i = schritte.length - 1; i >= 0; i--) {
       if (schritte[i].type === "navigate") {
         if (schritte[i].url === url) return null;
         break;
       }
     }
-    return schrittHinzu({ type: "navigate", url, wait: "load" });
+    const schritt = { type: "navigate", url, wait: "load" };
+    if (gesiebt.gekuerzt) {
+      /* Ein weggelassener Parameter wird gesagt und nicht verschwiegen. Beim
+         Abspielen kann derselbe Link ohnehin kein zweites Mal gelten, ein
+         Einmalcode ist einmalig; der Mensch weiss dann, warum der Schritt
+         woanders landet. */
+      schritt.beschreibung =
+        "Die Adresse wurde ohne einen ihrer Parameter aufgezeichnet, weil darin ein Geheimnis stand.";
+    }
+    return schrittHinzu(schritt);
   }
 
   /* ------------------------------------------------------------------ *
@@ -646,14 +847,20 @@
     } catch (_) {
       option = null;
     }
-    const roh = option ? kuerzen(option.text, ETIKETT_ZEICHEN) : "";
     /* Auch das Etikett einer Option geht durch dieselbe Prüfung wie ein
        Textanker (Befund B6): Eine Liste „Ihre gespeicherten Karten" trägt in
        ihren Optionen die Kartennummern. Fällt das Etikett heraus, bleibt die
-       Stelle in der Liste — die verrät nichts. */
-    const etikett = roh && textOffen(roh) ? roh : "";
+       Stelle in der Liste — die verrät nichts.
+       Gemessen wird der UNGEKÜRZTE Text und gespeichert der gekürzte. Vorher
+       war es umgekehrt, und damit entschied die Länge der Option über die
+       Prüfung: Eine Kartennummer hinter Zeichen 200 fiel bei der Kürzung
+       heraus, der Rest ging als harmlos durch, und ein angeschnittenes
+       Geheimnis ist immer noch eines (dieselbe Bauform wie AUTOMODUS-2 vom
+       selben Tag). */
+    const rohEtikett = option ? String(option.text == null ? "" : option.text) : "";
+    const etikett = rohEtikett && textOffen(rohEtikett) ? kuerzen(rohEtikett, ETIKETT_ZEICHEN) : "";
     const rohWert = option && typeof option.value === "string" ? option.value.trim() : "";
-    const wert = rohWert && textOffen(rohWert) ? rohWert : "";
+    const wert = rohWert && textOffen(rohWert) ? kuerzen(rohWert, WERT_ZEICHEN) : "";
     /* Genau ein Weg, sonst lehnt `workflowPruefen` den Schritt ab. Das
        Etikett zuerst: Es ist das, was der Mensch gesehen hat und was ihm in
        der Rückfrage vorgelesen wird. */

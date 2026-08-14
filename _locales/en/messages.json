@@ -443,6 +443,18 @@
   "freigabe_standardfrage": {
     "message": "The agent would like to carry out a step."
   },
+  "freigabe_ruf_titel": {
+    "message": "SMarTrChrome is waiting for your approval"
+  },
+  "freigabe_ruf_text": {
+    "message": "A step needs your approval, and no side panel is open right now. Open SMarTrChrome and I will show you what it is about."
+  },
+  "einschleusung_meldung_titel": {
+    "message": "SMarTrChrome has paused the automatic mode"
+  },
+  "einschleusung_meldung_text": {
+    "message": "The open page contains an attempt to slip new instructions to the agent. From now on I will ask again at every step."
+  },
   "freigabe_zurueckgezogen_ansage": {
     "message": "The agent did not wait any longer. This step did not happen."
   },
@@ -838,6 +850,15 @@
   },
   "start_stand_verbunden": {
     "message": "Connected to"
+  },
+  "start_stand_verbunden_ohne": {
+    "message": "Connected to a tab I cannot name right now."
+  },
+  "start_stand_vorfuehrung": {
+    "message": "Demo without an agent on"
+  },
+  "start_stand_vorfuehrung_ohne": {
+    "message": "Demo without an agent."
   },
   "start_tab_gesperrt": {
     "message": "This tab has changed since the list was built, please refresh the list."

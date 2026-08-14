@@ -92,8 +92,13 @@
          sprechen — derselbe Fund wie bei den Sprechblasen (F7). -->
     <p id="cloud-zeile" class="cloud-zeile" hidden>
       <span class="cloud-punkt" aria-hidden="true"></span>
-      <span data-i18n="kopf_cloud_sitzung">Cloud-Sitzung aktiv:</span>
-      <strong id="cloud-agent" class="cloud-agent"></strong>
+      <!-- Der Satz trägt eine Kennung, weil er zwei Fassungen hat: mit
+           Agentennamen einen Doppelpunkt, ohne Namen keinen. Bis zum
+           14.08.2026 stand hier fest „Cloud-Sitzung aktiv:", und da der Name im
+           Alltagsfall leer ist, las ein Bildschirmleser den Doppelpunkt und
+           danach Stille (Befund BRUECKE-6). -->
+      <span id="cloud-wort" data-i18n="kopf_cloud_sitzung">Cloud-Sitzung aktiv:</span>
+      <strong id="cloud-agent" class="cloud-agent" hidden></strong>
     </p>
 
     <!--
@@ -231,7 +236,22 @@
            Fenster; gezeichnet wird sie von src/panel/startseite.js
            (Vertrag §1, A-WERKBANK), gerufen von panel.js. Der Freigabe-Ursprung
            steht dort nie zur Auswahl — die Sperre liegt in net/rechte.js und
-           wird hier benutzt, nicht wiederholt. -->
+           wird hier benutzt, nicht wiederholt.
+
+           Der Anker ist AUSDRÜCKLICH das innere #startseite-liste und nicht der
+           Abschnitt darum herum: startseite.js räumt seinen Anker leer, und im
+           Abschnitt stünden dabei zwei Knoten mit auf dem Spiel, die ihm nicht
+           gehören — die Überschrift, auf die aria-labelledby zeigt, und der
+           Anker der Ersatzfassung in panel.js. Gemessen am 14.08.2026
+           (VERBINDUNG-5): Nach dem Aufbau trug #startseite keinen Knoten mit
+           Kennung mehr, der Bereich hatte damit keinen Namen mehr für den
+           Bildschirmleser, und Vorlesen ist der Hauptbedienweg des Inhabers.
+
+           Die Überschrift bleibt deshalb außerhalb des Ankers stehen. Sichtbar
+           ist sie nur, solange die Ersatzfassung zeichnet; sobald das Modul
+           übernimmt, blendet panel.js sie mit .sr fürs Auge weg, weil das Modul
+           seine eigene Überschrift mitbringt. Als Name des Abschnitts gilt sie
+           weiter, dafür braucht aria-labelledby keine Sichtbarkeit. -->
       <section id="startseite" class="startseite" aria-labelledby="startseite-titel">
         <h2 id="startseite-titel" class="startseite-titel" data-i18n="kopf_tabliste_titel">Ein anderer Tab</h2>
         <div id="startseite-liste" class="startseite-liste"></div>

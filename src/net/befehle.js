@@ -26,6 +26,15 @@
  *     befreit, bevor irgendetwas davon in einen Rahmen für den Agenten gerät.
  */
 
+/*
+ * Die EINE Messform. Sie steht unter `src/gemeinsam/`, weil dieselbe Datei
+ * auch als klassisches Inhaltsskript in die besuchte Seite gespielt wird —
+ * ein Inhaltsskript kann `src/net/*.js` nicht importieren, und zwei
+ * Abschriften derselben Sicherheitszusage sind seit Festlegung F4 verboten.
+ * Die vollständige Begründung steht im Kopf jener Datei.
+ */
+import { messtext, messrand, messvarianten, messweg, anzeigeform } from "./messform.js";
+
 /* --------------------------------------------------------------------- *
  * Die Befehlstabelle
  *
@@ -339,27 +348,95 @@ const ZUSTAND_TEXT = {
   modal: "modal",
 };
 
-/* Steuerzeichen, Nullbreiten und Schreibrichtungsmarken. Sie sind der billigste
-   Weg, einen Vorleser oder ein Protokoll etwas anderes sagen zu lassen, als
-   dasteht. */
-const STEUERZEICHEN =
-  /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/g;
-
 /**
- * Fremdtext in eine Form bringen, die man gefahrlos anzeigen, protokollieren
+ * Fremdtext in eine Form bringen, die man gefahrlos ANZEIGEN, protokollieren
  * und weitergeben kann. Gekürzt wird in der Mitte: Anfang und Ende sind für
  * das Wiedererkennen entscheidend (spec-01 §4.8, K2).
+ *
+ * ====================================================================
+ * DIE ROLLENTEILUNG — sie ist der Kern der Reparatur vom 14.08.2026
+ * ====================================================================
+ *
+ * `saeubern` ist für die ANZEIGE. Dort ist die Kürzung richtig: Eine Frage,
+ * die dreitausend Zeichen vorliest, wird nicht gehört, und ein Protokoll, in
+ * das eine ganze Seite passt, ist keines.
+ *
+ * `messtext` und `messweg` (`../gemeinsam/messform.js`) sind für die MESSUNG.
+ * Dort wird NIE gekürzt, in keiner Länge, aus keinem Grund — Befund H1:
+ * `flachmachen` kürzte in der Mitte, und das Wort „kasse" stand genau dort.
+ *
+ *     Eine Sicherheitsprüfung kürzt ihren Eingang nicht.
+ *
+ * Wer diese Funktion vor einer Messung ruft, hebelt die Messung aus. Genau
+ * das ist Befund AUTOMODUS-2: `ausfuehrer.js` kürzt den Elementnamen auf 120
+ * Zeichen, bevor der Klassifizierer ihn sieht — ein Knopf mit 208 Zeichen
+ * Namen, in dessen Mitte „kaufen" steht, lief damit im Modus `auto` ohne
+ * Rückfrage. Deshalb hält `src/pruefung/gattung.test.mjs` eine Positivliste
+ * über jede Kürzung im Bestand: Eine neue Fundstelle ist rot, bis jemand sie
+ * einträgt und begründet.
+ *
+ * ====================================================================
+ * WAS SICH AM 14.08.2026 GEÄNDERT HAT: unsichtbare Zeichen fallen weg
+ * ====================================================================
+ *
+ * Bis dahin stand hier `.replace(STEUERZEICHEN, " ")` über einer Liste, die
+ * Nullbreiten und Schreibrichtungsmarken enthielt. Aus „Jetzt kau<U+200B>fen"
+ * wurde damit „Jetzt kau fen" — und das war nicht nur eine schlechte Anzeige,
+ * sondern das Ende der Wache: Der Ausführer ruft `saeubern` auf den
+ * Elementnamen, BEVOR der Klassifizierer ihn misst. Das Wort „kaufen" war
+ * schon zerschnitten, als gemessen wurde (AUTOMODUS-1).
+ *
+ * Die alte Begründung — ein weggelassenes Zeichen liesse die Anzeige lügen —
+ * gilt für Steuerzeichen und nicht für Zeichen ohne eigene Breite. Die Seite
+ * zeigt dem Menschen „Jetzt kaufen"; ihm „Jetzt kau fen" vorzulesen ist die
+ * Lüge. Deshalb gilt ab jetzt in BEIDEN Formen dieselbe Regel, und sie steht
+ * genau einmal im Bestand (`ohneUnsichtbare` / `steuerzeichenGlaetten` in
+ * `../gemeinsam/messform.js`):
+ *
+ *   - keine eigene Breite  → ersatzlos weg
+ *   - bedeutet eine Lücke  → ein Leerzeichen
  */
 export function saeubern(roh, grenze = GRENZEN.nameZeichen) {
-  const s = String(roh ?? "")
-    .replace(STEUERZEICHEN, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  const s = anzeigeform(roh);
   if (s.length <= grenze) return s;
   if (grenze <= 1) return "…";
   const kopf = Math.ceil((grenze - 1) / 2);
   const fuss = grenze - 1 - kopf;
   return `${s.slice(0, kopf)}…${fuss > 0 ? s.slice(s.length - fuss) : ""}`;
+}
+
+/**
+ * Trägt dieser Text die Spur UNSERER eigenen Kürzung?
+ *
+ * Die Laufzeit-Gegenwache zu Befund AUTOMODUS-2, und sie ist ausdrücklich
+ * eine Wache über die KLASSE und nicht über die eine Aufrufstelle: Wer immer
+ * einen Namen kürzt, bevor er gemessen wird — heute `ausfuehrer.js:3057`,
+ * morgen eine Stelle, die es noch nicht gibt —, liefert hier einen Text ab,
+ * dessen Mitte fehlt. Was fehlt, kann nicht gemessen werden, und was nicht
+ * gemessen werden kann, wird nicht durchgewinkt.
+ *
+ * Erkannt wird der Fingerabdruck von `saeubern` selbst und nicht bloss ein
+ * Auslassungszeichen: `saeubern` setzt GENAU EIN „…" an die Stelle
+ * `ceil((laenge - 1) / 2)` des Ergebnisses, unabhängig davon, mit welcher
+ * Grenze gekürzt wurde. Damit greift die Erkennung für jede Grenze und
+ * verschont die häufigen Namen, die selbst auf „…" enden („Mehr laden…",
+ * „Weitere Optionen…") — dort steht das Zeichen am Ende und nicht in der
+ * Mitte.
+ *
+ * Die Untergrenze von 20 Zeichen hält kurze Namen heraus, in denen ein
+ * mittiges „…" Zufall sein kann („ab…cd"). Gekürzt wird im Bestand mit 20,
+ * 40, 60, 80, 120 und 200 Zeichen; darunter gibt es keine Kürzung, die diese
+ * Spur hinterlassen könnte.
+ *
+ * Ein Fehlalarm kostet eine Rückfrage. Ein übersehener Fall kostet den Kauf.
+ */
+export function kuerzungsspur(roh) {
+  const s = String(roh ?? "");
+  if (s.length < 20) return false;
+  const erste = s.indexOf("…");
+  if (erste < 0) return false;
+  if (s.lastIndexOf("…") !== erste) return false; // mehr als eines: nicht unsere Form
+  return erste === Math.ceil((s.length - 1) / 2);
 }
 
 /**
@@ -1511,60 +1588,75 @@ export const WORTE_EINSCHLEUSUNG = Object.freeze([
   "neue anweisung", "du bist jetzt", "systemanweisung", "systemprompt",
 ]);
 
-/* Umlaute und Eszett in die Schreibweise der Wortlisten. */
-const UMLAUT_ERSATZ = Object.freeze([
-  [/ä/g, "ae"], [/ö/g, "oe"], [/ü/g, "ue"], [/ß/g, "ss"],
-  [/á|à|â|å/g, "a"], [/é|è|ê/g, "e"], [/í|ì|î/g, "i"], [/ó|ò|ô/g, "o"], [/ú|ù|û/g, "u"],
-]);
-
 /**
- * Fremdtext in die eine Form bringen, in der verglichen wird: gesäubert,
- * kleingeschrieben, ohne Umlaute, ohne Satzzeichen, mit genau einem
- * Leerzeichen zwischen den Wörtern und je einem am Rand.
+ * Fremdtext in die eine Form bringen, in der verglichen wird.
  *
- * Die Randleerzeichen sind kein Schönheitsfehler: Sie machen aus der Suche
- * nach `" pin "` eine Suche nach dem ganzen Wort, auch am Anfang und am Ende
- * der Zeichenkette.
+ * Die Regel selbst steht nicht mehr hier, sondern in `messrand`
+ * (`../gemeinsam/messform.js`) — dieselbe Datei, die auch als Inhaltsskript
+ * in der besuchten Seite läuft. Diese Funktion bleibt als Name stehen, weil
+ * der ganze Klassifizierer sie so nennt.
  *
- * **Ohne Längengrenze, und das ist der Befund vom 14.08.2026 (H1).** Bis
- * dahin stand hier `grenze = 400`, und `saeubern` kürzt in der MITTE: Kopf
- * und Fuss bleiben, die Mitte fällt weg. Gemessen wurde ein Klick auf
- * „Weiter" unter `https://shop.de/kasse/bezahlen` mit einer Rückfrage — und
- * derselbe Klick unter `https://shop.de/<250 Zeichen>/kasse/<250 Zeichen>`
- * mit KEINER: Das Wort „kasse" stand in der weggeschnittenen Mitte.
+ * Was `messrand` liefert und warum:
  *
- * Damit bestimmte die besuchte Seite selbst, ob eine als nie abschaltbar
- * zugesagte Wache greift; es genügte eine lange Adresse. Die Lehre ist keine
- * über Zahlen, sondern über die Bauform:
+ *  1. **Unsichtbare Zeichen fallen ersatzlos weg** (Befund AUTOMODUS-1 vom
+ *     14.08.2026). Vorher machte `saeubern` daraus ein Leerzeichen und diese
+ *     Funktion aus jedem Nicht-Alphanumerischen ebenfalls eines: „Jetzt
+ *     kau<U+200B>fen" wurde zu „jetzt kau fen", das Wort „kaufen" stand
+ *     nirgends, und der Klick lief im Modus `auto` ohne Rückfrage. U+00AD
+ *     und U+2060 fehlten in der Liste sogar ganz.
+ *  2. **Unicode-Normalform NFKC und Nachfaltung** — „ｋａｕｆｅｎ" und
+ *     „ᴋᴀᴜꜰᴇɴ" sind für einen Menschen das Wort, für einen Vergleich waren
+ *     sie es nicht.
+ *  3. **Randleerzeichen**, damit aus der Suche nach `" pin "` eine Suche nach
+ *     dem ganzen Wort wird, auch am Anfang und am Ende.
+ *  4. **Ohne Längengrenze**, und das ist der Befund H1 vom 14.08.2026. Bis
+ *     dahin stand hier `grenze = 400`, und `saeubern` kürzt in der MITTE:
+ *     Kopf und Fuss bleiben, die Mitte fällt weg. Gemessen wurde ein Klick
+ *     auf „Weiter" unter `https://shop.de/kasse/bezahlen` mit einer Rückfrage
+ *     — und derselbe Klick unter `https://shop.de/<250 Zeichen>/kasse/<250
+ *     Zeichen>` mit KEINER: Das Wort „kasse" stand in der weggeschnittenen
+ *     Mitte.
  *
- *   **Eine Sicherheitsprüfung kürzt ihren Eingang nicht.**
+ *     Damit bestimmte die besuchte Seite selbst, ob eine als nie abschaltbar
+ *     zugesagte Wache greift; es genügte eine lange Adresse. Die Lehre ist
+ *     keine über Zahlen, sondern über die Bauform:
  *
- * Gekürzt wird ausschliesslich dort, wo Text ANGEZEIGT oder gespeichert wird
- * (`saeubern` mit seinen Deckeln). Was gemessen wird, wird ganz gemessen.
- * Teuer ist das nicht: Gesucht werden ein paar Dutzend kurze Wörter in einer
- * Adresse oder einem Elementnamen, und `einschleusungVerdacht` liest aus
- * demselben Grund seit jeher den ganzen Textbaum.
+ *       **Eine Sicherheitsprüfung kürzt ihren Eingang nicht.**
+ *
+ *     Gekürzt wird ausschliesslich dort, wo Text ANGEZEIGT oder gespeichert
+ *     wird (`saeubern` mit seinen Deckeln). Was gemessen wird, wird ganz
+ *     gemessen. Teuer ist das nicht: Gesucht werden ein paar Dutzend kurze
+ *     Wörter in einer Adresse oder einem Elementnamen, und
+ *     `einschleusungVerdacht` liest aus demselben Grund seit jeher den ganzen
+ *     Textbaum.
  */
 function flachmachen(roh) {
-  let s = saeubern(roh, Number.MAX_SAFE_INTEGER).toLowerCase();
-  for (const [muster, ersatz] of UMLAUT_ERSATZ) s = s.replace(muster, ersatz);
-  s = s.replace(/[^a-z0-9]+/g, " ").trim();
-  return s ? ` ${s} ` : "";
+  return messrand(roh);
 }
 
 /**
  * Welches Wort der Liste steht in diesem Text?
  *
+ * Gesucht wird in BEIDEN Lesarten des Textes (`messvarianten`): einmal mit
+ * unsichtbaren Zeichen ersatzlos entfernt, einmal mit ihnen als Lücke. Ein
+ * Nullbreiten-Zeichen kann ein Wort zerschneiden („kau<U+200B>fen") UND zwei
+ * Wörter zusammenkleben („ignore<U+200B>previous"); wer sich für eine der
+ * beiden Lesarten entscheidet, macht die andere zum offenen Weg vorbei
+ * (Befund AUTOMODUS-1 und seine Kehrseite, gemessen an E1). Ein Treffer in
+ * EINER Lesart genügt — mehr Rückfrage ist hier die erlaubte Richtung.
+ *
  * @returns {string|null} das Wort aus UNSERER Liste, nie der Fremdtext selbst
  */
 function wortTreffer(text, worte) {
-  const flach = flachmachen(text);
-  if (!flach) return null;
+  const formen = messvarianten(text);
+  if (!formen.length) return null;
   for (const wort of worte) {
-    if (wort.length >= WORT_IM_WORT_AB) {
-      if (flach.includes(wort)) return wort;
-    } else if (flach.includes(` ${wort} `)) {
-      return wort;
+    for (const flach of formen) {
+      if (wort.length >= WORT_IM_WORT_AB) {
+        if (flach.includes(wort)) return wort;
+      } else if (flach.includes(` ${wort} `)) {
+        return wort;
+      }
     }
   }
   return null;
@@ -1583,20 +1675,34 @@ const GRUNDKLASSE = Object.freeze({
   navigate: "navigieren", back: "navigieren",
 });
 
-/* Nur der Weg der Adresse, nicht der Wirt. Der Vertrag nennt in §3.1
-   ausdrücklich den „Adresspfad": Ein Wirt namens `paypal.de` macht aus einem
-   Lesebefehl keine Zahlung, ein Pfad `/checkout/zahlung` sehr wohl. Lässt sich
-   die Adresse nicht zerlegen, wird sie ganz genommen — mehr Text heisst hier
-   mehr Rückfrage, und das ist die erlaubte Richtung. */
+/*
+ * Der Weg einer Adresse in der Form, in der er GEMESSEN wird.
+ *
+ * Die Regel steht in `messweg` (`../gemeinsam/messform.js`), damit sie auch
+ * der Inhaltsseite zur Verfügung steht und es sie genau einmal gibt. Sie
+ * liefert Pfad, Suche UND Fragment, jedes davon zusätzlich prozentausgepackt,
+ * und die rohe Form bleibt daneben stehen.
+ *
+ * Zwei Befunde vom 14.08.2026 stecken darin:
+ *
+ *   AUTOMODUS-3: Hier stand `u.pathname`, und `new URL().pathname` dekodiert
+ *   Prozentfolgen NICHT. `navigate` auf `https://shop.de/%6Basse/%62ezahlen`
+ *   lief im Modus `auto` ohne Rückfrage durch, die unkodierte Fassung
+ *   `/kasse/bezahlen` fragte — obwohl der Server dieselbe Seite ausliefert.
+ *
+ *   AUTOMODUS-4: `u.hash` fiel ganz weg. `https://shop.de/#/konto/loeschen`
+ *   trug damit für den Klassifizierer nur einen Schrägstrich, obwohl bei
+ *   Einzelseiten-Anwendungen (Vue, Angular, ältere React-Oberflächen) der
+ *   ganze Weg im Fragment steht und der Agent die Adresse selbst wählt.
+ *
+ * Unverändert: Der Wirt bleibt draussen. Der Vertrag nennt in §3.1
+ * ausdrücklich den „Adresspfad" — ein Wirt namens `paypal.de` macht aus einem
+ * Lesebefehl keine Zahlung, ein Pfad `/checkout/zahlung` sehr wohl. Und lässt
+ * sich die Adresse nicht zerlegen, wird sie ganz genommen: mehr Text heisst
+ * hier mehr Rückfrage, und das ist die erlaubte Richtung.
+ */
 function wegVon(roh) {
-  const s = String(roh || "");
-  if (!s) return "";
-  try {
-    const u = new URL(s);
-    return `${u.pathname} ${u.search}`;
-  } catch (_) {
-    return s;
-  }
+  return messweg(roh);
 }
 
 /*
@@ -1667,9 +1773,17 @@ export function klassenBestimmen(cmd, plan, ziel, kopf) {
   const grundklasse = eigen(GRUNDKLASSE, befehl);
   if (grundklasse) merken(grundklasse, "am Befehl selbst");
 
-  const rolle = z ? String(z.rolle || "").toLowerCase() : "";
-  const marke = z ? String(z.marke || "").toLowerCase() : "";
-  const typ = z ? String(z.typ || "").toLowerCase() : "";
+  /* Rolle, Marke und Feldtyp gehen durch DIESELBE Messform wie die Wörter.
+     Ein blosses `toLowerCase()` verglich hier gegen unsere festen Vokabeln
+     („button", „input", „password"), und die besuchte Seite liefert diese
+     Angaben — ein unsichtbares Zeichen darin, und `typ === "password"` ist
+     falsch. Das ist dieselbe Klasse wie AUTOMODUS-1, nur an einem Vergleich
+     auf Gleichheit statt an einer Wortsuche. `messtext` kostet hier nichts:
+     „button", „input", „file", „submit" und „password" gehen unverändert
+     hindurch. */
+  const rolle = z ? messtext(z.rolle) : "";
+  const marke = z ? messtext(z.marke) : "";
+  const typ = z ? messtext(z.typ) : "";
   const zielText = z ? `${z.name || ""} ${z.rolle || ""}` : "";
   const wegText = adressText(kopf);
   const beides = `${zielText} ${wegText}`;
@@ -1753,11 +1867,18 @@ export function klassenBestimmen(cmd, plan, ziel, kopf) {
      der Unterschied zwischen „erkannt an ,kasse'" und dem Vorlesen einer
      fremden Überschrift, und es ist derselbe Grundsatz wie überall hier:
      Seitentext geht nicht in die Frage an den Menschen. */
+  /* War der Text, den wir gerade gemessen haben, schon gekürzt, als er hier
+     ankam? Dann ist die Messung unvollständig, und Unvollständigkeit ist
+     kein Grund zum Durchwinken (Befund AUTOMODUS-2, Begründung bei
+     `kuerzungsspur`). Gemessen wird an allem, was von der SEITE stammt; was
+     der Agent selbst schickt, kürzt niemand vor der Messung. */
+  const unvollstaendig = z ? kuerzungsspur(z.name) || kuerzungsspur(z.rolle) : false;
+
   const grund = klassen.length
     ? `Erkannt: ${klassen.map((k) => `${KLASSE_TEXT[k]} ${gefunden.get(k)}`).join(", ")}.`
     : "Diesem Schritt konnte ich keine Klasse zuordnen.";
 
-  return { klassen, hart, weich, grund };
+  return { klassen, hart, weich, grund, unvollstaendig };
 }
 
 /**
@@ -1820,6 +1941,24 @@ export function freigabeNoetig(modus, befund, regeln) {
       sperren: false,
       code: "guardrail_blocked",
       grund: `${KLASSE_TEXT[hart]} ist nie abschaltbar, hier frage ich auch in der Automatik.`,
+    };
+  }
+
+  /* Die Messung war unvollständig — der Name des Ziels trug die Spur unserer
+     eigenen Kürzung, als er gemessen wurde (`kuerzungsspur`). Was in der
+     weggeschnittenen Mitte stand, weiss niemand; „nichts gefunden" heisst
+     hier „nicht nachgesehen". Deshalb wird gefragt, auch in der Automatik.
+
+     Diese Prüfung steht NACH `hart`, weil eine erkannte harte Klasse den
+     genaueren Satz trägt: Wer beides hat, soll den Grund hören, der wirklich
+     etwas benennt. Sie steht VOR den weichen Klassen, weil sie sich im
+     Gegensatz zu ihnen nicht freischalten lässt. */
+  if (b.unvollstaendig === true) {
+    return {
+      fragen: true,
+      sperren: false,
+      code: "guardrail_blocked",
+      grund: "Der Name des Ziels war schon gekürzt, als ich ihn gemessen habe. Was in der Mitte stand, konnte ich nicht prüfen, deshalb frage ich auch in der Automatik.",
     };
   }
 
@@ -2015,15 +2154,20 @@ export function einschleusungVerdacht(text) {
      Zeichen 400 abgeschnitten wird, ist genau der Satz, den ein Angreifer ans
      Ende schreibt. Seit dem Befund H1 vom 14.08.2026 gilt das für JEDE Messung
      an Fremdtext, und `flachmachen` kürzt deshalb gar nicht mehr. */
-  const flach = flachmachen(text);
-  if (!flach) return { verdacht: false, muster: null };
+  /* In BEIDEN Lesarten, aus demselben Grund wie in `wortTreffer`:
+     „ignore<U+200B>previous<U+200B>instructions" ist in der einen Lesart ein
+     einziges langes Wort und in der anderen der Satz. */
+  const formen = messvarianten(text);
+  if (!formen.length) return { verdacht: false, muster: null };
   /* Verglichen wird mit Leerzeichen an beiden Rändern, nicht als blosses
      Wortstück. Sonst steckt „act as" in „contract as agreed", und ein
      Kaufvertrag hielte den Automatikmodus an. `flachmachen` setzt an beide
      Enden ein Leerzeichen, damit auch das erste und das letzte Wort so
      gefunden werden. */
   for (const muster of WORTE_EINSCHLEUSUNG) {
-    if (flach.includes(` ${muster} `)) return { verdacht: true, muster };
+    for (const flach of formen) {
+      if (flach.includes(` ${muster} `)) return { verdacht: true, muster };
+    }
   }
   return { verdacht: false, muster: null };
 }
@@ -2320,11 +2464,44 @@ function zeileBauen(k) {
  * Jede Auslassung wird gezählt und benannt — ein Agent, der nicht weiß, dass
  * er unvollständig sieht, behauptet Dinge über Teile, die er nie hatte.
  *
+ * ====================================================================
+ * `text` IST NICHT DER MESSEINGANG — dafür stehen `volltext` und
+ * `einschleusung` daneben (14.08.2026, zweite Runde)
+ * ====================================================================
+ *
+ * `text` ist gekürzt, und zwar dreifach: 400 rohe Knoten, 120 Zeichen je Name,
+ * 12.000 Zeichen im Ganzen. Für den Agenten ist das richtig. Für eine MESSUNG
+ * ist es genau die Bauform, an der H1 und AUTOMODUS-2 hängen: Was in der
+ * weggeschnittenen Mitte stand, wird nicht gefunden, und nicht gefunden heisst
+ * hier „die Automatik läuft weiter".
+ *
+ * Gemessen wird an diesem Baum die Prompt-Einschleusung (§9). Ein Satz
+ * „ignore previous instructions" hinter Zeichen 12.000 oder in der 401.
+ * Zeile war damit unsichtbar — und eine Seite bestimmt selbst, wie lang sie
+ * ist. Deshalb liefert diese Funktion zwei Felder mehr:
+ *
+ *   `volltext`      alle Namen und Werte der ROHEN Knoten, ohne jede Kürzung,
+ *                   ohne Deckel, ohne Auslassung.
+ *   `einschleusung` das Ergebnis von `einschleusungVerdacht` über genau
+ *                   diesen `volltext`.
+ *
+ * Wer auf Einschleusung prüft, nimmt `einschleusung` und nicht `text`. Das
+ * Feld steht fertig da, damit an der Aufrufstelle nichts mehr zu entscheiden
+ * bleibt: Eine Wache, bei der der Aufrufer die richtige Zeichenkette
+ * aussuchen muss, sucht irgendwann die falsche.
+ *
  * @param {Array} rohknoten  Knoten aus dem Seitenskript (unvertraut)
  * @param {object} kopf      { url, titel, epoche }
- * @returns {{text:string, elementCount:number, truncated:(false|string), ausgelassen:object}}
+ * @returns {{text:string, volltext:string, einschleusung:object, elementCount:number, truncated:(false|string), ausgelassen:object}}
  */
 export function textbaumBauen(rohknoten, kopf = {}) {
+  /* VOR jeder Kürzung und aus den ROHEN Knoten: Was hier hineingeht, hat
+     weder den Deckel von 400 Knoten noch den von 120 Zeichen je Name
+     gesehen. */
+  const volltext = (Array.isArray(rohknoten) ? rohknoten : [])
+    .map((k) => (k && typeof k === "object" ? `${k.name ?? ""} ${k.wert ?? ""}` : ""))
+    .join(" ");
+
   const alle = (Array.isArray(rohknoten) ? rohknoten : [])
     .slice(0, GRENZEN.knotenRoh)
     .map(knotenPruefen)
@@ -2383,7 +2560,14 @@ export function textbaumBauen(rohknoten, kopf = {}) {
     stufe = "schwer";
   }
 
-  return { text, elementCount: elemente, truncated: stufe, ausgelassen };
+  return {
+    text,
+    volltext,
+    einschleusung: einschleusungVerdacht(volltext),
+    elementCount: elemente,
+    truncated: stufe,
+    ausgelassen,
+  };
 }
 
 /**

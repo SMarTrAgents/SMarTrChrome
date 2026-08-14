@@ -273,6 +273,131 @@ test("chatStarten ohne Ausweis: Anmeldung statt kryptischem Fehler", async () =>
 });
 
 /* ------------------------------------------------------------------ *
+ * Der Wiedereintritt nach `await` (Befund NOTAUS-1 vom 14.08.2026)
+ *
+ * DER GRUNDSATZ, den diese Gruppe misst:
+ *
+ *   **Nach einem Not-Aus darf kein Weg mehr etwas WIEDERHERSTELLEN, auch
+ *   nicht ein Weg, der VOR dem Not-Aus begonnen hat.**
+ *
+ * Die Sätze über den Nachrichtenhörer stehen in `bruecke.test.mjs`; hier wird
+ * gemessen, was dort nicht sichtbar ist: WIE der Stopp beim Server aussieht.
+ * Ohne die Kopfzeile `X-Client` weist das Zugangstor des Gateways ihn ab, und
+ * dann läuft der Auftrag weiter, obwohl die Netzspur einen Stopp zeigt.
+ * ------------------------------------------------------------------ */
+
+/** Ein paar Runden der Ereignisschleife, ohne echte Zeit verstreichen zu lassen. */
+async function runden(anzahl = 10) {
+  for (let i = 0; i < anzahl; i += 1) await new Promise((f) => setImmediate(f));
+}
+
+test("Not-Aus in der offenen Frage: kein Botengang, und der Auftrag wird beim Server gestoppt", async () => {
+  attrappeSetzen({ panelAntwortet: null });
+  await chat.chatAbbrechen(); /* Rest aus einem vorigen Durchgang */
+
+  let frageLoslassen = null;
+  const anfragen = netzSetzen({
+    "/api/v1/chat/message": async () => {
+      /* Das Gateway lässt sich Zeit. Bis zu FRIST_ANFRAGE = 12 Sekunden — und
+         genau dieses Fenster ist der Befund. */
+      await new Promise((f) => {
+        frageLoslassen = f;
+      });
+      return [200, { status: "processing", task_id: "t-stopp", context_id: "c-stopp" }];
+    },
+    "/api/v1/chat/poll/t-stopp": async () => [200, { status: "processing", steps: [] }],
+    "/api/v1/chat/cancel": async () => [200, { ok: true }],
+  });
+
+  const start = chat.chatStarten({ text: "Was steht hier?", ausweis: "tok" });
+  await runden();
+  assert.equal(typeof frageLoslassen, "function", "Vorbedingung: Der POST steht noch offen.");
+
+  /* Die Reissleine, während die Frage unterwegs ist. In diesem Augenblick gibt
+     es NICHTS abzubrechen: `lauf` ist null, `chat_lauf` leer. Genau das ist der
+     Befund, und deshalb steht hier eine Vorbedingung und keine Zusage. */
+  await chat.chatAbbrechen();
+  assert.equal(
+    anfragen.filter((a) => a.pfad === "/api/v1/chat/cancel").length,
+    0,
+    "Vorbedingung: `chatAbbrechen` findet nichts, es geht von dort kein Stopp hinaus.",
+  );
+
+  /* Und JETZT erst antwortet das Gateway. */
+  frageLoslassen();
+  const ergebnis = await start;
+  await runden(20);
+
+  assert.equal(ergebnis.ok, false, "Es entsteht kein Auftrag.");
+  assert.equal(ergebnis.kennung, "abgebrochen", "Und der Grund wird benannt.");
+  assert.ok(
+    !ergebnis.klartext.includes(" — "),
+    "Kein Gedankenstrich in einem Satz, der vorgelesen wird.",
+  );
+  assert.equal((await chat.chatZustand()).laeuft, false, "Es läuft kein Botengang.");
+  assert.equal(
+    anfragen.filter((a) => a.pfad.startsWith("/api/v1/chat/poll/")).length,
+    0,
+    "Es wird kein einziges Mal abgefragt.",
+  );
+
+  const stopps = anfragen.filter((a) => a.pfad === "/api/v1/chat/cancel");
+  assert.equal(stopps.length, 1, "Der Auftrag wird beim Server gestoppt, genau einmal.");
+  assert.equal(
+    stopps[0].koerper.context_id,
+    "c-stopp",
+    "Mit der Kennung, die der Server soeben vergeben hat — sie kennt nur dieser Aufruf.",
+  );
+  assert.equal(
+    stopps[0].optionen.headers["X-Client"],
+    chat.CHAT_KLIENT,
+    "Und mit der Kopfzeile, ohne die das Zugangstor den Stopp abweist.",
+  );
+  assert.equal(stopps[0].optionen.method, "POST", "Ein Stopp ist ein POST, kein GET.");
+});
+
+test("Not-Aus kurz vor der Antwort: sie wird nicht mehr zugestellt", async () => {
+  /*
+   * Dieselbe Klasse, selbst gefunden, am Ausgang statt am Eingang:
+   * `weiterAbholen` meldet die fertige Antwort an die Seitenleiste. Fällt der
+   * Not-Aus in die letzte Abfrage, ist das eine Antwort, auf die niemand mehr
+   * wartet — und `chatAbbrechen` sagt selbst, dass so eine „weder ankommen noch
+   * weiterkosten" soll. Ohne die Marke käme sie an, und `laufEnde()` räumte
+   * dabei einen Botengang ab, der inzwischen jemand anderem gehört.
+   */
+  const { spur } = attrappeSetzen({ panelAntwortet: null });
+  await chat.chatAbbrechen();
+
+  let abgebrochen = false;
+  netzSetzen({
+    "/api/v1/chat/message": async () => [
+      200,
+      { status: "processing", task_id: "t-spaet", context_id: "c-spaet" },
+    ],
+    "/api/v1/chat/poll/t-spaet": async () => {
+      /* Der Not-Aus fällt genau in diese Abfrage. */
+      if (!abgebrochen) {
+        abgebrochen = true;
+        await chat.chatAbbrechen();
+      }
+      return [200, { status: "done", response: "Fertig gedacht.", context_id: "c-spaet" }];
+    },
+    "/api/v1/chat/cancel": async () => [200, { ok: true }],
+  });
+
+  const start = await chat.chatStarten({ text: "Denk nach", ausweis: "tok" });
+  assert.equal(start.ok, true, "Vorbedingung: Der Botengang ging los.");
+  await runden(30);
+
+  assert.equal(
+    spur.filter((e) => e.wohin === "panel" && e.nachricht && e.nachricht.typ === "chat:antwort").length,
+    0,
+    "Nach dem Not-Aus wird keine Antwort mehr zugestellt.",
+  );
+  assert.equal((await chat.chatZustand()).laeuft, false, "Und es läuft nichts mehr.");
+});
+
+/* ------------------------------------------------------------------ *
  * Guthaben — echt, und nach jeder Antwort frisch
  * ------------------------------------------------------------------ */
 

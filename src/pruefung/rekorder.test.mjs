@@ -1599,3 +1599,338 @@ test("R36: auch die neuen Absagen ergeben einen Ablauf, den die Werkstatt annimm
   assert.ok(alsText(schritte).includes("julian"), "der Benutzername gehört weiterhin hinein");
   assert.ok(schritte.some((s) => s.type === "user_input_required"), alsText(schritte));
 });
+
+/* ================================================================== *
+ * R37 bis R45 — die Abnahmefunde TEACH-1 bis TEACH-4, TEACH-7 und TEACH-8
+ * vom 14.08.2026, alle über den Produktivweg gemessen.
+ *
+ * Eine Fehlerart hält sie zusammen: Die Wache prüft das GANZE, die Gefahr
+ * tritt als TEIL auf. `textHarmlos("849271")` war falsch,
+ * `textHarmlos("Dein Code lautet 849271")` wahr; `harmlosBeleg` fand „mail"
+ * irgendwo in einem Satz und gab damit einen Einmalcode frei. Was jeder
+ * einzelne Prüfsatz hier misst, ist deshalb nie die Funktion allein, sondern
+ * der Ablauf, der am Ende in `sa_workflows` liegt.
+ * ================================================================== */
+
+/* Die gemessene 2FA-Seite: der Code steht als SATZ auf dem Schirm, das Feld
+   trägt eine Erklärung statt eines Namens. Beides ist der Alltag, und beides
+   ist vorher durchgegangen. */
+function zweiFaktorMitSatz() {
+  return k("html", {}, [
+    k("body", {}, [
+      k("div", { class: "karte" }, [
+        k("p", { id: "hinweis" }, "Dein Code lautet 849271", "hinweis"),
+        k(
+          "label",
+          { for: "c" },
+          "Wir haben dir eine E-Mail geschickt, trag die sechs Ziffern hier ein.",
+          "etikett"
+        ),
+        k("input", { id: "c" }, [], "code"),
+        k("button", { class: "weiter" }, "Weiter", "weiter"),
+      ]),
+    ]),
+  ]);
+}
+
+test("R37: ein Einmalcode MITTEN im Satz wird weder Anker noch Beschreibung", async () => {
+  const u = await starten(zweiFaktorMitSatz(), { url: "https://www.ebay.de/2fa" });
+  u.fragen({ typ: "rekorder:start" });
+  u.feuern("click", { target: u.finden("hinweis") });
+
+  const erg = u.fragen({ typ: "rekorder:stop" });
+  const text = alsText(erg.schritte);
+  assert.ok(!text.includes("849271"), `der Einmalcode steht im Ablauf: ${text}`);
+
+  /* Der Klick bleibt trotzdem ein Schritt, mit einem Anker, der trägt. */
+  const klick = Array.from(erg.schritte).find((s) => s.type === "click");
+  assert.ok(klick, text);
+  assert.ok(klick.selector_cascade.includes("#hinweis"), alsText(klick.selector_cascade));
+  /* Und weil vom Text nichts übrig bleibt, sagt die Beschreibung das auch,
+     statt still „p" zu behaupten (TEACH-1). */
+  assert.ok(u.sandkasten.SMARTR_GEHEIM.namenlos(klick.beschreibung), klick.beschreibung);
+});
+
+test("R38: ein erklärender Satz am Feld ist kein Beleg, sondern eine Erklärung", async () => {
+  /* Befund TEACH-3, erster gemessener Fall: `harmlosBeleg` prüfte
+     `flach.includes(wort)` über die ganze Etikettzeile. „Wir haben dir eine
+     E-Mail geschickt …" enthält „mail", also galt das Feld als belegt, und
+     `{"type":"input","value":"849271"}` lag im Ablauf. */
+  const u = await starten(zweiFaktorMitSatz(), { url: "https://www.ebay.de/2fa" });
+  u.fragen({ typ: "rekorder:start" });
+  const feld = u.finden("code");
+  feld.value = "849271";
+  u.feuern("input", { target: feld });
+
+  const erg = u.fragen({ typ: "rekorder:stop" });
+  const text = alsText(erg.schritte);
+  assert.ok(!text.includes("849271"), `der Einmalcode steht im Ablauf: ${text}`);
+  assert.equal(feld.__wertGelesen, 0, "und er wurde nicht einmal gelesen");
+  assert.ok(
+    Array.from(erg.schritte).some((s) => s.type === "user_input_required" && s.reason === "Login/2FA"),
+    text
+  );
+
+  /* Gegenprobe an derselben Stelle: Ein Feld, das wirklich „E-Mail" heisst,
+     bleibt ein gewöhnliches Feld. Es geht um die Länge der Aussage, nicht um
+     das Wort. */
+  const G = u.sandkasten.SMARTR_GEHEIM;
+  assert.equal(G.bezeichnungTaugt("E-Mail"), true);
+  assert.equal(G.bezeichnungTaugt("Wir haben dir eine E-Mail geschickt, trag die sechs Ziffern hier ein."), false);
+});
+
+test("R39: neben einem Passwortfeld zählt auch die Gestalt des Wertes", async () => {
+  /* Befund TEACH-3, zweiter gemessener Fall: Das Feld hiess „Bestellung
+     bestaetigen", der Beleg zog, und der Riegel `abschnitt_geheim` griff
+     ausdrücklich NUR bei Feldern OHNE Beleg. Im selben `<form>` stand ein
+     `type=password`. */
+  const seite = () =>
+    k("html", {}, [
+      k("body", {}, [
+        k("form", { id: "anmeldung" }, [
+          k("input", { id: "pw", name: "passwort", type: "password" }, [], "pw"),
+          k("label", { for: "t" }, "Bestellung bestaetigen", "etikett"),
+          k("input", { id: "t" }, [], "feld"),
+        ]),
+      ]),
+    ]);
+
+  const u = await starten(seite(), { url: "https://www.ebay.de/anmelden" });
+  u.fragen({ typ: "rekorder:start" });
+  const feld = u.finden("feld");
+  feld.value = "849271";
+  u.feuern("input", { target: feld });
+
+  const erg = u.fragen({ typ: "rekorder:stop" });
+  const text = alsText(erg.schritte);
+  assert.ok(!text.includes("849271"), `der Einmalcode steht im Ablauf: ${text}`);
+  assert.ok(Array.from(erg.schritte).some((s) => s.type === "user_input_required"), text);
+
+  /* Gegenprobe, und sie ist die wichtigere Hälfte: Was ein Mensch neben einem
+     Passwortfeld wirklich schreibt, bleibt stehen. Sonst wäre aus der Wache
+     ein Ausschalter geworden. */
+  const zwei = await starten(seite(), { url: "https://www.ebay.de/anmelden" });
+  zwei.fragen({ typ: "rekorder:start" });
+  const feld2 = zwei.finden("feld");
+  feld2.value = "Meier";
+  zwei.feuern("input", { target: feld2 });
+  const zweiter = zwei.fragen({ typ: "rekorder:stop" });
+  assert.ok(alsText(zweiter.schritte).includes("Meier"), alsText(zweiter.schritte));
+});
+
+test("R40: der Wiederherstellungsschlüssel kommt auch aus einem belegten Feld nicht durch", async () => {
+  /* Befund TEACH-4: Die Formprüfung kannte nur reine Ziffern, Luhn und
+     `^[A-Z0-9]{6,12}$`. Gemessen durchgekommen sind `a3f9c2`,
+     `sk-live-9f3a2b`, `a1b2c-3d4e5`, `8s7d6f5g`, `kl4us-2026` — also genau
+     das, was GitHub, Discord und die Authenticator-Verfahren ausgeben. */
+  const seite = () =>
+    k("html", {}, [
+      k("body", {}, [
+        k("div", { class: "kasse" }, [
+          k("input", { name: "bestellnummer", "aria-label": "Bestellnummer" }, [], "feld"),
+        ]),
+      ]),
+    ]);
+
+  for (const geheimnis of ["a3f9c2", "A3f9C2", "a1b2c-3d4e5", "x7f2k9-p3q8r1", "8s7d6f5g", "sk-live-9f3a2b", "kl4us-2026", "abcd efgh ijkl mnop"]) {
+    const u = await starten(seite());
+    u.fragen({ typ: "rekorder:start" });
+    const feld = u.finden("feld");
+    feld.value = geheimnis;
+    u.feuern("input", { target: feld });
+    const erg = u.fragen({ typ: "rekorder:stop" });
+    const text = alsText(erg.schritte);
+    assert.ok(!text.includes(geheimnis), `„${geheimnis}" steht im Ablauf: ${text}`);
+    assert.ok(
+      Array.from(erg.schritte).some((s) => s.type === "user_input_required"),
+      `„${geheimnis}": ${text}`
+    );
+  }
+
+  /* Und die Gegenprobe, Wort für Wort: Was ein Mensch in ein Formular tippt,
+     bleibt drin. „iPhone13" und „julian69" tragen ihre Ziffern am Ende, das
+     ist ein Wort mit einer Zahl und kein Code — die Entscheidung steht
+     ausgeschrieben in `tokenGestalt`. */
+  for (const gut of ["17-44821", "iPhone13", "julian69", "Zustand sehr gut", "86150 Augsburg"]) {
+    const u = await starten(seite());
+    u.fragen({ typ: "rekorder:start" });
+    const feld = u.finden("feld");
+    feld.value = gut;
+    u.feuern("input", { target: feld });
+    const erg = u.fragen({ typ: "rekorder:stop" });
+    assert.ok(alsText(erg.schritte).includes(gut), `„${gut}" fehlt im Ablauf: ${alsText(erg.schritte)}`);
+  }
+});
+
+test("R41: die Zifferntastatur ist kein Nachweis über den Inhalt", async () => {
+  /* Befund TEACH-7: `type="tel"` war ein bedingungsloser Harmlos-Beleg, und
+     `<input id="s" type="tel" value="849271">` ergab
+     `{"ok":true,"wert":"849271","beleg":"feldtyp"}`. `tel` öffnet die
+     Zifferntastatur; über den Inhalt sagt das nichts. */
+  const u = await starten(
+    k("html", {}, [
+      k("body", {}, [
+        k("div", { class: "maske" }, [k("input", { id: "s", type: "tel" }, [], "ohneNamen")]),
+        k("div", { class: "kontakt" }, [
+          k("input", { id: "t", type: "tel", name: "telefon" }, [], "telefon"),
+        ]),
+      ]),
+    ])
+  );
+  u.fragen({ typ: "rekorder:start" });
+  const ohneNamen = u.finden("ohneNamen");
+  ohneNamen.value = "849271";
+  u.feuern("input", { target: ohneNamen });
+
+  const telefon = u.finden("telefon");
+  telefon.value = "0821 4567890";
+  u.feuern("input", { target: telefon });
+
+  const erg = u.fragen({ typ: "rekorder:stop" });
+  const text = alsText(erg.schritte);
+  assert.ok(!text.includes("849271"), `der Code steht im Ablauf: ${text}`);
+  assert.equal(ohneNamen.__wertGelesen, 0, "und er wurde nicht einmal gelesen");
+  /* Gegenprobe: Ein Feld, das wirklich ein Telefonfeld ist, sagt das mit
+     seinem Namen und wird weiterhin aufgezeichnet. */
+  assert.ok(text.includes("0821 4567890"), `die Telefonnummer gehört in den Ablauf: ${text}`);
+});
+
+test("R42: auf einer Seite mit einem Code auf dem Schirm wird kein Bild angefordert", async () => {
+  /* Befund TEACH-8: Zu jedem Klick- und Auswahlschritt ging ein JPEG des
+     ganzen sichtbaren Tabs nach `chrome.storage.local`, ohne jede
+     Geheimprüfung — gemessen an genau dem Augenblick, in dem der Einmalcode
+     auf dem Schirm stand. `geheimUmfeld` schützt nur Elemente IM
+     Geheimabschnitt, der Klick daneben ging durch. */
+  const u = await starten(zweiFaktorMitSatz(), { url: "https://www.ebay.de/2fa" });
+  u.fragen({ typ: "rekorder:start" });
+  u.feuern("click", { target: u.finden("weiter") });
+
+  assert.deepEqual(u.anDasPanel("rekorder:bild"), [], "auf dieser Seite wird kein Bild angefordert");
+  const erg = u.fragen({ typ: "rekorder:stop" });
+  const klick = Array.from(erg.schritte).find((s) => s.type === "click");
+  assert.ok(klick, alsText(erg.schritte));
+  assert.equal(klick.screenshot, undefined, alsText(klick));
+
+  /* Gegenprobe: Auf einer gewöhnlichen Seite bleibt das Vorschaubild. Es geht
+     um den Augenblick, nicht um die Abschaffung. */
+  const gut = await starten(verkaufsseite());
+  gut.fragen({ typ: "rekorder:start" });
+  gut.feuern("click", { target: gut.finden("relist") });
+  assert.equal(gut.anDasPanel("rekorder:bild").length, 1);
+});
+
+test("R43: zwei Felder mit Etikett heissen nicht beide „input\"", async () => {
+  /* Befund TEACH-1: `beschreibungVon` las weder `label[for]` noch das
+     umschliessende `<label>` und fiel deshalb auf den Elementnamen zurück.
+     Zwei verschiedene Felder hiessen dann beide „input", der
+     Identitätsvergleich aus F3 fand keinen Unterschied, und die Artikelnummer
+     wurde ins Titelfeld getippt — Antwort `success`. */
+  const u = await starten(
+    k("html", {}, [
+      k("body", {}, [
+        k("form", { id: "maske" }, [
+          k("label", { for: "f1" }, "Titel", "l1"),
+          k("input", { id: "f1" }, [], "titelfeld"),
+          k("label", { for: "f2" }, "Artikelnummer", "l2"),
+          k("input", { id: "f2" }, [], "nummerfeld"),
+          k("span", { id: "leer" }, "", "leer"),
+        ]),
+      ]),
+    ])
+  );
+  u.fragen({ typ: "rekorder:start" });
+  const titel = u.finden("titelfeld");
+  titel.value = "Schuhe";
+  u.feuern("input", { target: titel });
+  const nummer = u.finden("nummerfeld");
+  nummer.value = "9988776655";
+  u.feuern("input", { target: nummer });
+  u.feuern("click", { target: u.finden("leer") });
+
+  const erg = u.fragen({ typ: "rekorder:stop" });
+  const eingaben = Array.from(erg.schritte).filter((s) => s.type === "input");
+  assert.equal(eingaben.length, 2, alsText(erg.schritte));
+  assert.equal(eingaben[0].beschreibung, "Titel");
+  assert.equal(eingaben[1].beschreibung, "Artikelnummer");
+  assert.notEqual(
+    eingaben[0].beschreibung,
+    eingaben[1].beschreibung,
+    "zwei Felder mit demselben Namen heben die Identitätswache aus F3 aus"
+  );
+
+  /* Und wo wirklich nur der Elementname übrig bleibt, steht das auch da. Ein
+     stiller Name ist der gefährlichere Fall: Er sieht aus wie eine Aussage. */
+  const klick = Array.from(erg.schritte).find((s) => s.type === "click");
+  const G = u.sandkasten.SMARTR_GEHEIM;
+  assert.ok(G.namenlos(klick.beschreibung), klick.beschreibung);
+  assert.equal(klick.beschreibung, `${G.OHNE_NAMEN}span`);
+  assert.equal(G.namenlos("Artikelnummer"), false);
+});
+
+test("R44: der Einmalcode in der Adresse kommt nicht in den Ablauf", async () => {
+  /* Dieselbe Fehlerart an einer Stelle, die keiner der Funde nennt, und sie
+     ist beim Suchen nach weiteren Aufrufstellen aufgefallen: `navigate`
+     schrieb `location.href` ungeprüft in den Ablauf. Ein Bestätigungslink
+     aus der E-Mail, eine OAuth-Rückleitung und ein Zurücksetzen-Link tragen
+     ihr Geheimnis in der Adresse, und ein Mensch geht beim Aufzeichnen genau
+     darüber. */
+  const u = await starten(verkaufsseite(), {
+    url: "https://www.ebay.de/verify?token=8f3a2b9c&next=/verkaufen#code=849271",
+  });
+  u.fragen({ typ: "rekorder:start" });
+  const erg = u.fragen({ typ: "rekorder:stop" });
+  const text = alsText(erg.schritte);
+
+  assert.ok(!text.includes("8f3a2b9c"), `die Bestätigungsmarke steht im Ablauf: ${text}`);
+  assert.ok(!text.includes("849271"), `der Einmalcode steht im Ablauf: ${text}`);
+  const navigate = Array.from(erg.schritte).find((s) => s.type === "navigate");
+  assert.equal(navigate.url, "https://www.ebay.de/verify?next=/verkaufen");
+  assert.ok(navigate.beschreibung, "ein weggelassener Parameter wird gesagt, nicht verschwiegen");
+
+  /* Gegenprobe: Eine gewöhnliche Adresse bleibt Zeichen für Zeichen stehen.
+     Eine Artikelnummer im Pfad ist der Alltag dieses Produkts, und ein
+     Ablauf, der auf der falschen Seite anfängt, ist kein Ablauf. */
+  const gut = await starten(verkaufsseite(), {
+    url: "https://www.ebay.de/itm/123456789012?_from=R40",
+  });
+  gut.fragen({ typ: "rekorder:start" });
+  const zweiter = gut.fragen({ typ: "rekorder:stop" });
+  assert.equal(zweiter.schritte[0].url, "https://www.ebay.de/itm/123456789012?_from=R40");
+  assert.equal(zweiter.schritte[0].beschreibung, undefined);
+});
+
+test("R45: jede Gestaltregel trägt einen Namen und wird einzeln gehalten", async () => {
+  /* Ein Prüfsatz, der nur das Ergebnis misst, kann nicht unterscheiden, ob
+     die richtige Regel gegriffen hat oder eine andere zufällig auch. Deshalb
+     dieselbe Bauart wie `ZUFALL_REGELN` in `selektor.js`: Jede Regel hat
+     einen Namen, und hier steht, welche wofür zuständig ist. */
+  const u = await starten(verkaufsseite());
+  const G = u.sandkasten.SMARTR_GEHEIM;
+
+  assert.equal(G.geheimGestalt("849271"), "ziffernkette");
+  assert.equal(G.geheimGestalt("Dein Code lautet 849271"), "ziffernkette");
+  assert.equal(G.geheimGestalt("Ihre Kartennummer 4111111111111111"), "kartennummer");
+  assert.equal(G.geheimGestalt("Karte 4111 1111 1111 1111"), "kartennummer");
+  assert.equal(G.geheimGestalt("Schluessel A3F9C2"), "grosscode");
+  assert.equal(G.geheimGestalt("Schluessel a1b2c-3d4e5"), "mischcode");
+  assert.equal(G.geheimGestalt("Angebot vom 14.08.2026 bearbeiten"), null);
+  assert.equal(G.geheimGestalt("Seite 12"), null);
+  assert.equal(G.geheimGestalt(""), null);
+
+  /* Die Ziffergruppen: gleich lange Gruppen ab drei Stellen sind EINE Nummer,
+     alles andere bleibt getrennt. Ohne diese Unterscheidung wäre jedes Datum
+     ein Geheimnis und jede Kartennummer mit Zwischenräumen keines. */
+  /* `Array.from` und nicht die Liste selbst: Sie kommt aus dem Sandkasten der
+     Seite, und `deepEqual` misst auch den Prototyp. */
+  assert.deepEqual(Array.from(G.ziffernketten("4111 1111 1111 1111")), ["4111111111111111"]);
+  assert.deepEqual(Array.from(G.ziffernketten("14.08.2026")), ["14", "08", "2026"]);
+  assert.deepEqual(Array.from(G.ziffernketten("849 271")), ["849271"]);
+
+  /* Und der Wert kennt die reine Ziffernkette ausdrücklich NICHT als Regel:
+     Sie ist der Inhalt jeder Artikelnummer. Darüber entscheidet das Feld. */
+  assert.equal(G.wertGestalt("9988776655"), null);
+  assert.equal(G.wertGestalt("4111 1111 1111 1111"), "kartennummer");
+  assert.equal(G.wertGestalt("a1b2c-3d4e5"), "mischcode");
+  assert.equal(G.wertGestalt("abcd efgh ijkl mnop"), "gruppenkette");
+  assert.equal(G.wertGestalt("Haus Baum Ball Wald"), null, "vier Wörter sind kein Schlüssel");
+});

@@ -21,6 +21,7 @@ import * as ticket from "../net/ticket.js";
 import * as rechte from "../net/rechte.js";
 import * as chat from "../net/chat.js";
 import { CLOUD_URSPRUNG, anfragen } from "../net/dienste.js";
+import { anzeigeform } from "../net/messform.js";
 import { MODI, MODUS_STANDARD } from "../net/befehle.js";
 import * as startseite from "./startseite.js";
 import * as werkbank from "./werkbank.js";
@@ -182,9 +183,17 @@ const zustand = {
    */
   aktuellerTab: null,
   tabs: [],
-  /* Der Tab, dem die laufende Sitzung gehört — für die Statuskarte. Er kann
-     ein anderer sein als der gerade aktive: Die Sitzung überlebt einen
-     Tabwechsel, die Karte muss trotzdem den richtigen Titel zeigen. */
+  /*
+   * Der Tab-Datensatz zu `zustand.tabId` — und NUR das.
+   *
+   * Befund Abnahme 14.08.2026 (VERBINDUNG-1/-2/-7): Dieses Feld war bis dahin
+   * eine zweite Wahrheit darüber, worauf gearbeitet wird. Es wurde schon beim
+   * Klick gesetzt, also bevor feststand, ob eine Sitzung entsteht, überlebte
+   * jeden Fehlschlag und wurde nie weggeräumt, wenn der Tab verschwand. Wem
+   * die Sitzung gehört, sagt genau ein Wert, und das ist `zustand.tabId`.
+   * Hier steht nur noch der gemerkte Datensatz dazu, und jeder Leser prüft
+   * die Kennung, bevor er einen Namen daraus macht (siehe tabZuKennung).
+   */
   verbundenerTab: null,
   /* Der Agent der laufenden Cloud-Sitzung (Vertrag §8.4), oder null. */
   cloudAgent: null,
@@ -620,13 +629,27 @@ function protokollieren(eintrag) {
   li.scrollIntoView({ block: "nearest" });
 }
 
-/* Fremdtext von der besuchten Seite: kürzen, Steuerzeichen raus, nie in einen
-   Satz einbauen und nie sprechen. */
+/*
+ * Fremdtext von der besuchten Seite: kürzen, unsichtbare Zeichen raus, nie in
+ * einen Satz einbauen und nie sprechen.
+ *
+ * Die REGEL steht nicht mehr hier, sondern in der gemeinsamen Messform
+ * (`anzeigeform`, src/gemeinsam/messform.js). Hier bleibt nur die Kürzung, und
+ * die gehört wirklich dem Aufrufer.
+ *
+ * Warum das umgezogen ist (Festlegung F4, selbst gefunden am 14.08.2026):
+ * Diese Zeilen waren eine zweite Abschrift derselben Zusage, und die beiden
+ * Fassungen entschieden bereits verschieden. Ein Nullbreitenzeichen im
+ * Tabtitel wurde HIER zu einem LEERZEICHEN, in `saeubern` (net/befehle.js,
+ * seit dem Umbau auf `anzeigeform`) fällt es ersatzlos weg. Dieselbe
+ * Seitenleiste zeigte denselben Tabtitel damit an zwei Stellen verschieden:
+ * „Waren korb" in der Tabkarte, „Warenkorb" in der Statuskarte der Startseite,
+ * die über startseite.js durch `saeubern` geht. Zwei Namen für einen Tab,
+ * nebeneinander auf demselben Bildschirm, und ein eingefügtes Leerzeichen
+ * erfindet obendrein eine Wortgrenze, die es nie gab.
+ */
 function zitat(roh, grenze = 60) {
-  const s = String(roh || "")
-    .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  const s = anzeigeform(roh);
   return s.length > grenze ? `${s.slice(0, grenze)}…` : s;
 }
 
@@ -899,10 +922,20 @@ async function tabsAuffrischen() {
     const vorher = zustand.aktuellerTab ? zustand.aktuellerTab.id : null;
     zustand.tabs = Array.isArray(alle) ? alle : [];
     if (aktiv) zustand.aktuellerTab = aktiv;
-    if (zustand.sitzung && Number.isInteger(zustand.tabId)) {
-      const gefunden = zustand.tabs.find((t) => t && t.id === zustand.tabId);
-      if (gefunden) zustand.verbundenerTab = gefunden;
-    }
+    /*
+     * Der gemerkte Datensatz zur Sitzungskennung wird nachgezogen — UND
+     * weggeräumt, wenn es den Tab nicht mehr gibt.
+     *
+     * Befund Abnahme 14.08.2026 (VERBINDUNG-7): Hier stand `if (gefunden)`.
+     * Verschwand der Tab, blieb der alte Stand stehen und niemand räumte ihn
+     * weg. Gemessen: Sitzung auf Tab 8, dann onRemoved für Tab 8 — Statuskarte
+     * unverändert grün mit „Verbunden mit eBay, aktive Angebote", also ein
+     * Ziel, das es nicht mehr gab. Wer einen Namen nicht mehr belegen kann,
+     * nennt ihn nicht.
+     */
+    zustand.verbundenerTab = Number.isInteger(zustand.tabId)
+      ? zustand.tabs.find((t) => t && t.id === zustand.tabId) || null
+      : null;
     verbindungswegZeichnen();
     /* Der Modus gilt je Tab. Wechselt der Tab, gilt der Modus des neuen — und
        nicht der, der zufällig noch angezeigt wurde. Nur beim WECHSEL, sonst
@@ -932,6 +965,47 @@ function waehlbareTabs() {
   return zustand.tabs.filter((t) => t && typeof t.url === "string" && !rechte.sperrgrund(t.url));
 }
 
+/* ------------------------------------------------------------------ *
+ * Welchen Tab die Anzeige benennen darf
+ *
+ * Befund Abnahme 14.08.2026 (VERBINDUNG-1 und VERBINDUNG-2), zweimal
+ * gemessen: Statuskarte und Tabkarte lasen
+ * `zustand.verbundenerTab || zustand.aktuellerTab`. Beide Quellen sind falsch.
+ *
+ *  - `aktuellerTab` ist der Tab, den der MENSCH gerade ansieht, nicht der, auf
+ *    dem der Agent arbeitet. Gemessen: Sitzung auf Tab 8 (www.ebay.de), aktiv
+ *    war chrome://extensions — die Leiste behauptete eine Steuerung auf einer
+ *    Seite, die rechte.sperrgrund() ausdrücklich verweigert.
+ *  - `verbundenerTab` wurde beim Klick gesetzt, also vor dem Gelingen, und ein
+ *    gescheiterter Anlauf räumte ihn nirgends weg. Gemessen: Fehlversuch auf
+ *    Tab 8, danach echte Sitzung auf Tab 7 — die Karte nannte weiter eBay,
+ *    während der Agent auf geizhals.de klickte.
+ *
+ * Ab hier gibt es genau eine Quelle: `zustand.tabId`. Sie kommt vom
+ * Hintergrunddienst (`link:zustand?`) oder von dem Klick, der die Sitzung
+ * aufgebaut hat. Findet sich kein Datensatz dazu, gibt es keinen Namen — und
+ * dann steht dort auch keiner. Fail-closed, wie überall in dieser Datei.
+ * ------------------------------------------------------------------ */
+
+function tabZuKennung(id) {
+  if (!Number.isInteger(id)) return null;
+  const gemerkt = zustand.verbundenerTab;
+  if (gemerkt && gemerkt.id === id) return gemerkt;
+  return zustand.tabs.find((t) => t && t.id === id) || null;
+}
+
+/* Der Tab der LAUFENDEN Sitzung. Ohne Sitzung gibt es keinen. */
+function sitzungsTab() {
+  return zustand.sitzung ? tabZuKennung(zustand.tabId) : null;
+}
+
+/* Der Tab, auf den ein laufender Aufbau zielt. Er ist keine Verbindung und
+   wird nirgends als eine benannt — die Karte sagt in dieser Lage, dass gerade
+   verbunden WIRD. */
+function aufbauTab() {
+  return zustand.aufbau !== null ? tabZuKennung(zustand.tabId) : null;
+}
+
 /* Der Verbindungsweg oben: Hinweiszeile, beantragte Stufe, Statuskarte,
    Tab-Liste. */
 function verbindungswegZeichnen() {
@@ -956,7 +1030,10 @@ function verbindenHinweisSetzen() {
 }
 
 function tabkarteZeichnen() {
-  const t = zustand.verbundenerTab || (zustand.sitzung ? zustand.aktuellerTab : null);
+  /* Ausschliesslich der Tab der Sitzung. Der aktive Tab stand hier bis zum
+     14.08.2026 als Rückfall und war der Kern von VERBINDUNG-1: Die Karte nannte
+     dann irgendeinen Tab, nur nicht den, auf dem gearbeitet wird. */
+  const t = sitzungsTab();
   if (!t) {
     /* Kein Tab in der Hand, aber eine Sitzung: Dann steht wenigstens die
        Adresse da, für die der Mensch freigegeben hat. Eine leere Karte neben
@@ -972,9 +1049,29 @@ function tabkarteZeichnen() {
   $("tabkarte-adresse").textContent = hostWort(t.url);
   const bild = $("tabkarte-bild");
   const glyph = $("tabkarte-glyph");
-  /* Ein Favicon ist ein Bild von einer fremden Seite. Es wird angezeigt, nie
-     ausgewertet; fehlt es, steht das Ersatzzeichen da statt einer Lücke. */
-  const symbol = typeof t.favIconUrl === "string" && /^https?:\/\//.test(t.favIconUrl) ? t.favIconUrl : "";
+  /*
+   * Ein Favicon ist ein Bild von einer FREMDEN Adresse. Es wird angezeigt, nie
+   * ausgewertet; fehlt es oder ist es nicht erlaubt, steht das Ersatzzeichen
+   * da statt einer Lücke.
+   *
+   * WELCHE Adresse erlaubt ist, entscheidet startseite.js und sonst niemand
+   * (Festlegung F4, selbst gefunden am 14.08.2026). Hier stand bis dahin eine
+   * zweite, schwächere Fassung derselben Regel: jede `https:`-Adresse war gut
+   * genug. `favIconUrl` kommt aber aus dem Kopf einer fremden Seite, und eine
+   * Seite darf dort jede Adresse hineinschreiben — beim Öffnen der Karte
+   * meldete sich damit ein fremder Server und erfuhr, dass die Seitenleiste
+   * gerade offen ist. startseite.js nennt genau das eine Wanze und lässt
+   * ausschließlich `data:image/…` und denselben Wirt wie der Tab durch. Zwei
+   * Fassungen einer Sicherheitszusage sind seit F4 verboten, und hier war
+   * schon bewiesen, dass sie verschieden entscheiden.
+   *
+   * Fehlt die Regel, wird kein Bild geladen. Das ist die strengere Antwort und
+   * die gewollte: lieber das Ersatzzeichen als eine Anfrage, für die niemand
+   * mehr geradesteht.
+   */
+  const quelle =
+    typeof startseite.faviconQuelle === "function" ? startseite.faviconQuelle(t) : { art: "zeichen" };
+  const symbol = quelle && quelle.art === "bild" ? quelle.quelle : "";
   if (symbol) {
     bild.setAttribute("src", symbol);
     bild.hidden = false;
@@ -1029,25 +1126,80 @@ function ankerBauen(name, zeichner, wurzel, dienste) {
  * ohne Abwarten davor, damit die Nutzergeste bis zur Chrome-Abfrage haelt
  * (siehe tabVerbindenMit).
  */
+/*
+ * Was die Statuskarte der Startseite anzeigen darf — an EINER Stelle gebaut.
+ *
+ * Befund Abnahme 14.08.2026 (VERBINDUNG-3 und VERBINDUNG-4): Der Stand wurde
+ * an genau einer Stelle zusammengesetzt, aber von drei Zustandswechseln nicht
+ * nachgezogen (Aufbau, Vorführung, Abbruch). Die Karte stand danach mit dem
+ * Stand von vorhin da, und zwar sichtbar. Deshalb steht der Stand jetzt hier
+ * als eigene Funktion: Wer eine Anzeigefläche nachzieht, zieht denselben Stand
+ * nach und baut ihn nicht ein zweites Mal zusammen.
+ */
+function startseitenStand() {
+  const s = zustand.sitzung;
+  return {
+    verbunden: !!s,
+    /* Eine Vorführung ist eine Sitzung der Oberfläche und keine Steuerung. Sie
+       „Verbunden mit …" zu nennen wäre die gefährlichste Falschaussage, die
+       diese Leiste machen kann (Vertrag: sie heißt überall Vorführung). */
+    vorfuehrung: !!(s && s.vorfuehrung),
+    aufbau: zustand.aufbau !== null,
+    tab: sitzungsTab() || aufbauTab(),
+    agent: zustand.cloudAgent || "",
+  };
+}
+
 function startseiteZeichnen() {
   const liste = waehlbareTabs();
-  const griff = ankerBauen("startseite", startseite.aufbauen, $("startseite"), {
+  /*
+   * Der Anker ist `#startseite-liste` und nicht der Abschnitt `#startseite`.
+   *
+   * Befund Abnahme 14.08.2026 (VERBINDUNG-5): startseite.js räumt seinen Anker
+   * mit `replaceChildren()` leer. Auf dem Abschnitt traf das zwei Knoten, die
+   * ihm nicht gehören — `#startseite-titel`, auf das sein `aria-labelledby`
+   * zeigt, und `#startseite-liste`, den Anker der Ersatzfassung hier drunter.
+   * Gemessen: Nach dem Aufbau trug `#startseite` keinen Knoten mit Kennung
+   * mehr. Der Bereich verlor seinen Namen für den Bildschirmleser, und die
+   * Ersatzfassung wäre auf `null.replaceChildren()` gelaufen — eine Ausnahme
+   * mitten in verbindungswegZeichnen(), das auch in beenden() vor
+   * `link:trennen` steht.
+   */
+  const wurzel = $("startseite-liste");
+  const griff = ankerBauen("startseite", startseite.aufbauen, wurzel, {
     tabsHolen: () => waehlbareTabs(),
     verbinden: (tab) => tabVerbindenMit(tab),
     trennen: () => beenden("nutzer"),
   });
+  /* Die Überschrift aus panel.html BLEIBT stehen, sie ist der Name des
+     Bereichs. Sichtbar ist sie nur in der Ersatzfassung: Das Modul bringt
+     seine eigene Überschrift mit, und zwei Überschriften übereinander liest
+     der Vorleser auch zweimal. `aria-labelledby` greift auch auf einen Knoten,
+     der nur für das Auge weggeblendet ist. */
+  const titel = $("startseite-titel");
+  if (titel) titel.className = griff ? "startseite-titel sr" : "startseite-titel";
   if (griff) {
-    if (typeof griff.tabsZeigen === "function") griff.tabsZeigen(liste);
-    if (typeof griff.standSetzen === "function") {
-      griff.standSetzen({
-        verbunden: !!zustand.sitzung,
-        tab: zustand.verbundenerTab || zustand.aktuellerTab,
-        agent: zustand.cloudAgent || "",
-      });
+    /*
+     * Was eine fremde Ansicht wirft, darf den Stopp nicht aufhalten.
+     *
+     * Dieselbe Ueberlegung wie beim fehlenden Anker eine Zeile weiter unten
+     * (VERBINDUNG-5): Diese Funktion laeuft in verbindungswegZeichnen(), und
+     * das steht in beenden() VOR `link:trennen`. Eine Ausnahme aus
+     * src/panel/startseite.js — einer Datei, die einem anderen Bereich gehoert
+     * — koennte dem Menschen sonst die Notbremse nehmen. Aufgefangen wird
+     * deshalb nur der Wurf, nicht der Zustand: Es wird nichts Falsches
+     * angezeigt, es bleibt hoechstens der letzte Stand stehen, und den zieht
+     * der naechste Zeichenlauf nach.
+     */
+    try {
+      if (typeof griff.tabsZeigen === "function") griff.tabsZeigen(liste);
+      if (typeof griff.standSetzen === "function") griff.standSetzen(startseitenStand());
+    } catch (_) {
+      return "modul_gestoert";
     }
     return "modul";
   }
-  tabListeSelbstZeichnen($("startseite-liste"), {
+  tabListeSelbstZeichnen(wurzel, {
     tabs: liste,
     aktuellerTabId: zustand.aktuellerTab ? zustand.aktuellerTab.id : null,
     aufWaehlen: (tab) => tabVerbindenMit(tab),
@@ -1056,6 +1208,11 @@ function startseiteZeichnen() {
 }
 
 function tabListeSelbstZeichnen(wurzel, angaben) {
+  /* Ohne Anker wird nicht gezeichnet, und vor allem wird nicht geworfen: Diese
+     Funktion läuft in verbindungswegZeichnen(), und das steht in beenden() vor
+     `link:trennen`. Eine Ausnahme hier nähme dem Menschen den Stopp (Befund
+     VERBINDUNG-5, zweite Hälfte). */
+  if (!wurzel || typeof wurzel.replaceChildren !== "function") return;
   wurzel.replaceChildren();
   if (!angaben.tabs.length) {
     const p = document.createElement("p");
@@ -1407,11 +1564,23 @@ function verbindenKnoepfeSpiegeln() {
 /*
  * Was der Mensch zwischen Klick und Sitzung SIEHT (H3).
  *
- * Drei sichtbare Stellen, nicht eine: der Chip oben, die Zeile neben dem Knopf
- * und der Knopf selbst. Abgeschaltet wird er, weil er in diesem Augenblick
+ * VIER sichtbare Stellen, nicht drei und erst recht nicht eine: der Chip oben,
+ * die Zeile neben dem Knopf, der Knopf selbst und die Statuskarte der
+ * Startseite. Abgeschaltet wird der Knopf, weil er in diesem Augenblick
  * wirklich nichts mehr auslöst — das ist keine Ausgrauung eines Angebots,
  * sondern die Anzeige einer laufenden Arbeit, dieselbe Entscheidung wie beim
  * Beispielauftrag (demoAuftrag).
+ *
+ * Befund Abnahme 14.08.2026 (VERBINDUNG-4), gemessen mit hängendem
+ * `link:verbinden`, also dem MV3-Kaltstartfall: Chip und Hinweiszeile sagten
+ * „Ich stelle die Verbindung her …", der Knopf war abgeschaltet — und im
+ * selben Augenblick stand auf der Startseite ein grauer Punkt mit „Wähle einen
+ * Tab, dann geht es los." und einer Liste mit zwei bedienbaren
+ * Verbinden-Knöpfen. Zwei Statusflächen sagten das Gegenteil voneinander, und
+ * die stehengebliebene lud zum zweiten Klick ein. Der Riegel fängt ihn
+ * (gemessen: 1 Anlauf, 0 Rechterückgaben), die Anzeige tat es nicht. Die
+ * Reparatur zu H3 war an drei von vier Stellen angekommen und ausgerechnet an
+ * der vierten nicht — an der, um die es im Kriterium geht.
  */
 function aufbauSpiegeln() {
   const laeuft = zustand.aufbau !== null;
@@ -1422,6 +1591,8 @@ function aufbauSpiegeln() {
   } else {
     verbindenHinweisSetzen();
   }
+  tabkarteZeichnen();
+  startseiteZeichnen();
   zustandChipSetzen();
 }
 
@@ -1570,8 +1741,29 @@ async function aufbauAbbrechen(text, ziel = zustand.sitzung ? "aktiv" : "bereit"
   if (!zustand.sitzung) {
     await anTab({ typ: "overlay:aus" });
     await seitenrechteZurueckgeben();
+    /*
+     * Und der gemerkte Tab-Datensatz geht mit.
+     *
+     * Befund Abnahme 14.08.2026 (VERBINDUNG-2): `tabVerbindenMit` setzte
+     * `zustand.verbundenerTab`, bevor feststand, ob die Verbindung überhaupt
+     * zustande kommt, und dieser Weg hier räumte ihn nicht weg. Er überlebte
+     * damit den Fehlschlag und benannte danach die nächste, ganz andere
+     * Sitzung. Gemessen: Fehlversuch auf Tab 8, danach echte Sitzung auf Tab 7
+     * — Tabkarte und Statuskarte nannten weiter eBay, während `overlay:an`
+     * wirklich an Tab 7 ging. Ein Wert, den ein gescheiterter Anlauf
+     * hinterlässt, ist kein Anzeigewert mehr, sondern eine Falschaussage.
+     *
+     * `zustand.tabId` bleibt stehen, und das ist Absicht: Sie ist das Ziel des
+     * Versuchs, nicht seine Behauptung, und die Vorführung unten hängt daran.
+     * Behaupten kann sie nichts mehr — jeder Leser prüft die Kennung
+     * (tabZuKennung) und jede Anzeige fragt vorher nach Sitzung oder Aufbau.
+     */
+    zustand.verbundenerTab = null;
   }
   setzeZustand(ziel);
+  /* Alle vier Anzeigeflächen ziehen mit, nicht nur der Chip aus setzeZustand:
+     Ein Abbruch ist ein Zustandswechsel wie jeder andere (VERBINDUNG-4). */
+  verbindungswegZeichnen();
   if (text) {
     stoerung(text);
     $("vorfuehrung").hidden = false;
@@ -2069,6 +2261,21 @@ async function vorfuehrungStarten() {
   $("stufe-anzeige").textContent = t("kopf_stufe_vorfuehrung", "Vorführung");
   $("sitzungscode").hidden = true;
   $("protokoll").replaceChildren();
+  /*
+   * Erst die Karten füllen, dann zeigen — genau wie in sitzungAnzeigen().
+   *
+   * Befund Abnahme 14.08.2026 (VERBINDUNG-3): Hier fehlte dieser Aufruf. Die
+   * Vorführung setzte `zustand.sitzung` und schaltete auf `aktiv`, und seit
+   * der M7-Reparatur (die Startseite bleibt bei laufender Sitzung stehen) war
+   * die veraltete Statuskarte dabei SICHTBAR. Gemessen: Chip „Vorführung · Nur
+   * zusehen" und Sitzungsleiste — und daneben ein grauer Punkt mit „Wähle
+   * einen Tab, dann geht es los.", die Tabliste mit zwei bedienbaren
+   * Verbinden-Knöpfen, und eine Tabkarte mit grünem Punkt und LEEREM Titel,
+   * also genau die „leere Karte neben einem grünen Punkt", die der Kommentar
+   * in tabkarteZeichnen ausschließt. Ein Loch, das die Reparatur selbst
+   * gerissen hat.
+   */
+  verbindungswegZeichnen();
   setzeZustand("aktiv");
 
   sagen(
@@ -2477,8 +2684,25 @@ chrome.runtime.onMessage.addListener((n, _absender, antworten) => {
     return false;
   }
 
+  /*
+   * Auch die FRAGE geht durch dieselbe Entschaerfung wie die Beschriftung
+   * daneben, obwohl sie aus unseren eigenen Worten gebaut sein soll.
+   *
+   * Selbst gefunden am 14.08.2026, dieselbe Fehlerart wie die Karten weiter
+   * oben: Hier stand `String(n.frage || …)`, also der Rohwert einer Nachricht,
+   * die ueber `chrome.runtime.sendMessage` hereinkommt. Dass darin nie Text von
+   * der besuchten Seite steht, ist eine Zusage des Absenders und keine
+   * Eigenschaft dieser Anzeige — und diese Anzeige ist die einzige, die
+   * VORGELESEN wird und an der eine Entscheidung haengt. Ein Steuerzeichen
+   * darin haette der Vorleser mitgelesen, eine Schreibrichtungsmarke haette den
+   * Satz auf dem Bildschirm umgedreht.
+   *
+   * Bleibt nach der Entschaerfung nichts uebrig, gilt die eigene Standardfrage:
+   * eine Frage, die etwas sagt, ist besser als eine leere Karte, an der eine
+   * Freigabe haengt.
+   */
   freigabeHolen(
-    String(n.frage || t("freigabe_standardfrage", "Der Agent möchte einen Schritt ausführen.")),
+    zitat(n.frage, 300) || t("freigabe_standardfrage", "Der Agent möchte einen Schritt ausführen."),
     zitat(n.quelle),
     antwortfristMs(n)
   )
@@ -2659,11 +2883,23 @@ async function demoAuftrag() {
 
 const modusText = (m) => MODUS_TEXT[m] || MODUS_TEXT[MODUS_STANDARD];
 
-/* Für welchen Tab der Modus gilt. Läuft eine Sitzung, ist es ihrer; sonst der
-   Tab, mit dem der eine Klick verbinden würde. Ein Modus ohne Tab wäre eine
-   globale Einstellung, und genau die schließt Vertrag §2 aus. */
+/*
+ * Für welchen Tab der Modus gilt. Läuft eine Sitzung oder gerade ein Aufbau,
+ * ist es ihrer; sonst der Tab, mit dem der eine Klick verbinden würde. Ein
+ * Modus ohne Tab wäre eine globale Einstellung, und genau die schließt Vertrag
+ * §2 aus.
+ *
+ * Die beiden Bedingungen sind am 14.08.2026 dazugekommen, und sie gehören
+ * derselben Fehlerart an wie VERBINDUNG-1/-2: Hier stand nur
+ * `if (Number.isInteger(zustand.tabId))`. `zustand.tabId` überlebt einen
+ * gescheiterten Anlauf und einen geschlossenen Dialog — wer danach den Modus
+ * umstellte, stellte ihn für den Tab von vorhin um, und die Auskunft daneben
+ * sprach über einen Tab, den der Mensch gar nicht ansieht. Der Kommentar
+ * beschrieb die richtige Regel, der Code hielt sie nicht ein.
+ */
 function modusTabId() {
-  if (Number.isInteger(zustand.tabId)) return zustand.tabId;
+  const eigen = zustand.sitzung || zustand.aufbau !== null;
+  if (eigen && Number.isInteger(zustand.tabId)) return zustand.tabId;
   const t = zustand.aktuellerTab;
   return t && Number.isInteger(t.id) ? t.id : null;
 }
@@ -2744,14 +2980,43 @@ async function modusHolen() {
  */
 function cloudSitzungZeigen(an, agent) {
   const zeile = $("cloud-zeile");
+  const wort = $("cloud-wort");
+  const feld = $("cloud-agent");
   if (!an) {
     zustand.cloudAgent = null;
-    $("cloud-agent").textContent = "";
+    feld.textContent = "";
+    feld.hidden = true;
     zeile.hidden = true;
   } else {
     const name = zitat(agent, 40);
     zustand.cloudAgent = name || null;
-    $("cloud-agent").textContent = name;
+    feld.textContent = name;
+    /*
+     * Ohne Namen kein Doppelpunkt und kein leeres Feld dahinter.
+     *
+     * Befund Abnahme 14.08.2026 (BRUECKE-6), gemessen: `link:cloud-sitzung`
+     * mit `an:true, agent:""` — und sichtbar blieb „Cloud-Sitzung aktiv:" und
+     * danach nichts. Ein Bildschirmleser liest den Doppelpunkt und dann
+     * Stille. Und das ist nicht der Ausnahmefall, sondern der Normalfall: Im
+     * einzigen arbeitsfähigen Betriebsfall ist der Name leer (BRUECKE-7), weil
+     * jeder Rahmen MIT Agentennamen heute an `agent_not_permitted` stirbt.
+     *
+     * Die Zeile bleibt trotzdem stehen. Sie sagt, DASS eine Fernsitzung läuft
+     * — das ist die Auskunft aus §8.4, und der Dienst hat sie belegt, indem er
+     * diese Nachricht geschickt hat. WER sie führt, sagt sie nur, wenn es
+     * jemand gesagt hat. Erfunden wird hier nichts.
+     *
+     * Der Doppelpunkt wird abgeschnitten und bekommt KEINEN zweiten
+     * Katalogschlüssel: Er gehört zum Namen dahinter, nicht zur Aussage. Zwei
+     * Schlüssel für einen Satz laufen beim nächsten Redigieren auseinander,
+     * und ein Schlüssel, den die Kataloge nicht kennen, ist im Englischen eine
+     * leere Stelle (chrome.i18n gibt dort "" zurück). Fehlt der Doppelpunkt in
+     * einer Sprache, ändert das Abschneiden nichts.
+     */
+    const mitNamen = !!name;
+    const satz = t("kopf_cloud_sitzung", "Cloud-Sitzung aktiv:");
+    wort.textContent = mitNamen ? satz : satz.replace(/\s*[:：]\s*$/, "");
+    feld.hidden = !mitNamen;
     zeile.hidden = false;
   }
   /* „Am Werk: …" auf der Startseite ist dieselbe Auskunft an einer zweiten
@@ -3516,13 +3781,43 @@ async function zustandNachfragen() {
   const u = tab ? ursprungAus(tab.url || "") : null;
   if (Number.isInteger(laufend.tabId)) zustand.tabId = laufend.tabId;
   else if (tab) zustand.tabId = tab.id;
-  /* Damit die Statuskarte beim Wiederöffnen nicht leer dasteht: Ist der
-     laufende Tab genau der aktive, steht sein Titel schon fest. Sonst holt ihn
-     tabsAuffrischen() gleich nach. */
-  if (tab && tab.id === zustand.tabId) zustand.verbundenerTab = tab;
-  if (laufend.ursprungMuster) zustand.ursprungMuster = laufend.ursprungMuster;
-  else if (u) zustand.ursprungMuster = u.muster;
-  if (u && (!Number.isInteger(laufend.tabId) || laufend.tabId === (tab && tab.id))) {
+  /*
+   * Der Tab-Datensatz zur Sitzungskennung, und nur der.
+   *
+   * Befund Abnahme 14.08.2026 (VERBINDUNG-1): Hier stand derselbe Satz mit dem
+   * Zusatz „Sonst holt ihn tabsAuffrischen() gleich nach". Das stimmte nicht —
+   * nach zustandNachfragen() ruft niemand tabsAuffrischen(), und die Anzeige
+   * fiel deshalb auf den AKTIVEN Tab zurück, also auf einen ganz anderen.
+   * Gemessen: laufende Sitzung auf Tab 8 (www.ebay.de), aktiv war
+   * chrome://extensions, und die Startseitenkarte sagte „Verbunden mit
+   * Erweiterungen". Der Rückfall ist ersatzlos weg (tabkarteZeichnen,
+   * startseitenStand); findet sich hier kein Datensatz, bleibt die Karte
+   * namenlos und behauptet nichts, bis das nächste Tabereignis ihn nachträgt.
+   */
+  zustand.verbundenerTab = tab && tab.id === zustand.tabId ? tab : null;
+  if (laufend.ursprungMuster) {
+    zustand.ursprungMuster = laufend.ursprungMuster;
+    /*
+     * Und der Ursprung kommt aus DERSELBEN Quelle wie das Muster.
+     *
+     * Hier stand nur die Zeile darunter, und die setzt den Ursprung
+     * ausschließlich aus dem gerade AKTIVEN Tab — also gar nicht, sobald die
+     * Sitzung an einem anderen hängt. Genau dann stand die Tabkarte ohne
+     * jede Angabe da, obwohl der Dienst den Bereich, für den der Mensch
+     * freigegeben hat, gerade mitgeschickt hatte. Ein vorhandener Beleg, der
+     * nicht gelesen wird, ist dieselbe Fehlerart wie ein Anzeigewert aus der
+     * falschen Quelle, nur andersherum.
+     */
+    const ausDienst = ursprungAus(String(laufend.ursprungMuster).replace(/\*$/, ""));
+    if (ausDienst) zustand.ursprung = ausDienst.ursprung;
+  } else if (u) {
+    zustand.ursprungMuster = u.muster;
+  }
+  if (
+    !zustand.ursprung &&
+    u &&
+    (!Number.isInteger(laufend.tabId) || laufend.tabId === (tab && tab.id))
+  ) {
     zustand.ursprung = u.ursprung;
   }
   zustand.ausweis = await konto.ausweisBesorgen();
@@ -3545,8 +3840,27 @@ async function zustandNachfragen() {
    * Eine Dauerzeile ohne Agentennamen behauptete eine Fernsitzung, von der
    * niemand weiß, wem sie gehört.
    */
+  /*
+   * Zwei Angaben, zwei Fragen: `cloud` sagt, DASS eine Fernsitzung läuft,
+   * `agent`, WER sie führt. Beide kommen vom Hintergrunddienst, keine wird
+   * hier erfunden.
+   *
+   * Befund Abnahme 14.08.2026 (BRUECKE-1): Die Zeile hing allein am
+   * Agentennamen — und genau den gibt es in der einzigen Lage nicht, in der
+   * eine Cloud-Sitzung überhaupt arbeitet: Ein Rahmen MIT Agentennamen stirbt
+   * heute an `agent_not_permitted` (leere Matrix, Vertrag §4 „alles aus"),
+   * eine arbeitende Sitzung kommt also ohne Namen. Nach dem Wiederöffnen war
+   * die Dauerzeile aus §8.4 damit weg, und der Mensch konnte eine
+   * ferngesteuerte Sitzung nicht mehr von seiner eigenen unterscheiden.
+   *
+   * Die Seitenleiste kann das hier nicht heilen: `link:zustand?` bringt heute
+   * weder `cloud` noch `agent` mit (worker.js wirft den Namen an seiner
+   * Positivliste weg). Sie bleibt deshalb fail-closed — ohne Auskunft keine
+   * Zeile und keine Behauptung — und ist auf die Auskunft vorbereitet, sobald
+   * der Dienst sie mitgibt. Das Gegenstück dazu steht als Fremdbedarf.
+   */
   const agent = typeof laufend.agent === "string" ? laufend.agent.trim() : "";
-  cloudSitzungZeigen(!!agent, agent);
+  cloudSitzungZeigen(laufend.cloud === true || !!agent, agent);
 
   /*
    * Und die Sitzung bekommt ihre Hände zurück.

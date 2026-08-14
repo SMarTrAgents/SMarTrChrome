@@ -48,6 +48,17 @@ import { ausweisAusAblage } from "./konto.js";
 import { rechtZurueckgeben } from "./rechte.js";
 import { tabAdresse } from "./seite.js";
 import { saeubern } from "./befehle.js";
+/*
+ * Die Positivliste der Agenten (§8.1) — Befund BRUECKE-4 vom 14.08.2026.
+ *
+ * Sie ist die EINE Quelle für den Namen, den ein Mensch zu sehen bekommt. Bis
+ * zu dieser Runde filterte `agentAnzeige` nur Zeichen, während `worker.js:732`
+ * dieselbe Angabe gegen diese Liste hielt: Symboltitel und Systemmeldung
+ * behaupteten „smartrbrowser steuert diesen Browser", ein Name, der nicht auf
+ * der Liste steht, während `link:zustand?` daneben `agent=undefined` lieferte.
+ * Zwei der drei Zeichen aus §8.4 behaupteten etwas, das das dritte verwarf.
+ */
+import { AGENTEN } from "./matrix.js";
 import * as protokollbuch from "./protokollbuch.js";
 /*
  * Der Sprachkatalog (Vertrag v3.5 §12).
@@ -100,6 +111,62 @@ let sitzung = null;
    schon wieder vergessen. */
 let letzterGrund = null;
 
+/* ------------------------------------------------------------------ *
+ * Die Kappmarke — der Wiedereintritt nach `await`
+ *
+ * DER GRUNDSATZ, um den es in dieser ganzen Datei geht:
+ *
+ *   **Nach einem Not-Aus darf kein Weg mehr etwas WIEDERHERSTELLEN, auch
+ *   nicht ein Weg, der VOR dem Not-Aus begonnen hat.**
+ *
+ * Befund NOTAUS-2 vom 14.08.2026, gemessen: Fällt der Not-Aus in das `await`
+ * auf `sitzungSchreiben` im `auth_ok`-Zweig, läuft der Handschlag danach zu
+ * Ende und macht das Kappen rückgängig — `link_sitzung` steht wieder in der
+ * Ablage, `zaehlerNeu()` setzt `aktiv` bedingungslos auf true, der Herzschlag
+ * läuft, der Wecker steht wieder, und die Seitenleiste bekommt
+ * `verbunden=true`, nachdem der Mensch gestoppt hat. Eine volle Sekunde nach
+ * dem Not-Aus lief ein `readPage` durch und las die Seite.
+ *
+ * Das Gegenmittel ist eine Generationszählung und ausdrücklich KEIN
+ * `AbortSignal`, obwohl der Ausführer eines benutzt. Der Unterschied ist der
+ * Zweck: Ein Signal bricht ein WARTEN ab, das man selbst hält. Hier geht es um
+ * etwas anderes — die `await`s in dieser Datei sind Schreibvorgänge in
+ * `chrome.storage.session` und Aufrufe von `chrome.alarms`, die niemand
+ * abbrechen kann und die auch gar nicht abgebrochen werden sollen. Gemessen
+ * werden muss, ob die Welt beim Wiedereintritt noch dieselbe ist. Genau das
+ * kann eine Zahl, die bei jedem Kappen weiterzählt, und ein Signal kann es
+ * nicht: Ein Signal, das beim Wiedereintritt schon durch ein neues ersetzt
+ * wurde, sagt „alles in Ordnung", obwohl dazwischen gekappt wurde.
+ *
+ * Jeder Weg, der nach einem `await` einen Zustand SCHREIBT, einen Wecker
+ * stellt, ein Intervall startet oder ein Zeichen setzt, merkt sich die Marke
+ * beim Eintritt und prüft sie danach. Passt sie nicht mehr, wird nichts
+ * aufgebaut — und was schon aufgebaut wurde, wird zurückgenommen.
+ *
+ * Die Marke liegt im Modul und nicht in der Ablage: Stirbt der Dienstprozess,
+ * stirbt jeder Weg mit ihm, der sie prüfen könnte.
+ * ------------------------------------------------------------------ */
+
+let kappmarke = 0;
+
+/** Die Marke, die ein Weg sich beim Eintritt merkt. */
+export function kappmarkeJetzt() {
+  return kappmarke;
+}
+
+/** Gilt die gemerkte Marke noch, oder wurde zwischendurch gekappt? */
+export function markeGilt(marke) {
+  return marke === kappmarke;
+}
+
+/*
+ * Weiterzählen. Synchron und ohne jedes `await`: Zwischen dem Ereignis und dem
+ * Zustand „nichts wird mehr wiederhergestellt" liegt keine Netzrunde (§5).
+ */
+function markeWeiter() {
+  kappmarke += 1;
+}
+
 /*
  * Kappen, was gerade läuft — die erste Handlung jeder Notbremse.
  *
@@ -109,6 +176,12 @@ let letzterGrund = null;
  * von beiden im Modul steht, entscheidet die Datei nebenan, nicht diese hier.
  */
 function laufKappen() {
+  /* Zuerst die Marke, dann der Ausführer: Wer zwischen diesen beiden Zeilen
+     aus einem `await` zurückkommt, soll die neue Lage vorfinden und nicht die
+     alte. Diese eine Zeile liegt auf allen sechs Wegen, auf denen eine Sitzung
+     endet — `trennen()` ruft sie selbst, `aufraeumen()` ruft sie für die
+     übrigen fünf. */
+  markeWeiter();
   try {
     const kappen =
       typeof ausfuehrer.laufAbbrechen === "function"
@@ -139,13 +212,26 @@ function melden(nachricht) {
 
 function abzeichenSetzen(an) {
   try {
-    /* Drei Zustände statt zwei: nichts, LIVE (Sitzung mit Zuschauer) und das
-       Auge (Sitzung ohne offene Seitenleiste). Das Auge ist das Zeichen für
-       Arbeit im Hintergrund; es steht auch dann, wenn der Mensch in einem
-       ganz anderen Fenster ist. */
-    const text = an ? (unbeaufsichtigt ? "👁" : "LIVE") : "";
+    /* Vier Zustände statt zwei: nichts, LIVE (Sitzung mit Zuschauer), das Auge
+       (Sitzung ohne offene Seitenleiste) und das Fragezeichen (eine Freigabe
+       wartet auf einen Menschen, den sonst nichts erreicht). Das Auge ist das
+       Zeichen für Arbeit im Hintergrund; es steht auch dann, wenn der Mensch
+       in einem ganz anderen Fenster ist.
+
+       Das Fragezeichen ist Befund BRUECKE-3 vom 14.08.2026: `panel.js:3671`
+       sagt zu, der Dienst mache „mit dem Fragezeichen am Symbol auf sich
+       aufmerksam" — ein GREP über `setBadgeText` fand im ganzen Baum nur
+       „LIVE", das Auge und die leere Zeichenkette. Eine Zusage in der
+       Oberfläche, die im Quelltext nirgends steht, ist eine Behauptung. Es
+       steht VOR dem Auge, weil eine wartende Frage dringender ist als die
+       Feststellung, dass niemand zusieht. */
+    const text = an ? (freigabeOffen ? ABZEICHEN_FRAGE : unbeaufsichtigt ? "👁" : "LIVE") : "";
     chrome.action.setBadgeText({ text });
-    if (an) chrome.action.setBadgeBackgroundColor({ color: unbeaufsichtigt ? "#00d4ff" : "#2aff2a" });
+    if (an) {
+      chrome.action.setBadgeBackgroundColor({
+        color: freigabeOffen ? "#ffb020" : unbeaufsichtigt ? "#00d4ff" : "#2aff2a",
+      });
+    }
   } catch (_) {
     /* Ältere Chrome-Fassung ohne action-API im Worker: Der Rahmen im Tab
        bleibt das Hauptsignal, kein Grund zum Abbruch. */
@@ -183,17 +269,46 @@ let gezeigterStand = null;
 let gemeldeterCode = null;
 
 /**
- * Der Agentenname, wie ein Mensch ihn zu sehen bekommt.
+ * Der BEHAUPTETE Agentenname — entschärft, aber nicht belegt.
  *
- * Er stammt vom Relay (§8.1) und damit nicht aus dieser Erweiterung. In die
- * Oberfläche geht deshalb nur, was auch der Relay durchlässt: Buchstaben,
- * Ziffern, Unterstrich und Strich. Was der AUSFÜHRER bekommt, wird davon nicht
- * berührt — dort geht der Rahmen unverändert hin, geprüft wird er dort.
+ * Er stammt vom Relay (§8.1) und damit nicht aus dieser Erweiterung. Hier
+ * werden nur die Zeichen beschnitten, auf die auch der Relay säubert. Dieser
+ * Wert gehört ausschliesslich ins Protokollbuch: Dass ein fremder Name
+ * angeklopft hat, ist genau die Zeile, die man später sucht
+ * (`protokollbuch.js` trifft dieselbe Entscheidung in `agentAus`).
+ *
+ * In die OBERFLÄCHE geht er nie. Dafür gibt es `agentAnzeige`.
  */
-export function agentAnzeige(roh) {
+export function agentBehauptet(roh) {
   return saeubern(roh, 32)
     .replace(/[^A-Za-z0-9_-]/g, "")
     .slice(0, 32);
+}
+
+/**
+ * Der BELEGTE Agentenname, wie ein Mensch ihn zu sehen bekommt.
+ *
+ * Befund BRUECKE-4 vom 14.08.2026, gemessen: `auth_ok` mit dem Agenten
+ * „smartrbrowser" (steht NICHT in `AGENTEN`) ergab den Symboltitel
+ * „SMarTrChrome, Cloud-Sitzung aktiv, smartrbrowser steuert diesen Browser",
+ * die Systemmeldung „smartrbrowser steuert jetzt diesen Browser." und die
+ * Dauerzeile mit demselben Namen — während `link:zustand?` daneben
+ * `agent=undefined` lieferte. Drei Zeichen aus §8.4, zwei behaupteten, das
+ * dritte verwarf.
+ *
+ * Ab jetzt gilt hier dieselbe EINE Quelle wie in `worker.js:732`: die
+ * Positivliste. Was nicht darauf steht, ist kein Agent, und dann steht auch
+ * kein Name da — die Zeile sagt „Ein Agent", nicht irgendeinen Namen. Das ist
+ * die fail-closed-Richtung: Ein Relay oder Gateway, das den Namen aus einer
+ * Selbstauskunft füllt, schreibt dem Menschen sonst einen beliebigen Namen auf
+ * den Bildschirm, und diese Erweiterung kann diese Behauptung nicht belegen.
+ *
+ * Was der AUSFÜHRER bekommt, wird davon nicht berührt — dort geht der Rahmen
+ * unverändert hin, geprüft wird er dort (§8.1, `ausfuehrer.js:2892`).
+ */
+export function agentAnzeige(roh) {
+  const name = agentBehauptet(roh);
+  return AGENTEN.includes(name) ? name : "";
 }
 
 /*
@@ -239,13 +354,41 @@ function titelSetzen(agent, an) {
  * einzige Satz, der einen Menschen auch dann erreicht, wenn er in einem
  * anderen Fenster arbeitet — und genau der war fest deutsch.
  */
+/*
+ * Der Pfad zum Symbol einer Systemmeldung — Befund BRUECKE-8 vom 14.08.2026.
+ *
+ * Hier stand `iconUrl: "icons/icon-128.png"`, also ein RELATIVER Pfad. Der
+ * Dienstarbeiter läuft aber als `chrome-extension://ID/src/background/worker.js`
+ * und damit zwei Ordner tief. Löst Chrome den Pfad gegen die Worker-Adresse
+ * auf, zeigt er auf `src/background/icons/icon-128.png`, das es nicht gibt, und
+ * `chrome.notifications.create` schlägt mit „Unable to download all specified
+ * images" fehl — still, denn der Fehlschlag wird hier verschluckt. Damit fiele
+ * genau das eine der drei Zeichen aus §8.4 aus, das den Menschen im anderen
+ * Fenster erreicht.
+ *
+ * `chrome.runtime.getURL` löst IMMER gegen die Erweiterungswurzel auf. Damit
+ * hängt die Meldung nicht mehr daran, welche Auflösung Chrome wählt — die
+ * Frage stellt sich nicht mehr. Fehlt die API (sehr alte Fassung, Prüfstand),
+ * bleibt der relative Pfad; das ist der Bestand und nicht schlechter als er.
+ */
+function symbolAdresse() {
+  try {
+    if (globalThis.chrome && chrome.runtime && typeof chrome.runtime.getURL === "function") {
+      return chrome.runtime.getURL("icons/icon-128.png");
+    }
+  } catch (_) {
+    /* Ohne runtime-API bleibt der Bestand. */
+  }
+  return "icons/icon-128.png";
+}
+
 function systemmeldung(agent) {
   try {
     const meldungen = globalThis.chrome && chrome.notifications;
     if (!meldungen || typeof meldungen.create !== "function") return false;
     const lauf = meldungen.create(MELDUNG_ID, {
       type: "basic",
-      iconUrl: "icons/icon-128.png",
+      iconUrl: symbolAdresse(),
       title: t("ext_meldung_titel", "Cloud-Sitzung aktiv"),
       message: agent
         ? t(
@@ -289,6 +432,11 @@ function cloudSitzungZeigen(satz) {
 function cloudSitzungAus() {
   gezeigterStand = null;
   gemeldeterCode = null;
+  /* Eine offene Freigabefrage endet mit der Sitzung, auf jedem der sechs Wege
+     (BRUECKE-3). Ein Fragezeichen am Symbol, das eine beendete Sitzung
+     überlebt, fragt nach etwas, das niemand mehr beantworten kann — und der
+     Not-Aus ist genau der Fall, in dem es sonst stehen bliebe. */
+  freigabeRufAus();
   melden({ typ: "link:cloud-sitzung", an: false, agent: "" });
   abzeichenSetzen(false);
   titelSetzen("", false);
@@ -372,7 +520,26 @@ export function schliessgrund(code, grund = null) {
   );
 }
 
-async function sitzungSchreiben(daten) {
+/**
+ * Eine Sitzung anlegen, fortschreiben oder wegnehmen.
+ *
+ * `marke` ist die Kappmarke, die der AUFRUFER sich beim Eintritt in seinen Weg
+ * gemerkt hat. Sie ist die eine Stelle, an der der Grundsatz von oben baulich
+ * hängt: Diese Funktion ist der einzige Weg, auf dem eine Sitzung entsteht
+ * (siehe der Block zu §8.4), also genügt eine Prüfung hier, um JEDEN Weg
+ * abzudecken, der eine Sitzung nach einem Not-Aus wiederherstellen könnte.
+ *
+ * Zweimal geprüft, davor und danach, und das ist kein Gürtel mit Hosenträgern:
+ * Der Not-Aus kann VOR dem Schreiben eintreffen (dann wird gar nicht erst
+ * geschrieben) oder GENAU IN das `await` fallen (dann steht der Satz schon in
+ * der Ablage und muss wieder heraus). Nur der zweite Fall ist der gemessene
+ * aus NOTAUS-2.
+ *
+ * Das LÖSCHEN (`daten === null`) läuft immer und ohne Prüfung. Es ist die
+ * strengere Richtung, und die ist nie zu spät.
+ */
+async function sitzungSchreiben(daten, marke = kappmarke) {
+  if (daten && !markeGilt(marke)) return false;
   sitzung = daten;
   /* Hier und nur hier entsteht oder endet eine Cloud-Sitzung — also stehen
      hier auch ihre drei Zeichen (§8.4). Vor der Ablage und nicht danach: Ein
@@ -387,12 +554,33 @@ async function sitzungSchreiben(daten) {
        findet nach einem Worker-Neustart nichts mehr vor. Das führt zum
        sauberen Ende, nicht zu einer Sitzung ohne Aufsicht. */
   }
+  if (daten && !markeGilt(marke)) {
+    /* Der Not-Aus fiel in dieses `await`. Was gerade geschrieben wurde, wird
+       sofort wieder zurückgenommen — mitsamt den drei Zeichen. Ein Abzeichen,
+       das eine Steuerung behauptet, die es nicht mehr gibt, ist schlimmer als
+       gar keines. */
+    sitzung = null;
+    cloudSitzungAus();
+    try {
+      await chrome.storage.session.remove(ABLAGE);
+    } catch (_) {
+      /* Ohne Ablage gibt es auch nichts zurückzunehmen. */
+    }
+    return false;
+  }
+  return true;
 }
 
 async function sitzungLesen() {
   if (sitzung) return sitzung;
+  const marke = kappmarke;
   try {
     const daten = await chrome.storage.session.get(ABLAGE);
+    /* Wiedereintritt nach `await`: Diese Zeile SCHREIBT den Modulspeicher.
+       Fällt der Not-Aus in das Lesen, hätte sie die gerade weggeräumte Sitzung
+       aus der Ablage wiederbelebt — und `sitzungTabId()`, `zustand()` und der
+       Wecker hingen danach wieder an ihr. */
+    if (!markeGilt(marke)) return null;
     sitzung = daten[ABLAGE] || null;
   } catch (_) {
     sitzung = null;
@@ -586,17 +774,189 @@ export function sitzungTabId() {
 let unbeaufsichtigt = false;
 
 export async function unbeaufsichtigtSetzen(an) {
+  const marke = kappmarke;
   unbeaufsichtigt = !!an;
   /* Das Symbol sagt es mit: LIVE heißt „läuft und du siehst zu", das Auge
      heißt „läuft, während du woanders bist". Ohne dieses Zeichen wäre eine
      Sitzung im Hintergrund genau das, was sie nie sein darf: unbemerkt. */
   const s = await sitzungLesen();
-  if (s) abzeichenSetzen(true);
+  /* Wiedereintritt nach `await`: Fällt der Not-Aus in das Lesen, darf das
+     Abzeichen nicht wieder angehen. Es überlebt jede Navigation und jedes
+     Schließen der Seitenleiste — ein Abzeichen, das eine Steuerung behauptet,
+     die es nicht mehr gibt, hält sich sonst bis zum nächsten Ereignis. */
+  if (s && markeGilt(marke)) abzeichenSetzen(true);
   return unbeaufsichtigt;
 }
 
 export function istUnbeaufsichtigt() {
   return unbeaufsichtigt;
+}
+
+/* ------------------------------------------------------------------ *
+ * Die Freigabeanfrage, die keine Seitenleiste erreicht (§8.4, BRUECKE-3)
+ *
+ * Befund vom 14.08.2026, gemessen: `navigate` nach `/checkout/payment`, Klassen
+ * [navigieren, zahlung], Seitenleiste zu — `link:schritt-freigabe` ging ins
+ * Leere, der Agent bekam `grant_required`, und es gab NULL Systemmeldungen und
+ * NULL Abzeichenwechsel. Der Zustand „niemand sieht zu" wurde geführt
+ * (`istUnbeaufsichtigt`), aber von niemandem gelesen: ein GREP über den ganzen
+ * Baum fand keinen einzigen Aufrufer und keinen Prüfsatz.
+ *
+ * Der Mensch erfuhr davon erst, wenn er die Seitenleiste wieder öffnete und ins
+ * Buch sah. Bis dahin stand der Agent an der Kasse und wartete.
+ *
+ * Was hier gebaut wird, ist der Weg, den der Ausführer braucht — drei Stufen,
+ * absteigend, und keine davon still:
+ *
+ *   1. Die Seitenleiste. Sie fragt der Ausführer selbst; nur er kann auf die
+ *      Antwort warten.
+ *   2. Erreicht sie niemanden: EINE Systemmeldung mit der Frage und das
+ *      Fragezeichen am Symbol. Beide erreichen den Menschen auch in einem
+ *      anderen Fenster.
+ *   3. Geht auch das nicht (keine Berechtigung `notifications`, keine
+ *      action-API): eine BENANNTE Absage an den Agenten. `grant_required`
+ *      heißt „der Mensch hat nicht zugestimmt" — hier hat ihn niemand
+ *      gefragt, und das ist eine andere Aussage.
+ *
+ * Warum das hier steht und nicht im Ausführer: Symbol und Systemmeldung sind
+ * die Zeichen aus §8.4, und die gehören in die Datei, die sie schon setzt.
+ * Zwei Stellen, die dasselbe Abzeichen schreiben, laufen auseinander — das ist
+ * derselbe Fehler wie die zweite Abschrift von `saeubern` (Festlegung F4).
+ * ------------------------------------------------------------------ */
+
+/* Das Zeichen, das `panel.js:3671` dem Menschen zusagt. */
+const ABZEICHEN_FRAGE = "?";
+const FREIGABE_MELDUNG_ID = "smartrlink-freigabe";
+
+/* Steht gerade eine Frage offen, die niemand in der Seitenleiste sieht? Und
+   welche — die Kennung wird gebraucht, um genau DIESE Meldung wieder
+   wegzunehmen und nicht irgendeine. */
+let freigabeOffen = false;
+let freigabeId = "";
+
+/**
+ * Die Kennung der Absage aus Stufe 3.
+ *
+ * Sie ist ausdrücklich NICHT `grant_required`. Der Unterschied ist der ganze
+ * Sinn: `grant_required` sagt „gefragt und keine Zustimmung bekommen",
+ * `grant_unreachable` sagt „ich konnte niemanden fragen". Ein Agent, der beides
+ * gleich behandelt, sagt dem Menschen später das Falsche.
+ */
+export const FREIGABE_UNERREICHBAR = "grant_unreachable";
+export const FREIGABE_UNERREICHBAR_TEXT =
+  "Für diesen Schritt brauche ich eine Freigabe, und ich habe niemanden erreicht: Die Seitenleiste ist zu, und dieser Browser lässt mich weder eine Systemmeldung zeigen noch das Symbol kennzeichnen. Ich habe nichts ausgeführt.";
+
+/**
+ * Stufe 2: Den Menschen über Systemmeldung UND Abzeichen erreichen.
+ *
+ * @param {{frage?:string, cmd?:string, id?:string}} was
+ * @returns {{erreicht:boolean, wege:string[]}} `erreicht:false` heißt Stufe 3.
+ *
+ * Sie ist absichtlich synchron: Sie steht im Weg einer Freigabe, und eine
+ * Freigabe, die auf eine Ablage wartet, ist eine Freigabe, die eine Frist
+ * verpassen kann.
+ */
+export function freigabeRufen({ frage = "", cmd = "", id = "", nurAbzeichen = false } = {}) {
+  const wege = [];
+  /* Eine vorige Frage, die noch offen steht, wird zuerst weggenommen. Zwei
+     Fragezeichen gibt es am Symbol nicht, und zwei Meldungen zu derselben
+     Sitzung wären Lärm statt eines Zeichens. */
+  if (freigabeOffen) freigabeRufAus();
+  freigabeOffen = true;
+  freigabeId = String(id || "");
+
+  /* Das Abzeichen. Es hängt am Verbindungszustand, deshalb geht es nur an,
+     wenn eine Sitzung läuft — ein Fragezeichen ohne Sitzung wäre ein Zeichen
+     für etwas, das es nicht gibt. */
+  if (sitzung) {
+    try {
+      chrome.action.setBadgeText({ text: ABZEICHEN_FRAGE });
+      chrome.action.setBadgeBackgroundColor({ color: "#ffb020" });
+      wege.push("abzeichen");
+    } catch (_) {
+      /* Ältere Fassung ohne action-API. */
+    }
+  }
+
+  /*
+   * Die Systemmeldung. Sie trägt die Frage im Klartext, damit der Mensch nicht
+   * erst die Seitenleiste öffnen muss, um zu WISSEN, worum es geht. Der Befehl
+   * steht dabei, nicht die Adresse: Eine Meldung, die „soll ich auf
+   * deinem-onlinebanking.example bezahlen?" auf einen fremden Bildschirm legt,
+   * wäre selbst das Leck, das sie verhindern soll.
+   *
+   * `nurAbzeichen` gibt es aus EINEM Grund: Ein Aufrufer, der die Meldung schon
+   * selbst gesetzt hat, soll hier nur das Abzeichen holen. Zwei Meldungen für
+   * eine Frage sind schlimmer als eine, und ein zweites Abzeichen an einer
+   * zweiten Stelle wäre der F4-Fehler — das Symbol hat genau einen Besitzer,
+   * und der ist diese Datei.
+   */
+  if (!nurAbzeichen) {
+    try {
+      const meldungen = globalThis.chrome && chrome.notifications;
+      if (meldungen && typeof meldungen.create === "function") {
+        const lauf = meldungen.create(`${FREIGABE_MELDUNG_ID}-${freigabeId}`, {
+          type: "basic",
+          iconUrl: symbolAdresse(),
+          /* Derselbe Schlüssel, den `ausfuehrer.js` in `menschRufen` benutzt.
+             Zwei Schlüssel für denselben Satz wären zwei Übersetzungen, die
+             auseinanderlaufen, sobald eine von beiden angefasst wird — und der
+             Mensch sähe in derselben Lage zwei verschiedene Titel. */
+          title: t("freigabe_ruf_titel", "SMarTrChrome wartet auf deine Freigabe"),
+          /* Der Notfalltext ist der, den die Seitenleiste in derselben Lage
+             zeigt (`freigabe_standardfrage`). Ein zweiter Satz daneben wäre
+             eine zweite Abschrift derselben Aussage, und die laufen
+             auseinander, sobald eine von beiden angefasst wird (F4). */
+          message:
+            saeubern(frage, 200) || t("freigabe_standardfrage", "Der Agent möchte einen Schritt ausführen."),
+          priority: 2,
+          requireInteraction: true,
+        });
+        if (lauf && typeof lauf.catch === "function") lauf.catch(() => {});
+        wege.push("systemmeldung");
+      }
+    } catch (_) {
+      /* Ohne Berechtigung bleibt das Abzeichen. */
+    }
+  }
+
+  if (!wege.length) {
+    freigabeOffen = false;
+    freigabeId = "";
+  }
+  return { erreicht: wege.length > 0, wege };
+}
+
+/**
+ * Die Frage ist beantwortet, abgelaufen oder zurückgezogen: Zeichen weg.
+ *
+ * Sie muss auf JEDEM Ausgang laufen, auch auf dem abgelehnten. Ein
+ * Fragezeichen, das stehen bleibt, ist eine Frage, die niemand mehr
+ * beantworten kann — und dem Menschen ist nicht zu erklären, warum sein Symbol
+ * ihn nach etwas fragt, das längst entschieden ist.
+ */
+export function freigabeRufAus() {
+  if (!freigabeOffen) return false;
+  const id = freigabeId;
+  freigabeOffen = false;
+  freigabeId = "";
+  /* Zurück auf das Zeichen, das zur Lage gehört: LIVE, Auge oder nichts. */
+  abzeichenSetzen(!!sitzung);
+  try {
+    const meldungen = globalThis.chrome && chrome.notifications;
+    if (meldungen && typeof meldungen.clear === "function") {
+      const lauf = meldungen.clear(`${FREIGABE_MELDUNG_ID}-${id}`);
+      if (lauf && typeof lauf.catch === "function") lauf.catch(() => {});
+    }
+  } catch (_) {
+    /* Ohne Berechtigung gibt es auch nichts wegzuräumen. */
+  }
+  return true;
+}
+
+/** Nur für Prüfsätze und die Anzeige: Steht gerade eine Frage offen? */
+export function freigabeSteht() {
+  return freigabeOffen;
 }
 
 function senden(rahmen) {
@@ -791,7 +1151,21 @@ async function buchFuehren(rahmen, laufende, ergebnis, adresse) {
   try {
     await protokollbuch.eintragen({
       zeit: Date.now(),
-      agent: agentAnzeige(rahmen && rahmen.agent) || (laufende && laufende.agent) || "",
+      /*
+       * Ins Buch geht der BEHAUPTETE Name, nicht der belegte (BRUECKE-4/-7).
+       *
+       * Das ist kein Widerspruch zur fail-closed-Anzeige, sondern ihre andere
+       * Hälfte: Die Oberfläche darf nur behaupten, was sie belegen kann, das
+       * Buch soll festhalten, was wirklich angekommen ist. Dass ein fremder
+       * Name angeklopft hat, ist genau die Zeile, die man später sucht — und
+       * `protokollbuch.js` entscheidet in `agentAus` schon heute so.
+       *
+       * OFFEN und ausserhalb dieses Baums (BRUECKE-7, OFFEN-v3.5 §2.2): Das
+       * Gateway signiert den Anspruch `agent` nicht. Solange das so ist, ist
+       * dieses Feld eine Selbstauskunft und beantwortet die Frage „was ist in
+       * meinem Namen geschehen" nur, soweit man dem Absender glaubt.
+       */
+      agent: agentBehauptet(rahmen && rahmen.agent) || (laufende && laufende.agent) || "",
       cmd: (ergebnis && ergebnis.cmd) || (rahmen && rahmen.cmd) || "",
       url: adresse || "",
       ergebnis: ergebnis && ergebnis.success
@@ -847,6 +1221,9 @@ export function verbinden({ ticket, ausweis, ursprungMuster = null, tabId = null
     const abbrechen = async (fehler) => {
       if (erledigt) return;
       erledigt = true;
+      /* Ein abgebrochener Aufbau ist ein Ende wie jedes andere: Was danach aus
+         einem `await` zurückkommt, darf nichts mehr aufbauen. */
+      markeWeiter();
       uhrenStoppen();
       if (draht) {
         const d = draht;
@@ -881,6 +1258,19 @@ export function verbinden({ ticket, ausweis, ursprungMuster = null, tabId = null
     draht = ws;
     ausweisImSpeicher = ausweis;
     letzterGrund = null;
+
+    /*
+     * Die Kappmarke DIESES Aufbaus (NOTAUS-2).
+     *
+     * Sie wird hier gemerkt und nicht erst im `auth_ok`-Zweig: Das Fenster
+     * zwischen `new WebSocket` und der Antwort des Relays ist die ganze
+     * Handschlagfrist, bis zu FRIST_AUTH = 20 Sekunden. Drückt der Mensch in
+     * dieser Zeit den Not-Aus, ist `erledigt` noch false, die Leitung wird
+     * geschlossen — und wenn `auth_ok` das Schließen überholt (Chrome schickt
+     * das close-Ereignis erst, wenn der Relay antwortet), baute der Handschlag
+     * danach eine vollständige Sitzung auf. Genau das war die Messung.
+     */
+    const meineMarke = kappmarke;
 
     /* Der Relay lässt 20 Sekunden für den auth-Frame. Wir setzen dieselbe
        Frist auf die Antwort — sonst wartet die Seitenleiste unbegrenzt auf
@@ -927,6 +1317,31 @@ export function verbinden({ ticket, ausweis, ursprungMuster = null, tabId = null
       }
 
       if (rahmen.type === "auth_ok" && !erledigt) {
+        /*
+         * ERSTE Prüfung des Wiedereintritts (NOTAUS-2).
+         *
+         * Zwischen `new WebSocket` und diesem Rahmen liegt die Antwortzeit des
+         * Relays. Ist in dieser Zeit gekappt worden, wird hier NICHTS
+         * aufgebaut. Und die Sitzung, die der Relay auf seiner Seite gerade
+         * angelegt hat, wird ausdrücklich widerrufen: Der Not-Aus lief mit
+         * `vorher = null` durch, also mit `brauchtWiderruf = false`, und das
+         * spätere `onclose` ruft `sitzungBeenden` mit `widerrufen: false`. Ohne
+         * diese Zeilen bliebe die Sitzung beim Relay bis zum Ablauf ihrer Frist
+         * stehen — gemessen war das der Zustand.
+         */
+        if (!markeGilt(meineMarke)) {
+          const gekappterCode = String(rahmen.code || "");
+          senden({ type: "disconnect", reason: "user_revoked" });
+          if (gekappterCode) serverWiderruf(gekappterCode, ausweis).catch(() => {});
+          beenden(
+            new NetzFehler(
+              "gekappt",
+              "Die Verbindung wurde beendet, während ich sie aufgebaut habe. Ich habe nichts aufgebaut."
+            )
+          );
+          return;
+        }
+
         const jetzt = Date.now();
         /* Führend ist die Dauer, `expires_at` darf nur kürzen. Ab hier ist die
            Wanduhr aus der Rechnung heraus: Der Rest der Sitzung wird monoton
@@ -986,7 +1401,7 @@ export function verbinden({ ticket, ausweis, ursprungMuster = null, tabId = null
            die Erweiterung selbst auslesen könnte. Der Geltungsbereich ist
            flach: `allow`, `mode`, `step_mode` — ein `scope` als Adressliste
            gibt es nicht mehr. */
-        await sitzungSchreiben({
+        const angelegt = await sitzungSchreiben({
           code: neuerCode,
           stufe: rahmen.access === "write" ? "write" : "read",
           bereich: Array.isArray(rahmen.allow) ? rahmen.allow.map(String) : [],
@@ -1026,9 +1441,40 @@ export function verbinden({ ticket, ausweis, ursprungMuster = null, tabId = null
              Feld leer, und die Zeile sagt „Ein Agent", nicht irgendeinen
              Namen. */
           agent: agentAnzeige(rahmen.agent),
-        });
+        }, meineMarke);
 
-        /* Neue Sitzung, neue Deckel: Der Ausführer zählt Befehle je Sitzung. */
+        /*
+         * ZWEITE Prüfung — die gemessene Stelle.
+         *
+         * `sitzungSchreiben` ist ein `chrome.storage.session.set`, also ein IPC
+         * von wenigen Millisekunden. Genau dorthinein fiel der Not-Aus in der
+         * Messung vom 14.08.2026, und alles Folgende machte ihn rückgängig:
+         * `zaehlerNeu()` setzt `aktiv` BEDINGUNGSLOS wieder auf true, der
+         * Herzschlag beginnt zu laufen, der Wecker wird neu angelegt, und die
+         * Seitenleiste bekommt `verbunden=true`. Eine Sekunde nach dem Not-Aus
+         * lief ein `readPage` durch.
+         *
+         * `sitzungSchreiben` hat den Satz in diesem Fall selbst wieder
+         * zurückgenommen und meldet es mit `false`. Ab hier wird nur noch
+         * abgesagt — und der Relay bekommt seinen Widerruf, damit die Sitzung
+         * dort nicht bis zum Fristende stehen bleibt.
+         */
+        if (!angelegt || !markeGilt(meineMarke)) {
+          senden({ type: "disconnect", reason: "user_revoked" });
+          if (neuerCode) serverWiderruf(neuerCode, ausweis).catch(() => {});
+          beenden(
+            new NetzFehler(
+              "gekappt",
+              "Die Verbindung wurde beendet, während ich sie aufgebaut habe. Ich habe nichts aufgebaut."
+            )
+          );
+          return;
+        }
+
+        /* Neue Sitzung, neue Deckel: Der Ausführer zählt Befehle je Sitzung.
+           Erst NACH der Prüfung oben, denn `zaehlerNeu()` setzt `aktiv` ohne
+           jede Bedingung auf true — es ist die eine Zeile, die den Not-Aus
+           wörtlich rückgängig macht. */
         ausfuehrer.zaehlerNeu();
 
         herzschlag = setInterval(() => {
@@ -1040,6 +1486,30 @@ export function verbinden({ ticket, ausweis, ursprungMuster = null, tabId = null
           await chrome.alarms.create(WECKER, { periodInMinutes: 0.5 });
         } catch (_) {
           /* Ohne Wecker fehlt nur das Netz unter dem Herzschlag. */
+        }
+
+        /* DRITTE Prüfung. `chrome.alarms.create` ist wieder ein IPC, und was
+           danach kommt, sind der Wecker und die Meldung „verbunden" an die
+           Seitenleiste. Beide sind Wiederherstellungen: Der Wecker weckt den
+           Dienstarbeiter noch zehn Minuten lang, und die Meldung ist die Zeile,
+           die der Mensch nach seinem Not-Aus zuletzt sehen soll. */
+        if (!markeGilt(meineMarke)) {
+          uhrenStoppen();
+          try {
+            await chrome.alarms.clear(WECKER);
+          } catch (_) {
+            /* Kein Wecker da: dann ist auch keiner zu löschen. */
+          }
+          await sitzungSchreiben(null);
+          senden({ type: "disconnect", reason: "user_revoked" });
+          if (neuerCode) serverWiderruf(neuerCode, ausweis).catch(() => {});
+          beenden(
+            new NetzFehler(
+              "gekappt",
+              "Die Verbindung wurde beendet, während ich sie aufgebaut habe. Ich habe nichts aufgebaut."
+            )
+          );
+          return;
         }
 
         melden({ typ: "link:zustand", verbunden: true, sitzung: await zustand() });
@@ -1082,7 +1552,26 @@ export function verbinden({ ticket, ausweis, ursprungMuster = null, tabId = null
        * ab, was niemand vorhergesehen hat: Ein Fehler in unserem Code darf
        * nicht dazu führen, dass der Agent ins Leere wartet.
        */
+      /* Die Kappmarke DIESES Befehls. Alles Weitere in diesem Zweig steht
+         hinter mindestens einem `await` — die Ablage, die Tabadresse, der
+         Ausführer. Fällt der Not-Aus dazwischen, wird nichts mehr ausgeführt
+         und nichts mehr geschrieben. */
+      const befehlsMarke = kappmarke;
       const laufende = await sitzungLesen();
+
+      /* Wiedereintritt: Zwischen dem Eintreffen des Befehls und dem Lesen der
+         Ablage kann gekappt worden sein. Der Agent bekommt trotzdem seine
+         Antwort — ohne sie wartet er bis zur Frist des Relays ins Leere. */
+      if (!markeGilt(befehlsMarke)) {
+        const absage = absageRahmen(
+          rahmen,
+          "session_beendet",
+          "Die Verbindung wurde beendet. Ich führe nichts mehr aus."
+        );
+        senden(absage);
+        await buchFuehren(rahmen, laufende, absage, "");
+        return;
+      }
 
       /* Die Frist gilt auch zwischen zwei Weckerschlägen. Ist die Dauer
          verbraucht, wird nichts mehr ausgeführt — der Agent bekommt trotzdem
@@ -1138,9 +1627,33 @@ export function verbinden({ ticket, ausweis, ursprungMuster = null, tabId = null
 
       /* Der Agentenname aus dem Rahmen wird nachgetragen, sobald er sich
          ändert. Geprüft wird er im Ausführer (§8.1); hier geht es allein
-         darum, dass in der Seitenleiste steht, WER gerade steuert. */
-      if (laufende && agentAnzeige(rahmen.agent) && agentAnzeige(rahmen.agent) !== agentAnzeige(laufende.agent)) {
-        await sitzungSchreiben({ ...laufende, agent: agentAnzeige(rahmen.agent) });
+         darum, dass in der Seitenleiste steht, WER gerade steuert.
+
+         `agentAnzeige` hält seit BRUECKE-4 gegen die Positivliste: Ein Name,
+         den diese Erweiterung nicht belegen kann, trägt sich nicht nach. Der
+         Rahmen selbst geht davon unberührt weiter an den Ausführer.
+
+         Die Marke reist mit, weil `sitzungSchreiben` ein Schreibvorgang nach
+         mehreren `await`s ist — nach einem Not-Aus stünde die Sitzung sonst
+         wieder in der Ablage, nur mit einem Agentennamen mehr. */
+      const gemeldeterAgent = agentAnzeige(rahmen.agent);
+      if (laufende && gemeldeterAgent && gemeldeterAgent !== agentAnzeige(laufende.agent)) {
+        await sitzungSchreiben({ ...laufende, agent: gemeldeterAgent }, befehlsMarke);
+      }
+
+      /* Letzte Prüfung vor der Übergabe an den Ausführer. Er hat seine eigene
+         Generationszählung, und die trägt; diese Zeile steht davor, weil sie
+         den Weg gar nicht erst betritt — und weil eine Wache, die nur in einer
+         zweiten Datei steht, genau die Bauform ist, an der der 11.08. hing. */
+      if (!markeGilt(befehlsMarke)) {
+        const absage = absageRahmen(
+          rahmen,
+          "session_beendet",
+          "Die Verbindung wurde beendet. Ich führe nichts mehr aus."
+        );
+        senden(absage);
+        await buchFuehren(rahmen, laufende, absage, adresse || "");
+        return;
       }
 
       let ergebnis;
@@ -1228,6 +1741,11 @@ export function verbinden({ ticket, ausweis, ursprungMuster = null, tabId = null
  * Verlängerung gibt es nicht.
  */
 export async function verlaengernMit({ ticket, ausweis }) {
+  /* Die Marke dieses Tauschs. Zwischen dem Lesen der alten Sitzung und dem
+     Aufbau der neuen liegen zwei `await`s, und ein Not-Aus dazwischen darf
+     nicht in einer NEUEN Leitung enden — eine Verlängerung, die nach dem Stopp
+     noch durchgeht, ist genau die Wiederherstellung aus dem Grundsatz oben. */
+  const meineMarke = kappmarke;
   const alt = await sitzungLesen();
   if (!alt || !draht) {
     throw new NetzFehler("keine_sitzung", "Es läuft keine Verbindung, die ich verlängern könnte.");
@@ -1259,6 +1777,21 @@ export async function verlaengernMit({ ticket, ausweis }) {
     verbrauchtMs: verbrauchMessen(alt),
     begonnenUm: Number(alt.begonnenUm),
   };
+
+  /* Wiedereintritt nach dem Löschen des Weckers: Ist inzwischen gekappt
+     worden, wird keine neue Leitung mehr aufgebaut. Die alte ist schon stumm
+     und wird hier geschlossen; die Sitzung ist damit ehrlich zu Ende. */
+  if (!markeGilt(meineMarke)) {
+    try {
+      alterDraht.close(1000, "ende");
+    } catch (_) {
+      /* Schon zu. */
+    }
+    throw new NetzFehler(
+      "gekappt",
+      "Die Verbindung wurde beendet, während ich sie verlängert habe. Baue sie bitte neu auf."
+    );
+  }
 
   try {
     const neu = await verbinden({
@@ -1351,6 +1884,19 @@ export async function trennen(grund = "nutzer", ausweis = null) {
  * Aufwachen über die Wanduhr nachgeholt.
  */
 export async function wacheLaufen() {
+  /*
+   * Die Marke dieses Weckerschlags — dieselbe Klasse wie NOTAUS-2, selbst
+   * gefunden.
+   *
+   * Dieser Weg endet mit einem `sitzungSchreiben`, und davor stehen vier
+   * `await`s: das Protokollbuch, die Ablage, die Rechnung und gegebenenfalls
+   * das Ende. Fällt der Not-Aus dazwischen, schriebe der letzte Aufruf die
+   * gerade weggeräumte Sitzung wieder in `storage.session` — mitsamt frischem
+   * Anker, Abzeichen, Dauerzeile und Systemmeldung. Ein Wecker, der einen
+   * Not-Aus zurücknimmt, ist genau das, was §5 verbietet.
+   */
+  const meineMarke = kappmarke;
+
   /* Das Protokollbuch räumt an DIESEM Wecker mit auf (§8.3) und nicht an einem
      zweiten. Ein zweiter Takt wäre ein zweiter Grund, den Dienstarbeiter zu
      wecken, und damit genau das Provisorium, das MV3 bestraft. Es steht vor
@@ -1396,12 +1942,18 @@ export async function wacheLaufen() {
     return;
   }
 
-  /* Verbrauch festschreiben, Anker neu setzen, Anzeigezeit nachführen. */
-  await sitzungSchreiben({
-    ...gespeichert,
-    ...ankerNeu(verbraucht, jetzt, mono),
-    endetUm: jetzt + rest,
-  });
+  /* Verbrauch festschreiben, Anker neu setzen, Anzeigezeit nachführen — aber
+     nur, wenn dieser Weckerschlag noch zu der Welt gehört, in der er begonnen
+     hat. `sitzungSchreiben` prüft die Marke selbst und nimmt zurück, was es
+     geschrieben hat, wenn der Not-Aus in sein `await` fällt. */
+  await sitzungSchreiben(
+    {
+      ...gespeichert,
+      ...ankerNeu(verbraucht, jetzt, mono),
+      endetUm: jetzt + rest,
+    },
+    meineMarke
+  );
 }
 
 /* ------------------------------------------------------------------ *
@@ -1467,7 +2019,16 @@ export async function anlaufPruefen() {
 
   /* Ein fremdes Leben: Die Leitung dieser Sitzung ist mit ihrem Prozess
      gestorben. Sie wird ehrlich beendet, mitsamt Widerruf beim Relay — der
-     weiss davon nichts und hielte sie sonst bis zum Ablauf ihrer Frist offen. */
+     weiss davon nichts und hielte sie sonst bis zum Ablauf ihrer Frist offen.
+
+     Diese Zeile SCHREIBT den Modulspeicher nach einem `await`, gehört also zur
+     Klasse aus dem Block oben. Sie bleibt trotzdem ohne Markenprüfung, und das
+     ist die Begründung: Was hier geschrieben wird, ist die Vorbereitung eines
+     ENDES, keine Wiederherstellung. `sitzungBeenden` räumt es in derselben
+     Runde wieder weg und widerruft beim Relay. Fiele der Not-Aus genau
+     hierhin, wäre das Ergebnis ein Widerruf zu viel — und ein Widerruf zu viel
+     ist beim Relay ausdrücklich gutmütig (DRAHTFORMAT §6, `already_ended`).
+     Die strengere Richtung ist hier also, NICHT zu prüfen. */
   sitzung = alt;
   await sitzungBeenden(
     "verloren",

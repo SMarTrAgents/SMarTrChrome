@@ -32,23 +32,32 @@
      tausendfach verschachtelt, hält den Tab nicht an. */
   const SCHATTEN_TIEFE = 20;
 
-  /* Steuerzeichen, Nullbreiten und Schreibrichtungsmarken. Sie sind der
-     billigste Weg, einen Vorleser oder ein Protokoll etwas anderes sagen zu
-     lassen, als dasteht. Wortgleich aus `befehle.js` — was hier abweicht,
-     weicht in der Meldung ab, die ein Mensch zu lesen bekommt. */
-  const STEUERZEICHEN =
-    /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/g;
-
   /**
-   * Fremdtext in eine Form bringen, die man gefahrlos anzeigen, protokollieren
-   * und weitergeben kann. Gekürzt wird in der Mitte: Anfang und Ende sind für
+   * Fremdtext in eine Form bringen, die man gefahrlos anzeigen und
+   * protokollieren kann. Gekürzt wird in der Mitte: Anfang und Ende sind für
    * das Wiedererkennen entscheidend (spec-01 §4.8, K2).
+   *
+   * Befund vom 14.08.2026: Hier stand bis heute eine eigene Abschrift von
+   * `saeubern` samt eigener Zeichenliste, „wortgleich aus befehle.js". Genau
+   * das ist am selben Tag auseinandergelaufen: Die Messform entfernt Zeichen
+   * ohne eigene Breite seither ERSATZLOS, diese Abschrift ersetzte sie
+   * weiterhin durch ein Leerzeichen, und damit kürzten die beiden Fassungen an
+   * verschiedenen Stellen. `klickwache.test.mjs` ist daran rot geworden, und
+   * das ist der einzige Grund, warum es diese Datei gibt.
+   *
+   * Deshalb kommt die Form ab jetzt aus der einen Quelle
+   * (`src/gemeinsam/messform.js`, eingespielt VOR dieser Datei, siehe
+   * `src/net/seite.js`). Eine zweite Abschrift wird hier nicht mehr
+   * nachgezogen, sondern es gibt sie nicht mehr — Festlegung F4.
    */
-  function saeubern(roh, grenze = 120) {
-    const s = String(roh ?? "")
-      .replace(STEUERZEICHEN, " ")
-      .replace(/\s+/g, " ")
-      .trim();
+  function anzeigename(roh, grenze) {
+    const messform = globalThis.SMARTR_MESSFORM;
+    /* Fehlt die eine Quelle, wird hier NICHTS ersatzweise gesäubert. Ein
+       zweiter Säuberer wäre wieder die Abschrift, die dieser Kommentar gerade
+       abschafft. Der Name ist reine Fehlersuche und trägt keine Entscheidung;
+       ihn wegzulassen ist die ehrliche Antwort, ihn zu erfinden nicht. */
+    if (!messform || typeof messform.anzeigeform !== "function") return "";
+    const s = messform.anzeigeform(roh);
     if (s.length <= grenze) return s;
     if (grenze <= 1) return "…";
     const kopf = Math.ceil((grenze - 1) / 2);
@@ -176,7 +185,7 @@
     /* Was oben liegt, wird gemeldet, aber nicht in den Satz gehoben: Es ist
        Text von der besuchten Seite. Der Name des HTML-Elements genügt zur
        Fehlersuche und trägt keinen Fremdtext. */
-    const marke = saeubern(gefunden.tagName || gefunden.nodeName || "", 40)
+    const marke = anzeigename(gefunden.tagName || gefunden.nodeName || "", 40)
       .toLowerCase()
       .replace(/[^a-z0-9-]/g, "");
     return absage("verdeckt", { darueber: marke || null });

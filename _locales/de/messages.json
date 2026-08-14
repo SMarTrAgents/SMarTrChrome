@@ -443,6 +443,18 @@
   "freigabe_standardfrage": {
     "message": "Der Agent möchte einen Schritt ausführen."
   },
+  "freigabe_ruf_titel": {
+    "message": "SMarTrChrome wartet auf deine Freigabe"
+  },
+  "freigabe_ruf_text": {
+    "message": "Ein Schritt braucht deine Zustimmung, und es ist gerade keine Seitenleiste offen. Öffne SMarTrChrome, dann zeige ich dir, worum es geht."
+  },
+  "einschleusung_meldung_titel": {
+    "message": "SMarTrChrome hat die Automatik angehalten"
+  },
+  "einschleusung_meldung_text": {
+    "message": "Auf der offenen Seite steht ein Versuch, dem Agenten neue Anweisungen unterzuschieben. Ab jetzt wird wieder bei jedem Schritt gefragt."
+  },
   "freigabe_zurueckgezogen_ansage": {
     "message": "Der Agent hat nicht länger gewartet. Dieser Schritt ist nicht passiert."
   },
@@ -838,6 +850,15 @@
   },
   "start_stand_verbunden": {
     "message": "Verbunden mit"
+  },
+  "start_stand_verbunden_ohne": {
+    "message": "Verbunden mit einem Tab, den ich gerade nicht benennen kann."
+  },
+  "start_stand_vorfuehrung": {
+    "message": "Vorführung ohne Agent auf"
+  },
+  "start_stand_vorfuehrung_ohne": {
+    "message": "Vorführung ohne Agent."
   },
   "start_tab_gesperrt": {
     "message": "Dieser Tab hat sich seit dem Aufbau der Liste geändert, frisch die Liste bitte auf."

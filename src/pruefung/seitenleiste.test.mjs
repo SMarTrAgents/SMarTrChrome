@@ -359,6 +359,7 @@ test("panel.js: die Sitzung wird an den Agenten gebunden (G4)", () => {
  * ================================================================== */
 
 const befehle = await import("../net/befehle.js");
+const messform = await import("../net/messform.js");
 
 /* Nur Kennungen, die panel.html wirklich trägt. */
 const IDS_IM_HTML = new Set([...html.matchAll(/\sid="([^"]+)"/g)].map((t) => t[1]));
@@ -586,6 +587,7 @@ const ANHANG = `
   kennwortZeigen,
   protokollieren, zeitStempel,
   tabsAuffrischen, waehlbareTabs, tabVerbindenMit, tabVerbinden,
+  tabListeSelbstZeichnen, verbindungswegZeichnen, sitzungsTab,
   modusSetzen, modusHolen, modusSpiegeln, modusTabId,
   cloudSitzungZeigen, notAus,
   werkbankOeffnen, buchOeffnen, buchAusgeben,
@@ -999,6 +1001,11 @@ async function panelStarten({
       },
     },
     "./erklaerungen.js": erklaerungen,
+    /* Die gemeinsame Messform, unveraendert und echt. Sie ist die EINE Fassung
+       dafuer, was ein unsichtbares Zeichen in einem Fremdtext bedeutet; eine
+       Attrappe hier hiesse, panel.js gegen eine Regel zu messen, die es im
+       Betrieb nicht gibt. */
+    "../net/messform.js": messform,
     /* Beide Dateien gehoeren A-WERKBANK und entstehen in derselben Stufe.
        Leer ist hier der HAERTERE Fall: Er misst, dass die Seitenleiste auch
        dann eine Liste hinstellt, wenn dort noch nichts steht. */
@@ -3125,14 +3132,12 @@ test("E6 — Auch durch die echte Startseite bleibt es ein Klick mit heiler Nutz
    * und nicht durch eine Attrappe.
    */
   const echt = await import("../panel/startseite.js");
-  echt._zuruecksetzen();
   const p = await panelStarten({
     alleTabs: TABS_GEMISCHT(),
     startseiteModul: echt,
     workerAntworten: { "link:verbinden": sitzungAntwort() },
   });
   t.after(p.aufraeumen);
-  t.after(() => echt._zuruecksetzen());
   await new Promise((f) => setTimeout(f, 0));
 
   const knopf = p.el("startseite").querySelector(".sa-tab-verbinden");
@@ -3377,14 +3382,12 @@ test("ZZM7 — Die Statuskarte der Startseite ist waehrend der Sitzung wirklich 
    * Gefahren wird durch das ECHTE Modul, nicht durch eine Attrappe.
    */
   const echt = await import("../panel/startseite.js");
-  echt._zuruecksetzen();
   const p = await panelStarten({
     alleTabs: TABS_GEMISCHT(),
     startseiteModul: echt,
     workerAntworten: { "link:verbinden": sitzungAntwort() },
   });
   t.after(p.aufraeumen);
-  t.after(() => echt._zuruecksetzen());
   await new Promise((f) => setTimeout(f, 0));
 
   const start = p.el("startseite");
@@ -3557,7 +3560,6 @@ test("T3 — startseite.js wird im Produktivweg gerufen; fehlt sie, zeichnet die
    * niemand irgendetwas.
    */
   const echt = await import("../panel/startseite.js");
-  echt._zuruecksetzen();
   const gerufen = [];
   const p = await panelStarten({
     alleTabs: TABS_GEMISCHT(),
@@ -3570,11 +3572,32 @@ test("T3 — startseite.js wird im Produktivweg gerufen; fehlt sie, zeichnet die
     },
   });
   t.after(p.aufraeumen);
-  t.after(() => echt._zuruecksetzen());
   await new Promise((f) => setTimeout(f, 0));
 
   assert.equal(gerufen.length, 1, "startseite.js wird genau einmal in den Anker gebaut");
-  assert.equal(gerufen[0].wurzel, p.el("startseite"), "und zwar in den Anker #startseite aus panel.html");
+  /*
+   * Hier stand bis zum 14.08.2026 `p.el("startseite")`, also der ganze
+   * Abschnitt. Die Erwartung ist geaendert, und zwar aus einem Befund und
+   * nicht aus Bequemlichkeit (VERBINDUNG-5):
+   *
+   * `startseite.aufbauen` raeumt seinen Anker mit `replaceChildren()` leer. Auf
+   * dem Abschnitt traf das zwei Knoten, die dem Modul nicht gehoeren — die
+   * Ueberschrift `#startseite-titel`, auf die das `aria-labelledby` des
+   * Abschnitts zeigt, und `#startseite-liste`, den Anker der Ersatzfassung in
+   * panel.js. Gemessen wurde, dass nach dem Aufbau kein Knoten mit Kennung
+   * mehr im Abschnitt stand: Der Bereich hatte danach keinen Namen mehr fuer
+   * den Bildschirmleser, und die Ersatzfassung waere auf
+   * `null.replaceChildren()` gelaufen, mitten in verbindungswegZeichnen(), das
+   * auch in beenden() vor `link:trennen` steht.
+   *
+   * Der Anker ist deshalb das innere `#startseite-liste`. Was das Modul leert,
+   * gehoert ab jetzt ihm allein.
+   */
+  assert.equal(
+    gerufen[0].wurzel,
+    p.el("startseite-liste"),
+    "gebaut wird in #startseite-liste, nicht in den Abschnitt darum herum",
+  );
   for (const dienst of ["tabsHolen", "verbinden", "trennen"]) {
     assert.equal(typeof gerufen[0].dienste[dienst], "function", `der Dienst ${dienst} fehlt`);
   }
@@ -3598,7 +3621,16 @@ test("T3 — startseite.js wird im Produktivweg gerufen; fehlt sie, zeichnet die
 });
 
 test("T4 — Die Statuskarte nennt Titel, Adresse und Favicon des verbundenen Tabs", async (t) => {
-  const p = await panelStarten({ alleTabs: TABS_GEMISCHT() });
+  /*
+   * Gefahren mit dem ECHTEN Startseiten-Modul, und das ist seit dem 14.08.2026
+   * die Zusage selbst und nicht nur Bequemlichkeit: WELCHE Favicon-Adresse
+   * geladen werden darf, entscheidet `startseite.faviconQuelle` und sonst
+   * niemand (Festlegung F4). panel.js trug bis dahin eine zweite, schwaechere
+   * Fassung derselben Regel — jede `https:`-Adresse war gut genug. Fehlt die
+   * Regel, laedt die Tabkarte gar kein Bild; das misst T4c.
+   */
+  const echt = await import("../panel/startseite.js");
+  const p = await panelStarten({ alleTabs: TABS_GEMISCHT(), startseiteModul: echt });
   t.after(p.aufraeumen);
   assert.equal(p.el("tabkarte").hidden, true, "Vorbedingung: ohne Sitzung keine Karte");
 
@@ -3629,6 +3661,81 @@ test("T4b — Ohne Favicon steht das Ersatzzeichen da, keine Luecke", async (t) 
   assert.equal(p.el("tabkarte-bild").getAttribute("src"), null, "kein leeres src, das der Browser laedt");
   assert.equal(p.el("tabkarte-glyph").hidden, false);
   assert.equal(p.el("tabkarte-titel").textContent, "Warenkorb", "der Titel steht trotzdem da");
+});
+
+test("T4c — Die Tabkarte laedt kein Sinnbild von einer FREMDEN Adresse", async (t) => {
+  /*
+   * Selbst gefunden am 14.08.2026, dieselbe Fehlerart wie F4 in klickwache.js:
+   * Zwei Stellen lasen dieselbe Sicherheitszusage verschieden. startseite.js
+   * laesst nur `data:image/…` und denselben Wirt wie der Tab durch und nennt
+   * alles andere ausdruecklich eine Wanze — `favIconUrl` kommt aus dem Kopf
+   * einer fremden Seite, und eine Seite darf dort jede Adresse
+   * hineinschreiben. panel.js pruefte nur `^https?://` und lud damit genau
+   * das: Beim Aufbau der Karte meldete sich ein fremder Server und erfuhr,
+   * dass die Seitenleiste offen ist.
+   *
+   * Gegenprobe: Mit `/^https?:\/\//.test(t.favIconUrl)` in tabkarteZeichnen
+   * ist dieser Satz rot.
+   */
+  const echt = await import("../panel/startseite.js");
+  const fremd = {
+    id: 7,
+    url: "https://geizhals.de/warenkorb",
+    title: "Warenkorb",
+    active: true,
+    favIconUrl: "https://wanze.example/px.png",
+  };
+  const p = await panelStarten({ alleTabs: [fremd], tab: fremd, startseiteModul: echt });
+  t.after(p.aufraeumen);
+  await p.sitzungHerstellen();
+
+  assert.equal(p.el("tabkarte-bild").getAttribute("src"), null, "die fremde Adresse wird nie geladen");
+  assert.equal(p.el("tabkarte-bild").hidden, true);
+  assert.equal(p.el("tabkarte-glyph").hidden, false, "stattdessen steht das Ersatzzeichen da");
+  /* Gegenprobe zur Regel selbst: Sie sagt hier wirklich Nein, und beim eigenen
+     Wirt Ja. Beide Antworten kommen aus DERSELBEN Funktion. */
+  assert.equal(echt.faviconQuelle(fremd).art, "zeichen");
+  assert.equal(
+    echt.faviconQuelle({ ...fremd, favIconUrl: "https://geizhals.de/favicon.ico" }).art,
+    "bild",
+  );
+});
+
+test("T4d — Derselbe Tabtitel heisst in beiden Karten gleich", async (t) => {
+  /*
+   * Selbst gefunden am 14.08.2026, und es ist die Fehlerart dieser Runde in
+   * ihrer leisesten Gestalt: Zwei Anzeigeflaechen zeigten denselben Wert nach
+   * zwei verschiedenen Regeln. Die Tabkarte ging durch `zitat` in panel.js,
+   * die Statuskarte durch `saeubern` in startseite.js — und seit `saeubern`
+   * auf die gemeinsame `anzeigeform` umgestellt ist, entscheiden die beiden
+   * verschieden: Ein Nullbreitenzeichen wurde hier zu einem LEERZEICHEN und
+   * dort ersatzlos entfernt. Auf demselben Bildschirm standen damit
+   * „Waren korb" und „Warenkorb" fuer einen Tab, und das eingefuegte
+   * Leerzeichen erfindet eine Wortgrenze, die es nie gab.
+   *
+   * Gegenprobe: Mit der eigenen Abschrift in `zitat` ist dieser Satz rot.
+   */
+  const echt = await import("../panel/startseite.js");
+  /* Aus Zahlen gebaut, damit in dieser Datei kein unsichtbares Zeichen steht. */
+  const unsichtbar = String.fromCharCode(0x200b);
+  const tab = {
+    id: 7,
+    url: "https://geizhals.de/warenkorb",
+    title: `Waren${unsichtbar}korb`,
+    active: true,
+  };
+  const p = await panelStarten({ alleTabs: [tab], tab, startseiteModul: echt });
+  t.after(p.aufraeumen);
+  await p.sitzungHerstellen();
+
+  const inDerTabkarte = p.el("tabkarte-titel").textContent;
+  const inDerStatuskarte = p.el("startseite").querySelector(".sa-start-ziel").textContent;
+  assert.equal(
+    inDerTabkarte,
+    inDerStatuskarte,
+    `zwei Namen fuer einen Tab: „${inDerTabkarte}" und „${inDerStatuskarte}"`,
+  );
+  assert.equal(inDerTabkarte, "Warenkorb", "und zwar der Name, den der Mensch auf der Seite liest");
 });
 
 test("T5 — Ein Tabwechsel zieht Liste, Hinweis und Modus nach", async (t) => {
@@ -4145,7 +4252,6 @@ test("C4 — Nach dem Wiederoeffnen steht die Dauerzeile wieder da, nicht nur be
    * Startseiten-Modul, damit auch die zweite Anzeige wirklich gemessen ist.
    */
   const echt = await import("../panel/startseite.js");
-  echt._zuruecksetzen();
   const p = await panelStarten({
     startseiteModul: echt,
     workerAntworten: {
@@ -4164,7 +4270,6 @@ test("C4 — Nach dem Wiederoeffnen steht die Dauerzeile wieder da, nicht nur be
     },
   });
   t.after(p.aufraeumen);
-  t.after(() => echt._zuruecksetzen());
   await new Promise((f) => setTimeout(f, 0));
 
   assert.ok(p.zustand.sitzung, "Vorbedingung: die Sitzung ist wiederhergestellt");
@@ -4181,7 +4286,6 @@ test("C4 — Nach dem Wiederoeffnen steht die Dauerzeile wieder da, nicht nur be
   /* Gegenprobe: Meldet der Dienst keinen Agenten, wird auch keiner behauptet.
      Eine Dauerzeile ohne Namen behauptete eine Fernsitzung, von der niemand
      weiss, wem sie gehoert. */
-  echt._zuruecksetzen();
   const q = await panelStarten({
     startseiteModul: echt,
     workerAntworten: {
@@ -4434,4 +4538,618 @@ test("T6 — Ein Ereignis waehrend eines laufenden Abgleichs wird nachgeholt, ni
   );
   assert.equal(p.zustand.aktuellerTab.id, 8, "und der Bestand steht danach auf dem neuen Tab");
   assert.match(p.el("verbinden-hinweis").textContent, /eBay/);
+});
+
+/* ================================================================== *
+ * VB — die Anzeige liest aus der Quelle, der sie gehoert
+ *
+ * Die Fehlerart hinter den Funden VERBINDUNG-1 bis VERBINDUNG-7 der Abnahme
+ * vom 14.08.2026 ist EINE, und sie hat zwei Haelften:
+ *
+ *   1. Ein Anzeigewert kam aus einer anderen Quelle als der Zustand, dem er
+ *      gehoert — die Statuskarte nannte den AKTIVEN Tab statt des
+ *      SITZUNGStabs, und sie tat es aus einem Wert, der schon vor dem Gelingen
+ *      gesetzt und nach dem Scheitern nie weggeraeumt wurde.
+ *   2. Ein Zustandswechsel zog nicht alle vier Anzeigeflaechen nach: Chip,
+ *      Hinweiszeile, Tabkarte und Statuskarte der Startseite. Drei von vier war
+ *      die Regel, und die vierte war jedes Mal die, um die es ging.
+ *
+ * Jeder Satz hier faehrt den Weg, den ein Mensch wirklich geht, jeder faehrt
+ * durch das ECHTE Startseiten-Modul, und jeder ist gegengeprobt worden:
+ * Reparatur zurueckgebaut, rot gemessen, wieder eingebaut, gruen gemessen. Was
+ * die Gegenprobe rot gemacht hat, steht beim jeweiligen Satz.
+ * ================================================================== */
+
+/* Alle Knoten unter einem Element — die Nachbildung kann `querySelectorAll`
+   nicht, und fuer „wie viele Knoepfe stehen da" braucht es mehr als den
+   ersten Treffer. */
+function alleKnotenUnter(el, raus = []) {
+  raus.push(el);
+  for (const k of el.kinder || []) if (typeof k !== "string") alleKnotenUnter(k, raus);
+  return raus;
+}
+
+function mitKlasseUnter(el, klasse) {
+  return alleKnotenUnter(el).filter((k) => String(k.className || "").split(/\s+/).includes(klasse));
+}
+
+/**
+ * Die Statuskarte der ECHTEN Startseite, so wie ein Mensch sie liest.
+ *
+ * Gelesen wird aus dem Baum, den src/panel/startseite.js wirklich gebaut hat,
+ * und nicht aus einer Rueckgabe: Was der Mensch sieht, steht im Baum.
+ */
+function startkarte(p) {
+  const wurzel = p.el("startseite");
+  const stand = wurzel.querySelector(".sa-start-stand");
+  const liste = wurzel.querySelector("ul");
+  return {
+    stand,
+    punkt: stand ? stand.querySelector(".sa-punkt").className : null,
+    satz: stand ? stand.querySelector(".sa-start-satz").textContent : null,
+    trennenVersteckt: stand ? stand.querySelector(".sa-trennen").hidden : null,
+    listeVersteckt: liste ? liste.hidden : null,
+    verbindenKnoepfe: mitKlasseUnter(wurzel, "sa-tab-verbinden").length,
+  };
+}
+
+/* Eine Seitenleiste mit dem echten Startseiten-Modul. */
+async function mitEchterStartseite(angaben = {}) {
+  const echt = await import("../panel/startseite.js");
+  const p = await panelStarten({ startseiteModul: echt, ...angaben });
+  /* Zwei Takte: Der Aufbau der Startseite haengt an `tabsHolen`. */
+  await new Promise((f) => setTimeout(f, 0));
+  await new Promise((f) => setTimeout(f, 0));
+  return p;
+}
+
+/* Eine laufende Sitzung, wie der Dienst sie beim Wiederoeffnen meldet. */
+const laufendeSitzung = (anders = {}) => ({
+  verbunden: true,
+  tabId: 8,
+  ursprungMuster: "https://www.ebay.de/*",
+  stufe: "write",
+  code: "AB12CD",
+  endetUm: Date.now() + 600000,
+  modus: "tab",
+  bereich: ["www.ebay.de"],
+  schrittmodus: "confirm_each",
+  ...anders,
+});
+
+test("VB1 — Die Karten nennen den Tab der SITZUNG, nie den gerade aktiven", async (t) => {
+  /*
+   * BLOCKER VERBINDUNG-1, zweimal gemessen. Die Statuskarte las
+   * `zustand.verbundenerTab || zustand.aktuellerTab`, und `verbundenerTab` wird
+   * beim Wiederoeffnen nur gesetzt, wenn der laufende Tab zufaellig der aktive
+   * ist. Sonst fiel die Anzeige auf den aktiven Tab zurueck.
+   *
+   * Der gemessene Fall: Dienst meldet eine laufende Sitzung auf Tab 8
+   * (www.ebay.de), aktiv ist chrome://extensions. Ergebnis war
+   * „Verbunden mit Erweiterungen", Tabkarte „Erweiterungen" / „extensions",
+   * gruener Punkt. Die Leiste behauptete damit eine Steuerung auf einer Seite,
+   * die rechte.sperrgrund() ausdruecklich verweigert, und geheilt haette das
+   * erst das naechste Tabereignis.
+   *
+   * Gegenprobe: Mit `zustand.verbundenerTab || zustand.aktuellerTab` in
+   * tabkarteZeichnen und startseitenStand ist dieser Satz rot.
+   */
+  const tabs = [
+    { id: 8, url: "https://www.ebay.de/sh/lst/active", title: "eBay, aktive Angebote" },
+    { id: 10, url: "chrome://extensions", title: "Erweiterungen", active: true },
+  ];
+  const p = await mitEchterStartseite({
+    alleTabs: tabs,
+    tab: tabs[1],
+    workerAntworten: { "link:zustand?": laufendeSitzung() },
+  });
+  t.after(p.aufraeumen);
+
+  assert.ok(p.zustand.sitzung, "Vorbedingung: die Sitzung ist wiederhergestellt");
+  assert.equal(p.zustand.tabId, 8, "Vorbedingung: sie gehoert Tab 8");
+  assert.equal(p.zustand.aktuellerTab.id, 10, "Vorbedingung: angesehen wird ein ganz anderer");
+
+  assert.equal(p.el("tabkarte-titel").textContent, "eBay, aktive Angebote");
+  assert.equal(p.el("tabkarte-adresse").textContent, "www.ebay.de");
+
+  const karte = startkarte(p);
+  assert.match(karte.satz, /eBay/, `die Statuskarte nennt den Sitzungstab: „${karte.satz}"`);
+  assert.ok(
+    !/Erweiterungen/.test(karte.satz),
+    `die Leiste behauptet eine Steuerung auf einer Browserseite: „${karte.satz}"`,
+  );
+  /* Und die Gegenprobe zur Sperre selbst: Auf dieser Seite koennte gar nichts
+     laufen. Ein Name, den der Verbindungsweg verweigern wuerde, darf in der
+     Statuskarte nie stehen. */
+  assert.equal(rechte.sperrgrund("chrome://extensions"), "browser");
+});
+
+test("VB2 — Ein gescheiterter Anlauf benennt nicht die naechste Sitzung", async (t) => {
+  /*
+   * VERBINDUNG-2, gemessen: `tabVerbindenMit` setzte `zustand.verbundenerTab`,
+   * bevor feststand, ob die Verbindung ueberhaupt zustande kommt, und
+   * aufbauAbbrechen raeumte die Angabe nirgends weg. Klick auf die eBay-Zeile
+   * (Tab 8) scheitert am Dienst, danach Verbindung ueber den Dialogweg auf den
+   * aktiven Tab 7: `zustand.tabId` = 7, `overlay:an` geht wirklich an Tab 7 —
+   * und die Karten sagten „eBay, aktive Angebote". Der Mensch liest, der Agent
+   * arbeite auf eBay, waehrend er auf geizhals.de klickt.
+   *
+   * Der Dialogweg ist Absicht und nicht Bequemlichkeit: Er setzt `tabId`, aber
+   * nicht `verbundenerTab`, und genau darin lag der Fund. Ueber den
+   * Ein-Klick-Weg haette der zweite Anlauf den alten Wert zufaellig
+   * ueberschrieben und den Fehler zugedeckt.
+   *
+   * Gegenprobe: Ohne das Wegraeumen in aufbauAbbrechen UND ohne die Pruefung
+   * der Kennung in tabZuKennung ist dieser Satz rot.
+   */
+  let runde = 0;
+  const p = await mitEchterStartseite({
+    alleTabs: TABS_GEMISCHT(),
+    workerAntworten: {
+      "link:verbinden": () => {
+        runde += 1;
+        return runde === 1 ? { ok: false, klartext: "Der Dienst mag nicht." } : sitzungAntwort();
+      },
+    },
+  });
+  t.after(p.aufraeumen);
+
+  const ebay = mitKlasseUnter(p.el("startseite"), "sa-tab").find((z) => /ebay/.test(z.textContent));
+  assert.ok(ebay, "Vorbedingung: das andere Fenster steht in der echten Liste");
+  await p.klickAuf(ebay.querySelector(".sa-tab-verbinden"));
+
+  assert.equal(p.zustand.sitzung, null, "Vorbedingung: der erste Anlauf ist wirklich gescheitert");
+  assert.equal(p.zustand.verbundenerTab, null, "und er laesst keinen Tab zurueck, den er nie bekommen hat");
+
+  await p.klick("verbinden-start");
+  await p.klick("verbinden");
+
+  assert.ok(p.zustand.sitzung, "Vorbedingung: die zweite Verbindung steht");
+  assert.equal(p.zustand.tabId, 7, "Vorbedingung: und zwar auf dem aktiven Tab");
+  assert.equal(p.el("tabkarte-titel").textContent, "Warenkorb");
+  const karte = startkarte(p);
+  assert.match(karte.satz, /Warenkorb/, `die Statuskarte folgt der Sitzung: „${karte.satz}"`);
+  assert.ok(!/eBay/.test(karte.satz), `der gescheiterte Anlauf spricht weiter mit: „${karte.satz}"`);
+});
+
+test("VB3 — Die Vorfuehrung zieht alle vier Anzeigeflaechen nach und nennt sich beim Namen", async (t) => {
+  /*
+   * VERBINDUNG-3, gemessen: `vorfuehrungStarten()` setzte `zustand.sitzung` und
+   * schaltete auf `aktiv`, rief aber nie `verbindungswegZeichnen()`. Zusammen
+   * mit der M7-Reparatur (die Startseite bleibt bei laufender Sitzung stehen)
+   * war die veraltete Statuskarte damit SICHTBAR: Chip „Vorfuehrung · Nur
+   * zusehen" und Sitzungsleiste — und daneben ein grauer Punkt mit „Waehle
+   * einen Tab, dann geht es los.", die Tabliste mit zwei bedienbaren
+   * Verbinden-Knoepfen und eine Tabkarte mit gruenem Punkt und LEEREM Titel.
+   * Ein Loch, das die Reparatur selbst gerissen hat.
+   *
+   * Zweitens sagt die Karte jetzt „Vorfuehrung" und nicht „Verbunden mit":
+   * Eine Vorfuehrung ist eine Sitzung der Oberflaeche und keine Steuerung, und
+   * eine Karte, die neben einem Chip „Vorfuehrung" das Wort „Verbunden"
+   * schreibt, ist derselbe Widerspruch zweier Anzeigeflaechen, nur leiser.
+   *
+   * Gegenprobe: Ohne verbindungswegZeichnen() in vorfuehrungStarten ist dieser
+   * Satz rot (grauer Punkt, „Waehle einen Tab", leerer Tabkartentitel).
+   */
+  const p = await mitEchterStartseite({
+    alleTabs: TABS_GEMISCHT(),
+    workerAntworten: { "link:verbinden": { ok: false, klartext: "Der Dienst mag nicht." } },
+  });
+  t.after(p.aufraeumen);
+
+  await p.klick("verbinden-tab");
+  assert.equal(p.zustand.sitzung, null, "Vorbedingung: der Anlauf ist gescheitert");
+  assert.equal(p.el("vorfuehrung").hidden, false, "Vorbedingung: die Vorfuehrung wird angeboten");
+
+  await p.klick("vorfuehrung");
+
+  assert.ok(p.zustand.sitzung, "Vorbedingung: die Vorfuehrung laeuft");
+  assert.equal(p.zustand.sitzung.vorfuehrung, true);
+  assert.equal(p.el("app").dataset.state, "aktiv");
+
+  /* 1. und 2.: Chip und Sitzungsleiste — die beiden, die schon vorher stimmten. */
+  assert.match(p.el("zustand-text").textContent, /Vorführung/);
+  assert.equal(p.el("sitzungsleiste").hidden, false);
+
+  /* 3.: die Tabkarte, bis dahin gruener Punkt ueber leerem Titel. */
+  assert.equal(p.el("tabkarte").hidden, false);
+  assert.equal(p.el("tabkarte-titel").textContent, "Warenkorb", "keine leere Karte neben einem gruenen Punkt");
+
+  /* 4.: die Statuskarte der Startseite, um die es im Kriterium geht. */
+  const karte = startkarte(p);
+  assert.equal(karte.punkt, "sa-punkt probe", "die Vorfuehrung traegt nicht das Gruen einer echten Sitzung");
+  assert.match(karte.satz, /Vorführung/, `die Karte nennt sie beim Namen: „${karte.satz}"`);
+  assert.ok(!/Verbunden/.test(karte.satz), `eine Vorfuehrung ist keine Verbindung: „${karte.satz}"`);
+  assert.ok(!/Wähle einen Tab/.test(karte.satz), `die Karte steht auf dem Stand von vorhin: „${karte.satz}"`);
+  assert.equal(karte.listeVersteckt, true, "und die Einladung zu einem zweiten Antrag ist weg");
+});
+
+test("VB4 — Zwischen Klick und Sitzung sagt auch die Statuskarte, dass gearbeitet wird", async (t) => {
+  /*
+   * VERBINDUNG-4, gemessen mit haengendem `link:verbinden`, also dem
+   * MV3-Kaltstartfall: Chip „Ich stelle die Verbindung her …", Hinweiszeile
+   * dasselbe, #verbinden-tab abgeschaltet — und im selben Augenblick
+   * Startseitenkarte mit grauem Punkt und „Waehle einen Tab, dann geht es
+   * los.", Tabliste sichtbar, zwei Verbinden-Knoepfe, davon null abgeschaltet.
+   * Zwei Statusflaechen nebeneinander sagten das Gegenteil voneinander, und die
+   * stehengebliebene lud zum zweiten Klick ein. Der Riegel faengt ihn, die
+   * Anzeige tat es nicht.
+   *
+   * Gegenprobe: Ohne startseiteZeichnen() in aufbauSpiegeln ist dieser Satz rot.
+   */
+  let loesen;
+  const langsam = new Promise((f) => {
+    loesen = f;
+  });
+  const p = await mitEchterStartseite({
+    alleTabs: TABS_GEMISCHT(),
+    workerAntworten: { "link:verbinden": () => langsam },
+  });
+  t.after(p.aufraeumen);
+
+  assert.equal(startkarte(p).punkt, "sa-punkt", "Vorbedingung: vorher steht die Karte auf frei");
+
+  const lauf = p.klick("verbinden-tab");
+  await new Promise((f) => setTimeout(f, 0));
+  await new Promise((f) => setTimeout(f, 0));
+
+  assert.equal(p.zustand.sitzung, null, "Vorbedingung: die Sitzung gibt es noch nicht");
+  const karte = startkarte(p);
+  assert.equal(karte.punkt, "sa-punkt baut", "der Punkt zeigt die Arbeit, und nicht die Ruhe");
+  assert.match(karte.satz, /Verbindung her/, `die Karte sagt dasselbe wie der Chip: „${karte.satz}"`);
+  assert.equal(
+    p.el("zustand-text").textContent.includes("Verbindung her"),
+    true,
+    "Gegenprobe: der Chip sagt es auch, und zwar mit demselben Satz",
+  );
+  assert.equal(karte.listeVersteckt, true, "und die Liste laedt nicht zum zweiten Klick ein");
+  assert.equal(karte.trennenVersteckt, true, "beenden laesst sich hier noch nichts");
+
+  loesen(sitzungAntwort());
+  await lauf;
+
+  const danach = startkarte(p);
+  assert.equal(danach.punkt, "sa-punkt an", "danach ist es eine echte Sitzung");
+  assert.match(danach.satz, /Verbunden mit/, `und die Karte sagt es: „${danach.satz}"`);
+});
+
+test("VB4b — Scheitert der Aufbau, geht auch die Statuskarte zurueck", async (t) => {
+  /* Die andere Haelfte von VERBINDUNG-4: Eine Arbeitsanzeige, die nur beim
+     Gelingen zurueckgeht, laesst die Karte fuer immer auf „Ich stelle die
+     Verbindung her …" stehen, waehrend nichts mehr laeuft. */
+  const p = await mitEchterStartseite({
+    alleTabs: TABS_GEMISCHT(),
+    workerAntworten: { "link:verbinden": { ok: false, klartext: "Der Dienst mag nicht." } },
+  });
+  t.after(p.aufraeumen);
+
+  await p.klick("verbinden-tab");
+
+  const karte = startkarte(p);
+  assert.equal(p.zustand.sitzung, null, "Vorbedingung: es ist nichts entstanden");
+  assert.equal(karte.punkt, "sa-punkt", "die Karte steht wieder auf frei");
+  assert.match(karte.satz, /Wähle einen Tab/, `und sagt, wie es weitergeht: „${karte.satz}"`);
+  assert.equal(karte.listeVersteckt, false, "die Liste ist der Weg zurueck und steht wieder da");
+});
+
+test("VB5 — Der Aufbau der Startseite laesst den Namen des Bereichs stehen", async (t) => {
+  /*
+   * VERBINDUNG-5, gemessen: `aufbauen()` ruft `wurzel.replaceChildren()`. Als
+   * Anker bekam es `#startseite`, und darin standen zwei Knoten, die ihm nicht
+   * gehoeren — `#startseite-titel`, auf das das `aria-labelledby` des
+   * Abschnitts zeigt, und `#startseite-liste`, der Anker der Ersatzfassung in
+   * panel.js. Nach dem Aufbau trug `#startseite` keinen einzigen Knoten mit
+   * Kennung mehr: Der Bereich verlor seinen Namen fuer den Bildschirmleser,
+   * und Vorlesen ist der Hauptbedienweg des Inhabers.
+   *
+   * Gegenprobe: Mit `$("startseite")` als Anker in startseiteZeichnen ist
+   * dieser Satz rot.
+   */
+  const p = await mitEchterStartseite({ alleTabs: TABS_GEMISCHT() });
+  t.after(p.aufraeumen);
+
+  const kinder = p.el("startseite").kinder.filter((k) => typeof k !== "string");
+  assert.ok(
+    kinder.some((k) => k.id === "startseite-titel"),
+    "die Ueberschrift, auf die aria-labelledby zeigt, ist aus dem Dokument geflogen",
+  );
+  assert.ok(
+    kinder.some((k) => k.id === "startseite-liste"),
+    "und der Anker der Ersatzfassung mit ihr",
+  );
+  assert.match(
+    html,
+    /<section id="startseite"[^>]*aria-labelledby="startseite-titel"/,
+    "Gegenprobe: der Abschnitt holt seinen Namen wirklich von dort",
+  );
+  /* Das Modul hat trotzdem wirklich gezeichnet, der Anker ist nicht bloss
+     unberuehrt geblieben. */
+  assert.ok(p.el("startseite").querySelector(".sa-start-stand"), "die echte Startseite steht darin");
+  /* Fuer das Auge weicht die Ueberschrift, weil das Modul seine eigene
+     mitbringt; als Name des Abschnitts gilt sie weiter. */
+  assert.match(p.el("startseite-titel").className, /\bsr\b/, "zwei Ueberschriften uebereinander");
+
+  /* Und ohne Modul bleibt sie sichtbar: Dann ist sie die einzige, die die
+     Ersatzliste hat. */
+  const ersatz = await panelStarten({ alleTabs: TABS_GEMISCHT() });
+  t.after(ersatz.aufraeumen);
+  assert.equal(ersatz.el("startseite-titel").className, "startseite-titel");
+});
+
+test("VB5b — Ohne Anker zeichnet die Ersatzfassung nichts und wirft nichts", async (t) => {
+  /*
+   * Der zweite Riegel zu VERBINDUNG-5, und er ist der teurere Teil des Fundes:
+   * Ist `#startseite-liste` einmal aus dem Dokument geworfen, liefert
+   * `getElementById` im Browser `null`, und die Ersatzfassung lief auf
+   * `null.replaceChildren()`. Diese Ausnahme reisst `verbindungswegZeichnen()`
+   * mit — und das steht in `beenden()` VOR `link:trennen`. Der Preis waere ein
+   * Mensch ohne Stopp.
+   *
+   * Gefahren wird hier ausnahmsweise die Funktion selbst und nicht der
+   * Produktivweg: Die Nachbildung legt jedes Element mit Kennung von sich aus
+   * an, sie kann einen fehlenden Anker gar nicht darstellen. Der Riegel gilt
+   * fuer den Browser, und dort ist er messbar nur so beschreibbar.
+   */
+  const p = await panelStarten();
+  t.after(p.aufraeumen);
+  for (const kein of [null, undefined, {}]) {
+    assert.doesNotThrow(() => p.f.tabListeSelbstZeichnen(kein, { tabs: [], aufWaehlen: () => {} }));
+  }
+  /* Gegenprobe: Mit einem Anker zeichnet dieselbe Funktion wirklich. */
+  p.f.tabListeSelbstZeichnen(p.el("startseite-liste"), {
+    tabs: [{ id: 7, url: "https://geizhals.de/warenkorb", title: "Warenkorb" }],
+    aufWaehlen: () => {},
+  });
+  assert.equal(listenZeilen(p).length, 1);
+});
+
+test("VB6 — Verschwindet der Tab der Sitzung, nennt ihn die Leiste nicht weiter", async (t) => {
+  /*
+   * VERBINDUNG-7, gemessen: `tabsAuffrischen()` ueberschrieb
+   * `zustand.verbundenerTab` nur, wenn der Tab noch im Bestand stand. Sitzung
+   * auf Tab 8, dann onRemoved fuer Tab 8 — Ergebnis unveraendert:
+   * Startseitenkarte gruener Punkt und „Verbunden mit eBay, aktive Angebote",
+   * Tabkarte „eBay, aktive Angebote", Chip „Aktiv · Bedienen". Die Leiste
+   * nannte als Ziel einen Tab, den es nicht mehr gab.
+   *
+   * Was hier NICHT behauptet wird: dass die Sitzung damit endet. Das entscheidet
+   * der Hintergrunddienst, und an `chrome.tabs.onRemoved` haengt dort heute
+   * niemand (steht als Fremdbedarf). Diese Leiste hoert auf, einen Namen zu
+   * nennen, den sie nicht mehr belegen kann.
+   *
+   * Gegenprobe: Mit `if (gefunden)` in tabsAuffrischen ist dieser Satz rot.
+   */
+  /* Verbunden wird ueber die echte Zeile im anderen Fenster, also den Weg, auf
+     dem die Leiste den Tab-Datensatz wirklich in die Hand bekommt. Nur so
+     misst dieser Satz das Wegraeumen in tabsAuffrischen und nicht bloss die
+     Kennungspruefung in tabZuKennung, die schon VB1 misst. */
+  const tabs = TABS_GEMISCHT();
+  const p = await mitEchterStartseite({
+    alleTabs: tabs,
+    workerAntworten: { "link:verbinden": sitzungAntwort() },
+  });
+  t.after(p.aufraeumen);
+
+  const ebayZeile = mitKlasseUnter(p.el("startseite"), "sa-tab").find((z) => /ebay/.test(z.textContent));
+  assert.ok(ebayZeile, "Vorbedingung: das andere Fenster steht in der echten Liste");
+  await p.klickAuf(ebayZeile.querySelector(".sa-tab-verbinden"));
+
+  assert.ok(p.zustand.sitzung, "Vorbedingung: die Sitzung steht");
+  assert.equal(p.zustand.tabId, 8, "Vorbedingung: die Sitzung haengt an Tab 8");
+  assert.equal(p.zustand.verbundenerTab && p.zustand.verbundenerTab.id, 8, "Vorbedingung: sein Datensatz auch");
+  assert.match(startkarte(p).satz, /eBay/, "Vorbedingung: und die Karte nennt ihn");
+
+  tabs.splice(
+    tabs.findIndex((x) => x.id === 8),
+    1,
+  );
+  await p.tabEreignis("onRemoved", 8, { windowId: 1, isWindowClosing: false });
+
+  assert.equal(p.zustand.verbundenerTab, null, "der Datensatz eines Tabs, den es nicht gibt");
+  const karte = startkarte(p);
+  assert.ok(!/eBay/.test(karte.satz), `die Karte nennt einen Tab, den es nicht mehr gibt: „${karte.satz}"`);
+  assert.match(karte.satz, /Verbunden/, `die Sitzung selbst laeuft weiter und wird auch so genannt: „${karte.satz}"`);
+  assert.equal(
+    p.el("tabkarte-titel").textContent,
+    "www.ebay.de",
+    "die Tabkarte faellt auf den Ursprung zurueck, fuer den der Mensch freigegeben hat",
+  );
+});
+
+test("VB7 — Der Modus gilt dem Tab, den der Mensch ansieht, nicht dem Anlauf von vorhin", async (t) => {
+  /*
+   * Dieselbe Fehlerart an einer Stelle, die kein Fund genannt hat, selbst
+   * gefunden beim Durchgehen aller Leser von `zustand.tabId`: `modusTabId()`
+   * gab die Kennung zurueck, sobald sie eine Zahl war — und sie ueberlebt einen
+   * gescheiterten Anlauf und einen geschlossenen Dialog. Der Kommentar darueber
+   * beschrieb die richtige Regel („Laeuft eine Sitzung, ist es ihrer; sonst der
+   * Tab, mit dem der eine Klick verbinden wuerde"), der Code hielt sie nicht
+   * ein. Folge: Wer nach einem Fehlversuch den Betriebsmodus umstellte, stellte
+   * ihn fuer den Tab von vorhin um — und der Umschalter daneben sprach ueber
+   * einen Tab, den der Mensch gar nicht ansieht. Das ist Vertrag §2, und der
+   * Modus ist die Stufe, die entscheidet, wieviel ohne Rueckfrage geschieht.
+   *
+   * Gegenprobe: Ohne die Bedingung `zustand.sitzung || zustand.aufbau !== null`
+   * in modusTabId ist dieser Satz rot (tabId 8 statt 7).
+   */
+  const p = await mitEchterStartseite({
+    alleTabs: TABS_GEMISCHT(),
+    workerAntworten: { "link:verbinden": { ok: false, klartext: "Der Dienst mag nicht." } },
+  });
+  t.after(p.aufraeumen);
+
+  const ebay = mitKlasseUnter(p.el("startseite"), "sa-tab").find((z) => /ebay/.test(z.textContent));
+  await p.klickAuf(ebay.querySelector(".sa-tab-verbinden"));
+  assert.equal(p.zustand.sitzung, null, "Vorbedingung: der Anlauf auf Tab 8 ist gescheitert");
+  assert.equal(p.zustand.tabId, 8, "Vorbedingung: seine Kennung steht noch, sie ist das Ziel des Versuchs");
+
+  p.spurLeeren();
+  await p.klick("modus-auto");
+
+  const gesetzt = p.anWorkerVoll().filter((n) => n.typ === "modus:setzen");
+  assert.equal(gesetzt.length, 1, "genau eine Meldung an den Dienst");
+  assert.equal(gesetzt[0].tabId, 7, "und zwar fuer den Tab, den der Mensch ansieht");
+
+  /* Gegenprobe: Laeuft eine Sitzung, gilt SIE und nicht der aktive Tab. */
+  const q = await mitEchterStartseite({
+    alleTabs: TABS_GEMISCHT(),
+    workerAntworten: { "link:zustand?": laufendeSitzung() },
+  });
+  t.after(q.aufraeumen);
+  assert.equal(q.zustand.tabId, 8, "Vorbedingung: die Sitzung haengt an Tab 8");
+  assert.equal(q.zustand.aktuellerTab.id, 7, "Vorbedingung: angesehen wird Tab 7");
+  q.spurLeeren();
+  await q.klick("modus-auto");
+  assert.equal(
+    q.anWorkerVoll().filter((n) => n.typ === "modus:setzen")[0].tabId,
+    8,
+    "der Modus der laufenden Sitzung gehoert ihrem Tab",
+  );
+});
+
+test("VB8 — Ohne Agentennamen steht kein haengender Doppelpunkt da", async (t) => {
+  /*
+   * BRUECKE-6, gemessen: `link:cloud-sitzung` mit `an:true, agent:""` ->
+   * `#cloud-zeile.hidden=false`, `#cloud-agent.textContent=""`. Sichtbar blieb
+   * „Cloud-Sitzung aktiv:" und danach nichts. Da der Name im Alltagsfall leer
+   * ist (BRUECKE-7: jeder Rahmen MIT Agentennamen stirbt heute an
+   * `agent_not_permitted`), ist das der Normalzustand und nicht der
+   * Ausnahmefall; ein Bildschirmleser liest den Doppelpunkt und dann Stille.
+   *
+   * Gegenprobe: Mit dem festen Satz aus panel.html ist dieser Satz rot.
+   */
+  const p = await panelStarten();
+  t.after(p.aufraeumen);
+
+  p.melden({ typ: "link:cloud-sitzung", an: true, agent: "" });
+
+  assert.equal(p.el("cloud-zeile").hidden, false, "dass eine Fernsitzung laeuft, steht weiterhin da");
+  assert.equal(p.el("cloud-wort").textContent, "Cloud-Sitzung aktiv", "ohne Namen kein Doppelpunkt");
+  assert.equal(p.el("cloud-agent").textContent, "", "und kein Name, den niemand belegt hat");
+  assert.equal(p.el("cloud-agent").hidden, true, "das leere Feld steht auch nicht als Luecke da");
+  assert.equal(p.zustand.cloudAgent, null);
+
+  /* Mit Namen bleibt alles, wie es war — der Doppelpunkt gehoert zum Namen. */
+  p.melden({ typ: "link:cloud-sitzung", an: true, agent: "SMarTrCEO" });
+  assert.equal(p.el("cloud-wort").textContent, "Cloud-Sitzung aktiv:");
+  assert.equal(p.el("cloud-agent").textContent, "SMarTrCEO");
+  assert.equal(p.el("cloud-agent").hidden, false);
+});
+
+test("VB9 — Beim Wiederoeffnen behauptet die Leiste keine Fernsitzung, die ihr niemand gemeldet hat", async (t) => {
+  /*
+   * BRUECKE-1, halb geschlossen, und die andere Haelfte steht als Fremdbedarf.
+   *
+   * Gemessen: `link:zustand?` liefert heute weder `agent` noch eine Angabe,
+   * DASS es eine Cloud-Sitzung ist — worker.js:732 gibt den Namen nur heraus,
+   * wenn er in AGENTEN steht, und ein Rahmen MIT Agentennamen stirbt an
+   * `agent_not_permitted`, weil die Matrix ab Werk leer ist. Die arbeitende
+   * Sitzung hat also keinen Namen, und nach dem Wiederoeffnen fehlte die
+   * Dauerzeile aus §8.4 vollstaendig.
+   *
+   * Was diese Leiste tun kann, tut sie: Sie nimmt beide Auskuenfte entgegen
+   * — `cloud` sagt DASS, `agent` sagt WER — und erfindet keine von beiden.
+   * Ohne Auskunft keine Zeile und keine Behauptung.
+   *
+   * Gegenprobe: Mit `cloudSitzungZeigen(!!agent, agent)` ist die erste Haelfte
+   * dieses Satzes rot.
+   */
+  const ohne = await panelStarten({
+    workerAntworten: { "link:zustand?": laufendeSitzung() },
+  });
+  t.after(ohne.aufraeumen);
+  assert.ok(ohne.zustand.sitzung, "Vorbedingung: es laeuft eine Sitzung");
+  assert.equal(ohne.el("cloud-zeile").hidden, true, "ohne jede Auskunft keine Dauerzeile");
+  assert.equal(ohne.zustand.cloudAgent, null);
+
+  /* Sagt der Dienst, DASS es eine Fernsitzung ist, steht sie da — auch ohne
+     Namen, denn genau das ist der arbeitsfaehige Betriebsfall. */
+  const mit = await panelStarten({
+    workerAntworten: { "link:zustand?": laufendeSitzung({ cloud: true }) },
+  });
+  t.after(mit.aufraeumen);
+  assert.equal(mit.el("cloud-zeile").hidden, false, "die Dauerzeile aus §8.4 steht wieder da");
+  assert.equal(mit.el("cloud-wort").textContent, "Cloud-Sitzung aktiv", "ohne Namen ohne Doppelpunkt");
+  assert.equal(mit.el("cloud-agent").hidden, true);
+  assert.equal(mit.zustand.cloudAgent, null, "und ein Name wird trotzdem nicht erfunden");
+});
+
+test("VB10 — Auch die Freigabefrage selbst wird entschaerft, bevor sie dasteht und gesprochen wird", async (t) => {
+  /*
+   * Selbst gefunden am 14.08.2026, beim Durchgehen jeder Stelle, an der ein
+   * Anzeigewert aus einer Nachricht kommt: `link:schritt-freigabe` reichte
+   * `n.frage` roh in die Karte und in die Ansage. Dass darin nie Text von der
+   * besuchten Seite steht, ist eine Zusage des Absenders und keine Eigenschaft
+   * dieser Anzeige — und sie ist die einzige, die VORGELESEN wird und an der
+   * eine Entscheidung haengt.
+   *
+   * Gegenprobe: Mit `String(n.frage || …)` ist dieser Satz rot.
+   */
+  const p = await panelStarten();
+  t.after(p.aufraeumen);
+  await p.sitzungHerstellen();
+
+  /* Aus Zahlen gebaut, damit in dieser Datei kein einziges davon steht. */
+  const bell = String.fromCharCode(7);
+  const nullbreite = String.fromCharCode(0x200b);
+  const richtungsmarke = String.fromCharCode(0x202e);
+  const frage = `Soll ich${bell} auf ${nullbreite}Kaufen${richtungsmarke} klicken?${"X".repeat(500)}`;
+
+  const antwort = p.frageStellen({ typ: "link:schritt-freigabe", frage, quelle: "Kaufen", frist: 9000 });
+
+  const gezeigt = p.el("freigabe-text").textContent;
+  assert.ok(!steuerzeichenDrin(gezeigt), `Steuerzeichen in der Freigabefrage: ${JSON.stringify(gezeigt)}`);
+  assert.ok(gezeigt.length <= 301, `die Frage wird gedeckelt, gemessen: ${gezeigt.length}`);
+  assert.match(gezeigt, /^Soll ich auf Kaufen klicken\?/, "und der Satz bleibt der, den der Mensch lesen soll");
+  assert.ok(
+    !steuerzeichenDrin(p.el("ansage").textContent),
+    "und was vorgelesen wird, traegt sie erst recht nicht",
+  );
+
+  await p.klick("freigabe-nein");
+  assert.equal((await antwort).ja, false, "Gegenprobe: die Karte beantwortet die Frage weiterhin");
+});
+
+test("VB11 — Eine fremde Ansicht, die wirft, nimmt dem Menschen nicht den Stopp", async (t) => {
+  /*
+   * Selbst gefunden am 14.08.2026, als Gegenstueck zur zweiten Haelfte von
+   * VERBINDUNG-5: `startseiteZeichnen()` laeuft in `verbindungswegZeichnen()`,
+   * und das steht in `beenden()` VOR `link:trennen`. Eine Ausnahme aus
+   * src/panel/startseite.js — einer Datei, die einem anderen Bereich gehoert —
+   * riss damit den ganzen Abbau mit: kein `link:trennen` an den Dienst, kein
+   * `overlay:aus` an den Tab, kein Seitenrecht zurueck. Der Mensch drueckt
+   * Stopp, und der Agent behaelt seine Rechte.
+   *
+   * Gegenprobe: Ohne das try/catch in startseiteZeichnen ist dieser Satz rot.
+   */
+  const echt = await import("../panel/startseite.js");
+  let boese = false;
+  const p = await panelStarten({
+    alleTabs: TABS_GEMISCHT(),
+    startseiteModul: {
+      ...echt,
+      aufbauen(wurzel, dienste) {
+        const griff = echt.aufbauen(wurzel, dienste);
+        const echterStand = griff.standSetzen;
+        griff.standSetzen = (stand) => {
+          if (boese) throw new Error("die fremde Ansicht ist kaputt");
+          return echterStand(stand);
+        };
+        return griff;
+      },
+    },
+  });
+  t.after(p.aufraeumen);
+  await p.sitzungHerstellen();
+  assert.ok(p.zustand.sitzung, "Vorbedingung: es laeuft etwas");
+  p.alleSpurenLeeren();
+
+  boese = true;
+  await p.f.beenden("nutzer");
+
+  assert.equal(p.zustand.sitzung, null, "die Sitzung ist wirklich beendet");
+  assert.ok(p.anWorker().includes("link:trennen"), `der Dienst hat das Ende erfahren: ${p.anWorker().join(", ")}`);
+  assert.ok(p.anTab().includes("overlay:aus"), "der Rahmen geht von der Seite");
+  assert.ok(p.rechteRueckgaben() > 0, "und das Seitenrecht geht zurueck");
+  assert.equal(p.el("app").dataset.state, "bereit", "die Anzeige steht auf dem Ruhezustand");
 });

@@ -288,6 +288,10 @@ body {
 
 .startseite { display: grid; gap: 4px; }
 .startseite-titel { font-size: 15px; color: var(--leise); }
+/* Der Anker, in den src/panel/startseite.js baut. Die Überschrift darüber
+   bleibt im Dokument, weil aria-labelledby des Abschnitts auf sie zeigt; für
+   das Auge nimmt panel.js sie mit .sr weg, sobald das Modul seine eigene
+   mitbringt (Befund VERBINDUNG-5 vom 14.08.2026). */
 .startseite-liste { display: grid; gap: 4px; }
 .tabzeile {
   display: flex; align-items: center; gap: 8px; width: 100%;

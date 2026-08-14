@@ -89,6 +89,48 @@ const ABLAGE = "chat_lauf";
    den holt die Fortsetzung aus der Kontoablage (konto.js). */
 let lauf = null; // { taskId, contextId, ausweis, abbruch }
 
+/* ------------------------------------------------------------------ *
+ * Die Abbruchmarke — der Wiedereintritt nach `await`
+ *
+ * DER GRUNDSATZ (er steht ausführlich in `net/link.js`, hier gilt er wörtlich
+ * genauso):
+ *
+ *   **Nach einem Not-Aus darf kein Weg mehr etwas WIEDERHERSTELLEN, auch
+ *   nicht ein Weg, der VOR dem Not-Aus begonnen hat.**
+ *
+ * Befund NOTAUS-1 vom 14.08.2026, gemessen über den Produktivweg `chat:senden`:
+ * Der Mensch schickt eine Frage und zieht die Reissleine, WÄHREND
+ * `POST /chat/message` noch unterwegs ist. Das Fenster ist die ganze
+ * Antwortzeit des Gateways, bis zu FRIST_ANFRAGE = 12 Sekunden.
+ * `chatAbbrechen` findet in diesem Augenblick nichts: `lauf` ist null,
+ * `chat_lauf` leer, es geht kein `/chat/cancel` hinaus. Antwortet der POST
+ * danach, baute `chatStarten` den ganzen Botengang neu auf — Wecker,
+ * `chat_lauf` in `storage.session`, `weiterAbholen`. Die Netzspur zeigte
+ * `/chat/poll` bei +33 ms und +2035 ms NACH dem Not-Aus und `/chat/cancel`
+ * null Mal. Der Auftrag lief bis zu 300 Takte, also zehn Minuten, kostete
+ * Guthaben, und weil `chat_lauf` in `storage.session` steht, nahm
+ * `wacheLaufen` das Abholen nach jedem Neustart des Dienstarbeiters wieder auf.
+ *
+ * Warum eine Zählung und nicht das `AbortController`, das hier ohnehin steht:
+ * Der Controller gehört einem BESTEHENDEN Botengang und bricht dessen Warten
+ * ab. Genau den gibt es in dem gemessenen Augenblick nicht — der Not-Aus fällt
+ * in die Lücke, bevor er entsteht. Eine Zahl, die bei jedem Abbruch
+ * weiterzählt, misst dagegen, ob die Welt beim Wiedereintritt noch dieselbe
+ * ist, und das ist die Frage, auf die es ankommt.
+ * ------------------------------------------------------------------ */
+
+let abbruchmarke = 0;
+
+/** Die Marke, die ein Weg sich beim Eintritt merkt. */
+export function abbruchmarkeJetzt() {
+  return abbruchmarke;
+}
+
+/** Gilt die gemerkte Marke noch, oder wurde zwischendurch abgebrochen? */
+export function markeGilt(marke) {
+  return marke === abbruchmarke;
+}
+
 function melden(nachricht) {
   chrome.runtime.sendMessage(nachricht).catch(() => {});
 }
@@ -342,15 +384,73 @@ async function laufEnde() {
   }
 }
 
+/*
+ * Den Wecker stellen — an EINER Stelle.
+ *
+ * Er stand bis zu dieser Runde dreimal wörtlich im Quelltext (`chatStarten`,
+ * `chatFortsetzen`, und in `wacheLaufen` fehlte er). Drei Abschriften einer
+ * Zusage laufen auseinander, sobald eine von ihnen angefasst wird — das ist
+ * dieselbe Bauform wie die zweite Abschrift von `saeubern` (Festlegung F4).
+ */
+async function weckerStellen() {
+  try {
+    /* Das Netz unter dem Abfragen: weckt den Worker, falls Chrome ihn
+       zwischendurch beendet. 0,5 Minuten ist der kleinste erlaubte Wert. */
+    await chrome.alarms.create(WECKER, { periodInMinutes: 0.5 });
+    return true;
+  } catch (_) {
+    /* Ohne Wecker fehlt nur das Netz — die Seitenleiste holt notfalls nach. */
+    return false;
+  }
+}
+
+/*
+ * Den Auftrag beim Server stoppen (POST /chat/cancel).
+ *
+ * Er stand als Rumpf in `chatAbbrechen` und wird jetzt auch von `chatStarten`
+ * gebraucht: Wer nach dem Not-Aus mit einer frischen Auftragsnummer aus dem
+ * `await` zurückkommt, hält den EINZIGEN Beleg dafür in der Hand, dass es
+ * diesen Auftrag beim Server gibt. Liesse er ihn fallen, liefe er dort zehn
+ * Minuten weiter und kostete Guthaben — „`/chat/cancel` null Mal" war die
+ * Messung.
+ *
+ * Wirft nie. Der Stopp beim Server ist eine Höflichkeit, keine Bedingung.
+ */
+async function auftragStoppen(contextId, ausweis = null) {
+  if (!contextId) return false;
+  try {
+    const marke = ausweis || (await ausweisAusAblage())?.token || null;
+    if (!marke) return false;
+    await anfragen("/api/v1/chat/cancel", {
+      methode: "POST",
+      ausweis: marke,
+      kopfzeilen: { "X-Client": CHAT_KLIENT },
+      koerper: { context_id: String(contextId) },
+    });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 async function weiterAbholen() {
   if (!lauf) return;
   const der = lauf;
+  /* Die Marke DIESES Botengangs. Alles hinter dem `await` unten ist eine
+     Meldung an den Menschen; nach einem Not-Aus ist das eine Antwort, auf die
+     niemand mehr wartet. */
+  const meineMarke = abbruchmarke;
   try {
     const ergebnis = await antwortAbholen({
       taskId: der.taskId,
       ausweis: der.ausweis,
       signal: der.abbruch.signal,
     });
+    /* Wiedereintritt: Kam der Not-Aus, während die letzte Abfrage lief, wird
+       weder gemeldet noch aufgeräumt — `chatAbbrechen` hat beides schon getan,
+       und `laufEnde()` würde einen inzwischen neu begonnenen Botengang
+       abräumen. */
+    if (!markeGilt(meineMarke)) return;
     await laufEnde();
     melden({
       typ: "chat:antwort",
@@ -360,6 +460,7 @@ async function weiterAbholen() {
     });
   } catch (fehler) {
     const abgebrochen = fehler instanceof NetzFehler && fehler.kennung === "abgebrochen";
+    if (!markeGilt(meineMarke)) return;
     await laufEnde();
     if (abgebrochen) return; /* Neues Gespräch angefangen — kein Fehler. */
     melden({
@@ -371,6 +472,13 @@ async function weiterAbholen() {
     });
   }
 }
+
+/*
+ * Der Satz, den ein Mensch bekommt, dessen Frage vom Not-Aus überholt wurde.
+ * Er sagt, was wirklich passiert ist, und erfindet keinen Fehler.
+ */
+const ABGEBROCHEN_TEXT =
+  "Du hast gestoppt, während die Frage unterwegs war. Ich habe den Auftrag beim Dienst wieder zurückgezogen.";
 
 /*
  * Eine Frage losschicken und das Abholen anwerfen. Antwortet der Seitenleiste
@@ -394,6 +502,10 @@ export async function chatStarten({ text, contextId = null, ausweis, modus = "no
     };
   }
 
+  /* Die Marke dieses Starts, gemerkt VOR dem einzigen langen `await` dieser
+     Funktion. Sie ist die ganze Reparatur von NOTAUS-1. */
+  const meineMarke = abbruchmarke;
+
   let start;
   try {
     start = await frageSenden({ text, contextId, ausweis, modus });
@@ -405,19 +517,50 @@ export async function chatStarten({ text, contextId = null, ausweis, modus = "no
     };
   }
 
-  lauf = {
+  /*
+   * ERSTE Prüfung des Wiedereintritts — die gemessene Stelle.
+   *
+   * Der Not-Aus ist gefallen, während `POST /chat/message` unterwegs war. Ab
+   * hier wird NICHTS mehr aufgebaut: kein `lauf`, kein `chat_lauf` in der
+   * Ablage, kein Wecker, kein `weiterAbholen`. Stattdessen wird der Auftrag,
+   * den das Gateway soeben angelegt hat, dort auch wieder gestoppt — diese
+   * Funktion hält die einzige Kennung davon in der Hand.
+   */
+  if (!markeGilt(meineMarke)) {
+    await auftragStoppen(start.contextId, ausweis);
+    return { ok: false, kennung: "abgebrochen", klartext: ABGEBROCHEN_TEXT };
+  }
+
+  const meiner = {
     taskId: start.taskId,
     contextId: start.contextId,
     ausweis,
     abbruch: new AbortController(),
   };
+  lauf = meiner;
   await laufSchreiben({ taskId: start.taskId, contextId: start.contextId });
-  try {
-    /* Das Netz unter dem Abfragen: weckt den Worker, falls Chrome ihn
-       zwischendurch beendet. 0,5 Minuten ist der kleinste erlaubte Wert. */
-    await chrome.alarms.create(WECKER, { periodInMinutes: 0.5 });
-  } catch (_) {
-    /* Ohne Wecker fehlt nur das Netz — die Seitenleiste holt notfalls nach. */
+  await weckerStellen();
+
+  /*
+   * ZWEITE Prüfung. `laufSchreiben` und `weckerStellen` sind zwei IPC-Runden;
+   * fällt der Not-Aus dorthinein, hat `chatAbbrechen` gerade `chat_lauf`
+   * gelöscht und den Wecker weggenommen — und diese beiden Zeilen haben beides
+   * wieder hingestellt. Genau daran hing der Nachsatz des Befundes: Weil
+   * `chat_lauf` in `storage.session` steht, nimmt `wacheLaufen` das Abholen
+   * nach jedem Neustart des Dienstarbeiters wieder auf.
+   *
+   * Zurückgenommen wird nur, was DIESER Aufruf angelegt hat, ODER was gar
+   * niemandem mehr gehört: Hat inzwischen ein NEUER Botengang begonnen, gehört
+   * ihm der Platz, und `laufEnde()` würde ihn abräumen. Steht dagegen `lauf`
+   * auf null, hat `chatAbbrechen` schon aufgeräumt — und dann liegt in der
+   * Ablage nur noch das, was diese Funktion eine Zeile zu spät hingeschrieben
+   * hat. Genau das ist die Zeile, die `wacheLaufen` nach dem nächsten Start
+   * des Dienstarbeiters wieder auflesen würde.
+   */
+  if (!markeGilt(meineMarke)) {
+    if (!lauf || lauf === meiner) await laufEnde();
+    await auftragStoppen(start.contextId, ausweis);
+    return { ok: false, kennung: "abgebrochen", klartext: ABGEBROCHEN_TEXT };
   }
 
   /* Bewusst nicht `await`: Die Seitenleiste bekommt die Auftragsnummer
@@ -453,15 +596,24 @@ export async function aktiveHolen(ausweis, signal = null) {
 export async function chatFortsetzen({ taskId, contextId, ausweis }) {
   if (lauf) return { ok: true, taskId: lauf.taskId, contextId: lauf.contextId };
   if (!taskId || !ausweis) return { ok: false };
-  lauf = { taskId, contextId: contextId || taskId, ausweis, abbruch: new AbortController() };
-  await laufSchreiben({ taskId, contextId: lauf.contextId });
-  try {
-    await chrome.alarms.create(WECKER, { periodInMinutes: 0.5 });
-  } catch (_) {
-    /* Ohne Wecker fehlt nur das Netz. */
+  /* Dieselbe Klasse wie NOTAUS-1, selbst gefunden: Dieser Weg ist genau der,
+     den der Befund als Nachsatz beschreibt — ein Botengang, den niemand mehr
+     wollte, wird wieder übernommen. Ein Not-Aus zwischen den beiden `await`s
+     unten hätte ihn erneut aufgebaut. */
+  const meineMarke = abbruchmarke;
+  const meiner = { taskId, contextId: contextId || taskId, ausweis, abbruch: new AbortController() };
+  lauf = meiner;
+  await laufSchreiben({ taskId, contextId: meiner.contextId });
+  await weckerStellen();
+  if (!markeGilt(meineMarke)) {
+    /* Dieselbe Abwägung wie in `chatStarten`: das Eigene und das Verwaiste
+       wegräumen, das Fremde stehen lassen. */
+    if (!lauf || lauf === meiner) await laufEnde();
+    await auftragStoppen(meiner.contextId, ausweis);
+    return { ok: false, kennung: "abgebrochen", klartext: ABGEBROCHEN_TEXT };
   }
   weiterAbholen();
-  return { ok: true, taskId, contextId: lauf.contextId };
+  return { ok: true, taskId, contextId: meiner.contextId };
 }
 
 /* Für die Seitenleiste beim Öffnen: Läuft gerade ein Botengang? */
@@ -479,24 +631,20 @@ export async function chatZustand() {
  * ankommen noch weiterkosten.
  */
 export async function chatAbbrechen() {
+  /*
+   * ZUERST die Marke, synchron und vor jedem `await` (§5: erst kappen, dann
+   * melden). Ab dieser Zeile gibt es keinen Weg mehr, der einen Botengang
+   * wiederherstellt — auch keinen, der schon vor ihr begonnen hat.
+   *
+   * Sie steht auch dann richtig, wenn es gerade nichts abzubrechen gibt: Genau
+   * das ist der gemessene Fall aus NOTAUS-1. `lauf` ist null, `chat_lauf`
+   * leer, und trotzdem ist gleich ein Botengang unterwegs.
+   */
+  abbruchmarke += 1;
   const der = lauf || (await laufLesen());
   if (lauf && lauf.abbruch) lauf.abbruch.abort();
   await laufEnde();
-  if (der && der.contextId) {
-    try {
-      const ausweis = der.ausweis || (await ausweisAusAblage())?.token || null;
-      if (ausweis) {
-        await anfragen("/api/v1/chat/cancel", {
-          methode: "POST",
-          ausweis,
-          kopfzeilen: { "X-Client": CHAT_KLIENT },
-          koerper: { context_id: der.contextId },
-        });
-      }
-    } catch (_) {
-      /* Der Stopp beim Server ist eine Höflichkeit, keine Bedingung. */
-    }
-  }
+  if (der && der.contextId) await auftragStoppen(der.contextId, der.ausweis || null);
   return { ok: true };
 }
 
@@ -508,6 +656,11 @@ export async function chatAbbrechen() {
  */
 export async function wacheLaufen() {
   if (lauf) return;
+  /* Dieselbe Klasse wie NOTAUS-1, selbst gefunden — und die schärfste Fassung
+     davon: Dieser Weg ist der, von dem der Befund sagt „ein Not-Aus, den ein
+     Wecker rückgängig macht, ist keiner". Zwischen dem Lesen der Ablage, dem
+     Holen des Ausweises und dem Aufbau des Botengangs liegen zwei `await`s. */
+  const meineMarke = abbruchmarke;
   const gespeichert = await laufLesen();
   if (!gespeichert) {
     try {
@@ -528,6 +681,15 @@ export async function wacheLaufen() {
         "Deine Anmeldung ist zwischendurch abgelaufen. Ich konnte die Antwort nicht mehr abholen. Melde dich in der Cloud neu an.",
       contextId: gespeichert.contextId || null,
     });
+    return;
+  }
+  /* Wiedereintritt nach den beiden `await`s: Wurde inzwischen abgebrochen,
+     wird der Botengang NICHT wieder aufgenommen. Was noch in der Ablage steht,
+     hat `chatAbbrechen` schon weggeräumt oder räumt es gerade weg; ein zweiter
+     `laufEnde()`-Aufruf hier verhindert nur, dass eine Zeile stehen bleibt,
+     die ein späterer Weckerschlag wieder auflesen würde. */
+  if (!markeGilt(meineMarke)) {
+    await laufEnde();
     return;
   }
   lauf = {

@@ -41,13 +41,23 @@ import { istGesperrterUrsprung } from "./rechte.js";
    daran ist die Verdeckungswache am 11.08.2026 gescheitert — sie lag in einem
    Modul, das im Klickweg niemand rufen konnte.
 
-   `geheim.js` steht ganz vorn (Festlegung F4 vom 14.08.2026). Bis dahin
+   `messform.js` steht noch davor (14.08.2026, Funde AUTOMODUS-1/3/4). Sie
+   ist die EINE Messform: Unicode-Normalform, unsichtbare Zeichen ersatzlos
+   weg, kein Kürzen vor einer Messung. Der Klassifizierer im Dienstarbeiter
+   benutzt dieselbe Datei über den Mantel `src/net/messform.js`. Sie liegt
+   unter `src/gemeinsam/` und nicht unter `src/content/`, weil sie eben nicht
+   der Inhaltsseite gehört, sondern beiden — wer sie ändert, ändert die
+   Messung auf BEIDEN Seiten, und genau das ist der Zweck.
+
+   `geheim.js` steht ganz vorn unter den Inhaltsskripten (Festlegung F4 vom
+   14.08.2026). Bis dahin
    trugen `overlay.js` und `rekorder.js` je eine eigene Abschrift derselben
    Geheimfeld-Erkennung; zwei Abschriften einer Sicherheitszusage sind schon
    dreimal auseinandergelaufen, und hier hinge an der Abweichung, ob ein
    Passwort mitgeschrieben wird. Eine Quelle, und sie muss stehen, bevor
    irgendjemand sie fragt. */
 const OVERLAY_DATEIEN = [
+  "src/gemeinsam/messform.js",
   "src/content/geheim.js",
   "src/content/klickwache.js",
   "src/content/selektor.js",
@@ -63,12 +73,18 @@ const OVERLAY_DATEIEN = [
    Pflichtteil. Ein zweites Einspielen ist harmlos: `klickwache.js` schreibt
    dieselbe Wache noch einmal, `overlay.js` bricht an seinem eigenen Riegel ab.
 
+   `messform.js` gehört aus demselben Grund in den Pflichtteil wie `geheim.js`
+   und steht auch dort ganz vorn: Ohne sie misst die Seite Namen in einer
+   Form, die die Seite selbst wählen darf. Lieber gar nicht arbeiten als ohne
+   die Zusage arbeiten, die diese Datei trägt.
+
    `geheim.js` gehört ausdrücklich in den Pflichtteil und nicht in die Kür:
    Ohne sie wüsste `overlay.js` nicht, welches Feld ein Geheimfeld ist, und
    würde in ein Passwortfeld tippen. Das ist dieselbe harte Lesart wie bei der
    Verdeckungswache, ohne Wache keine Bedienung — lieber gar nicht arbeiten
    als ohne die Zusage arbeiten, die diese Datei trägt. */
 const PFLICHT_DATEIEN = [
+  "src/gemeinsam/messform.js",
   "src/content/geheim.js",
   "src/content/klickwache.js",
   "src/content/overlay.js",

@@ -434,11 +434,16 @@ function laden() {
             k("input", { id: "itemnr", name: "artikelnummer", class: "feld" }, [], "feld"),
             k("button", { class: "btn" }, "Abbrechen", "abbrechen"),
           ]),
-          k("ul", { class: "liste" }, [
-            k("li", { class: "zeile" }, [k("span", {}, "Erster", "erster")]),
-            k("li", { class: "zeile" }, [k("span", {}, "Zweiter", "zweiter")]),
-            k("li", { class: "zeile" }, [k("span", {}, "Dritter", "dritter")]),
-          ]),
+          k(
+            "ul",
+            { class: "liste" },
+            [
+              k("li", { class: "zeile" }, [k("span", {}, "Erster", "erster")]),
+              k("li", { class: "zeile" }, [k("span", {}, "Zweiter", "zweiter")]),
+              k("li", { class: "zeile" }, [k("span", {}, "Dritter", "dritter")]),
+            ],
+            "liste"
+          ),
         ]),
       ]),
     ])
@@ -541,10 +546,17 @@ test("S6: eine Zufallsklasse kommt in keinen Anker", async () => {
   assert.ok(!alles.includes("sc-bdVaJa"), `Zufallsklasse im Anker: ${alles}`);
   assert.ok(!alles.includes("css-1x2y3z"), `Zufallsklasse eines Vorfahren im Anker: ${alles}`);
 
-  /* Gegenprobe: Die stabile Klasse steht sehr wohl zur Verfügung. */
-  const zeile = seite.finden("zweiter");
-  const pfad = S.kaskadeBauen(zeile).find((a) => a.includes("li"));
-  assert.ok(pfad && pfad.includes(".zeile"), `stabile Klasse erwartet, bekommen: ${pfad}`);
+  /* Gegenprobe: Die stabile Klasse steht sehr wohl zur Verfügung.
+     Gemessen wird sie seit dem 14.08.2026 an einem Element, das die Klasse am
+     BLATT trägt. Vorher stand hier der Text „Zweiter", und der zugehörige
+     Pfad hiess `ul.liste > li.zeile:nth-of-type(2) > span` — die Klasse auf
+     dem Vorfahren, die Stellenzählerei auf dem Weg, das Blatt nackt. Genau
+     dieser Pfad ist der Befund TEACH-5 und entsteht nicht mehr (S13). Die
+     Frage dieses Prüfsatzes ist eine andere, nämlich ob die Zufallserkennung
+     eine gepflegte Klasse stehen lässt, und die wird hier weiterhin
+     gestellt. */
+  const pfad = S.kaskadeBauen(seite.finden("liste")).find((a) => a.includes("ul"));
+  assert.ok(pfad && pfad.includes(".liste"), `stabile Klasse erwartet, bekommen: ${pfad}`);
 });
 
 /* ------------------------------------------------------------------ *
@@ -691,19 +703,39 @@ test("S12: aus dem Inhalt eines Feldes wird nie ein Anker gebaut", async () => {
   }
 });
 
-test("S13: der Pfad bleibt kurz und nimmt die Stelle nur, wenn er sie braucht", async () => {
+test("S13: der Pfad bleibt kurz, und eine Stellenangabe macht ihn wertlos", async () => {
+  /* ERWARTUNG GEÄNDERT am 14.08.2026, Befund TEACH-5. Vorher stand hier:
+     „der Pfad nimmt die Stelle nur, wenn er sie braucht", und gemessen wurde,
+     dass `ul.liste > li.zeile:nth-of-type(2) > span` entsteht und trifft.
+     Er trifft — auch nach einem Umbau, und dann das falsche Element: Ein
+     davor eingeschobenes `<li>` verschiebt die Zählung, der Anker bleibt
+     eindeutig, und der Schritt geht auf die falsche Zeile. Gemessen wurde
+     genau das mit `[data-testid="zeile-1"]` in der Abnahme.
+     Eine Stellenangabe ist deshalb keine Notlösung mehr, sondern das
+     Ausschlusskriterium: Ein Pfad, der zählt, kommt nicht in die Kaskade.
+     Was er kostet, ist ein Anker; was er einbrächte, wäre ein stiller
+     Fehlgriff. Der Textanker darunter trägt den Schritt weiter, und genau
+     das ist die Reihenfolge aus §7.1. */
   const seite = laden();
   const S = await selektorLaden(seite.dok);
 
   const zweiter = seite.finden("zweiter");
   const kaskade = S.kaskadeBauen(zweiter);
   const pfad = kaskade.find((a) => !a.startsWith("text=") && !a.startsWith("/"));
-  assert.ok(pfad, `ein CSS-Pfad war erwartet, bekommen: ${JSON.stringify(kaskade)}`);
-  assert.ok(pfad.includes(":nth-of-type(2)"), `die Stelle wird gebraucht: ${pfad}`);
-  assert.ok(pfad.split(">").length <= S.PFAD_EBENEN, `höchstens ${S.PFAD_EBENEN} Ebenen: ${pfad}`);
-  assert.equal(S.kaskadeAufloesen([pfad], seite.dok).el, zweiter);
+  assert.equal(pfad, undefined, `ein zählender Pfad steht in der Kaskade: ${JSON.stringify(kaskade)}`);
+  assert.ok(kaskade.includes("text=Zweiter"), `der Textanker trägt jetzt: ${JSON.stringify(kaskade)}`);
+  assert.equal(S.kaskadeAufloesen(kaskade, seite.dok).el, zweiter, "und der Schritt bleibt abspielbar");
 
-  /* Gegenprobe: Wo die Kennung reicht, steht keine Stelle im Anker. */
+  /* Gegenprobe eins: Trägt das Blatt selbst ein Merkmal, entsteht der Pfad
+     sofort wieder — und zwar ohne jede Stellenangabe. */
+  zweiter.setAttribute("class", "wert");
+  const mitKlasse = S.kaskadeBauen(zweiter).find((a) => !a.startsWith("text=") && !a.startsWith("/"));
+  assert.ok(mitKlasse, `mit Klasse am Blatt war ein Pfad erwartet: ${JSON.stringify(S.kaskadeBauen(zweiter))}`);
+  assert.ok(!mitKlasse.includes(":nth-"), `keine Stellenangabe: ${mitKlasse}`);
+  assert.ok(mitKlasse.split(">").length <= S.PFAD_EBENEN, `höchstens ${S.PFAD_EBENEN} Ebenen: ${mitKlasse}`);
+  assert.equal(S.kaskadeAufloesen([mitKlasse], seite.dok).el, zweiter);
+
+  /* Gegenprobe zwei: Wo die Kennung reicht, steht keine Stelle im Anker. */
   const knopfPfad = S.kaskadeBauen(seite.finden("knopf")).find((a) => a.startsWith("#"));
   assert.equal(knopfPfad, "#relist-knopf");
 });
@@ -1038,4 +1070,152 @@ test("S29: bricht auch der `name`, wird nicht geraten, sondern gemeldet", async 
     erg.stelle === kaskade.length - 1,
     "und die Antwort sagt, dass der schwächste Anker getragen hat"
   );
+});
+
+/* ================================================================== *
+ * S30 bis S34 — Abnahmefunde TEACH-2 und TEACH-5 vom 14.08.2026
+ *
+ * Zwei Befunde, eine Fehlerart: Die Wache prüft das GANZE, die Gefahr tritt
+ * als TEIL auf.
+ *
+ *  - `pfadTraegtMerkmal` war zufrieden, sobald IRGENDWO im Pfad ein `#`, `.`
+ *    oder `[` stand. Gemessen wurde
+ *    `pfadTraegtMerkmal("form.maske > input:nth-of-type(2)") === true`: Das
+ *    Merkmal sass auf dem Vorfahren, das Blatt zählte nur die Stelle.
+ *  - `textHarmlos` mass die ganze Zeichenkette. „849271" war verboten,
+ *    „Dein Code lautet 849271" erlaubt — und genau so steht ein Code auf
+ *    einer Seite.
+ * ================================================================== */
+
+/* Die gemessene Maske: Felder ohne Kennung, ohne Namen, mit gewürfelten
+   Klassen. Mit `mitZusatz` steht ein weiteres Feld davor, wie nach einem
+   Umbau der fremden Seite. */
+function maskeSeite(mitZusatz = false) {
+  const felder = [];
+  if (mitZusatz) {
+    felder.push(k("div", { class: "feld" }, [k("input", { class: "css-4d5e6f" }, [], "zusatz")]));
+  }
+  felder.push(k("div", { class: "feld" }, [k("input", { class: "css-7h3k2p" }, [], "titel")]));
+  felder.push(k("div", { class: "feld" }, [k("input", { class: "css-9k2j1h" }, [], "nummer")]));
+  return seiteBauen(k("html", {}, [k("body", {}, [k("form", { class: "maske" }, felder)])]));
+}
+
+test("S30: ein Merkmal auf dem Vorfahren macht aus Stellenzählerei keinen Anker", async () => {
+  const seite = maskeSeite();
+  const S = await selektorLaden(seite.dok);
+
+  /* Die beiden wörtlich gemessenen Pfade aus TEACH-5. */
+  assert.equal(
+    S.pfadTraegtMerkmal("form.maske > input:nth-of-type(2)"),
+    false,
+    "das Merkmal sitzt auf dem Vorfahren, das Blatt zählt nur die Stelle"
+  );
+  assert.equal(S.pfadTraegtMerkmal("div.feld:nth-of-type(2) > input"), false, "hier ist das Blatt nackt");
+  assert.equal(S.pfadZaehltStellen("div.feld:nth-of-type(2) > input"), true);
+  assert.equal(S.pfadTaugt("div.feld:nth-of-type(2) > input"), false);
+
+  /* Gegenprobe: Am Blatt zählt das Merkmal, und ohne Stellenangabe trägt der
+     Pfad. Es geht nicht um weniger Anker, sondern um andere. */
+  assert.equal(S.pfadTraegtMerkmal("form.maske > input.nummer"), true);
+  assert.equal(S.pfadZaehltStellen("form.maske > input.nummer"), false);
+  assert.equal(S.pfadTaugt("form.maske > input.nummer"), true);
+  assert.equal(S.pfadTaugt("#kasse > span.wert"), true);
+  assert.equal(S.pfadTaugt('[data-testid="relist"]'), true);
+});
+
+test("S31: der zählende Pfad bricht laut, statt still auf das falsche Feld zu zeigen", async () => {
+  /* Der gemessene Volldurchlauf aus TEACH-5, über den Produktivweg: erst
+     aufnehmen, dann ein Feld einschieben, dann auflösen.
+     Vor der Reparatur stand `div.feld:nth-of-type(2) > input` auf Platz 1 der
+     Kaskade, traf nach dem Umbau GENAU EIN Element und meldete `ok:true` —
+     nur eben das Titelfeld. Ab jetzt bleibt für ein Feld ohne jedes Merkmal
+     der XPath ganz unten, und die Antwort sagt, dass der schwächste Anker
+     getragen hat. Dort und nur dort hält ab F3 die Identitätswache des
+     Ausführers dagegen. */
+  const alt = maskeSeite();
+  const S1 = await selektorLaden(alt.dok);
+  const kaskade = S1.kaskadeBauen(alt.finden("nummer"));
+
+  for (const anker of kaskade) {
+    if (anker.startsWith("/")) continue;
+    assert.equal(
+      S1.pfadZaehltStellen(anker),
+      false,
+      `„${anker}" zählt nur die Stelle: ${JSON.stringify(kaskade)}`
+    );
+  }
+  assert.ok(
+    !kaskade.includes("div.feld:nth-of-type(2) > input"),
+    `der gemessene Fehlanker steht wieder in der Kaskade: ${JSON.stringify(kaskade)}`
+  );
+
+  const neu = maskeSeite(true);
+  const S2 = await selektorLaden(neu.dok);
+  const erg = S2.kaskadeAufloesen(kaskade, neu.dok);
+  assert.ok(erg.ok, "der XPath trifft immer etwas, notfalls das Falsche");
+  assert.ok(
+    erg.anker.startsWith("/"),
+    `getragen hat „${erg.anker}", und das ist ein Anker oberhalb des XPfades`
+  );
+  assert.equal(erg.stelle, kaskade.length - 1, "die Antwort nennt den schwächsten Anker");
+});
+
+test("S32: ein Einmalcode MITTEN in einem Merkmalswert wird kein Anker", async () => {
+  /* Befund TEACH-2 an der Stelle von B6: Die Reparatur mass die ganze Kette,
+     also kam derselbe Code mit einem Wort davor wieder durch.
+     `[data-testid="code-849271"]` stand danach als stärkster Anker im Ablauf. */
+  const seite = seiteBauen(
+    k("html", {}, [
+      k("body", {}, [
+        k("div", { class: "karte" }, [
+          k("button", { class: "kopieren", "data-testid": "code-849271" }, "Kopieren", "kopieren"),
+        ]),
+      ]),
+    ])
+  );
+  const S = await selektorLaden(seite.dok);
+
+  assert.equal(S.textOffen("code-849271"), false, "der Code steckt mitten im Wert");
+  assert.equal(S.wertTaugt("code-849271"), false);
+  assert.equal(S.textOffen("Dein Code lautet 849271"), false, "und mitten im Satz");
+  assert.equal(S.textOffen("Ihre Kartennummer 4111111111111111"), false);
+  assert.equal(S.textOffen("Karte 4111 1111 1111 1111"), false);
+  assert.equal(S.textOffen("Schluessel a1b2c-3d4e5"), false);
+
+  const kaskade = S.kaskadeBauen(seite.finden("kopieren"));
+  assert.ok(
+    !kaskade.some((a) => a.includes("849271")),
+    `der Einmalcode steht im Anker: ${JSON.stringify(kaskade)}`
+  );
+  /* Gegenprobe: Der Text „Kopieren" trägt den Schritt weiter, und was eine
+     Jahreszahl oder ein Preis ist, bleibt ebenfalls stehen. */
+  assert.ok(kaskade.includes("text=Kopieren"), JSON.stringify(kaskade));
+  for (const gut of ["Angebot vom 14.08.2026", "Preis 1299 Euro", "Seite 12", "iPhone13", "MP3-Player"]) {
+    assert.equal(S.textOffen(gut), true, `„${gut}" muss durchgehen`);
+  }
+});
+
+test("S33: derselbe Code im sichtbaren Text wird auch kein Textanker", async () => {
+  const seite = seiteBauen(
+    k("html", {}, [
+      k("body", {}, [
+        k("div", { class: "karte" }, [
+          k("button", { class: "kopieren" }, "Code 849271 kopieren", "kopieren"),
+          k("button", { class: "hilfe" }, "Hilfe", "hilfe"),
+        ]),
+      ]),
+    ])
+  );
+  const S = await selektorLaden(seite.dok);
+  const kaskade = S.kaskadeBauen(seite.finden("kopieren"));
+
+  assert.ok(
+    !kaskade.some((a) => a.includes("849271")),
+    `der Einmalcode steht im Anker: ${JSON.stringify(kaskade)}`
+  );
+  assert.ok(kaskade.includes("button.kopieren"), `die Klasse trägt weiter: ${JSON.stringify(kaskade)}`);
+  assert.equal(S.kaskadeAufloesen(kaskade, seite.dok).el, seite.finden("kopieren"));
+
+  /* Gegenprobe im selben Prüfsatz: Der Nachbarknopf behält seinen Textanker. */
+  assert.ok(S.kaskadeBauen(seite.finden("hilfe")).includes("text=Hilfe"));
 });

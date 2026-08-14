@@ -126,7 +126,6 @@ const NORMAL = { id: 7, url: "https://geizhals.de/warenkorb", title: "Warenkorb"
  * Alles geht ueber `aufbauen`, den Eintritt, den panel.js benutzt.
  */
 async function startseiteBauen({ tabs = [NORMAL], verbinden, trennen, tabsHolen } = {}) {
-  startseite._zuruecksetzen();
   const dok = dokumentBauen();
   const wurzel = knoten("div", dok);
   const gerufen = { verbinden: [], trennen: 0, tabsHolen: 0 };
@@ -324,16 +323,39 @@ test("S4: standSetzen faerbt den Punkt, nennt den Agenten und zeigt den Trennkno
   assert.equal(eins(wurzel, "sa-trennen").hidden, true);
 });
 
-test("S4b: Die freie Funktion standSetzen trifft die zuletzt gebaute Startseite", async () => {
-  const { wurzel } = await startseiteBauen();
-  assert.equal(startseite.standSetzen({ verbunden: true, agent: "SMarTrTrader" }), true);
-  assert.equal(eins(wurzel, "sa-punkt").className, "sa-punkt an");
-  assert.equal(eins(wurzel, "sa-start-agentname").textContent, "SMarTrTrader");
+test("S4b: Es gibt genau EINEN Weg zur Statuskarte, und der geht ueber den Griff", async () => {
+  /*
+   * Hier stand bis zum 14.08.2026 „Die freie Funktion standSetzen trifft die
+   * zuletzt gebaute Startseite", und dieser Pruefsatz war gruen.
+   *
+   * Befund Abnahme 14.08.2026 (VERBINDUNG-6): Diese freie Funktion hat im
+   * ganzen Baum niemand gerufen. Ein grep ueber src/ ohne pruefung fand
+   * ausschliesslich `griff.standSetzen` in panel.js. Der Kommentar ueber der
+   * Ausfuhr behauptete das Gegenteil, naemlich die Seitenleiste rufe sie aus
+   * ihrem Nachrichtenempfaenger heraus. Damit lag ein gruener Pruefsatz ueber
+   * einer Funktion, die im Produktivweg nie laeuft, und zwar ausgerechnet in
+   * der Datei, deren tote Statusanzeige die Runde davor gemeldet hat.
+   *
+   * Die Ausfuhr ist weg, und dieser Satz haelt fest, dass sie weg BLEIBT: Ein
+   * zweiter Weg zur selben Anzeige waere eine zweite Wahrheit darueber, was
+   * verbunden ist. Dass der EINE Weg wirklich laeuft, misst
+   * seitenleiste.test.mjs (T3, ZZM7, C4, VB*) am echten Modul im
+   * Produktivweg — hier steht nur, dass es keinen zweiten gibt.
+   */
+  assert.equal(
+    typeof startseite.standSetzen,
+    "undefined",
+    "eine freie Anzeige neben dem Griff ist eine zweite Wahrheit ueber denselben Zustand",
+  );
+  assert.equal(typeof startseite._zuruecksetzen, "undefined", "und ihr Modulgedaechtnis auch");
 
-  /* Ohne Startseite bleibt sie still, statt zu werfen: Der Verbindungsstand
-     ist eine Anzeige und kein Gate. */
-  startseite._zuruecksetzen();
-  assert.equal(startseite.standSetzen({ verbunden: true }), false);
+  /* Und die Gegenprobe, dass es den EINEN Weg gibt und er wirklich trifft:
+     Zwei getrennt gebaute Startseiten steuern sich nicht gegenseitig. */
+  const a = await startseiteBauen();
+  const b = await startseiteBauen();
+  a.griff.standSetzen({ verbunden: true, tab: { id: 7, url: "https://ebay.de/", title: "eBay" } });
+  assert.equal(eins(a.wurzel, "sa-punkt").className, "sa-punkt an");
+  assert.equal(eins(b.wurzel, "sa-punkt").className, "sa-punkt", "die zweite Seite bleibt unberuehrt");
 });
 
 /* ------------------------------------------------------------------ *

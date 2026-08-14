@@ -1077,6 +1077,21 @@ test("V-d: Anker 1 bricht nach dem Umbau der Seite, Anker 2 trägt, der Platzhal
   /* So hätte der Rekorder die Anker gebaut: mit der echten Datei, an dem
      Element, das damals dastand. */
   const kaskadeDamals = stand.seite.sandbox.SMARTR_SELEKTOR.kaskadeBauen(kasse);
+  /* Und so hätte der Rekorder die Beschreibung gebaut: mit derselben echten
+     Funktion, an denselben Elementen.
+
+     Bis zum 14.08.2026 standen hier zwei von Hand geschriebene Menschensätze
+     („die Artikelnummer eintippen"). Der Rekorder schreibt so etwas NIE — er
+     legt `beschreibungVon(el)` ab, also den Namen des Elements selbst
+     (`content/rekorder.js:665`). Unter der alten Identitätswache mit
+     `a.includes(b)` fiel das nicht auf, weil „Artikelnummer" in dem Satz
+     steckte. Seit die Wache Gleichheit als GANZES verlangt (Befund TEACH-6),
+     misst ein erfundener Satz eine Lage, die es nicht gibt, und würde die
+     Reparatur als Fehler ausgeben. */
+  const beschreibungFeld = stand.seite.sandbox.SMARTR_GEHEIM.beschreibungVon(feld);
+  const beschreibungKasse = stand.seite.sandbox.SMARTR_GEHEIM.beschreibungVon(kasse);
+  assert.equal(beschreibungFeld, "Artikelnummer", "der Rekorder nimmt das aria-label des Feldes");
+  assert.equal(beschreibungKasse, "Zur Kasse", "der Rekorder nimmt die Beschriftung des Knopfes");
   assert.ok(kaskadeDamals.length >= 2, `zu wenige Anker: ${JSON.stringify(kaskadeDamals)}`);
   assert.equal(kaskadeDamals[0], '[data-testid="kasse"]', "der stärkste Anker steht vorn");
   const textAnker = kaskadeDamals.find((a) => a.startsWith("text="));
@@ -1092,13 +1107,13 @@ test("V-d: Anker 1 bricht nach dem Umbau der Seite, Anker 2 trägt, der Platzhal
         type: "input",
         selector_cascade: ["#artikelnr"],
         value: "{{artikelnummer}}",
-        beschreibung: "die Artikelnummer eintippen",
+        beschreibung: beschreibungFeld,
       },
       {
         type: "click",
         /* Genau zwei Anker, wie der Rekorder sie geliefert hat. */
         selector_cascade: [kaskadeDamals[0], textAnker],
-        beschreibung: "den Knopf „Zur Kasse\" drücken",
+        beschreibung: beschreibungKasse,
       },
     ],
   };
@@ -1197,14 +1212,25 @@ test("V-e: Cloud-Sitzung sichtbar, Ablauf durch dieselbe Schleife, harte Klasse 
   });
 
   /* Die Matrix schaltet diesen Agenten für diesen Wirt frei. Voreinstellung
-     ist alles aus (§4); ohne diesen Satz misst der Prüfsatz nur die Sperre. */
+     ist alles aus (§4); ohne diesen Satz misst der Prüfsatz nur die Sperre.
+
+     `unwiderruflich` steht seit dem 14.08.2026 dabei, und der Grund gehört
+     hierher: Seit `run_workflow` VOR dem ersten Schritt vorklassifiziert wird
+     (Befund BRUECKE-2), trägt der Befehl die Vereinigung der Klassen seiner
+     Schritte — hier `bedienen`, `zahlung` UND `unwiderruflich`, denn „Jetzt
+     kaufen" ist beides. Die Matrix muss freigeben, was der Ablauf wirklich
+     tut; eine Liste, die drei von vier Klassen nennt, ist keine Freigabe für
+     die vierte. Vorher trug `run_workflow` gar keine Klasse, und die Lücke
+     fiel nicht auf. */
   await welt.chrome.storage.local.set({
     [MATRIX_ABLAGE]: {
       version: 1,
       domains: {},
       gesperrt: [],
       agenten: {
-        SMarTrCEO: { [HOST]: ["lesen", "bedienen", "navigieren", "workflow", "zahlung"] },
+        SMarTrCEO: {
+          [HOST]: ["lesen", "bedienen", "navigieren", "workflow", "zahlung", "unwiderruflich"],
+        },
       },
     },
   });
@@ -1763,7 +1789,17 @@ test("V-h: `rekorder:bild` aus dem Tab wird aufgenommen, abgelegt und nur aus de
    * Fensters auf, nicht den genannten. Ein Inhaltsskript im Hintergrund darf
    * damit nicht die Seite fotografieren lassen, die gerade vorn steht.
    */
-  welt = attrappeSetzen({ tab: { ...TAB }, bildDatenUrl: "data:image/jpeg;base64,QUJD" });
+  /* Vorbedingung seit dem 14.08.2026: Ohne laufende Aufzeichnung entsteht kein
+     Bild. `worker.js` prüft `sa_rekorder.laeuft` (Befund M3), und das ist die
+     strengere und richtige Richtung — ein Bild einer fremden Seite ohne
+     Auftrag ist genau das, was nie entstehen darf. Der Prüfaufbau stellt
+     deshalb her, was der Mensch beim Start der Aufzeichnung herstellt. */
+  const AUFZEICHNUNG_LAEUFT = { [WERKSTATT_REKORDER_ABLAGE]: { version: 1, laeuft: true, tabId: 7, schritte: [] } };
+  welt = attrappeSetzen({
+    tab: { ...TAB },
+    bildDatenUrl: "data:image/jpeg;base64,QUJD",
+    ablageLocal: { ...AUFZEICHNUNG_LAEUFT },
+  });
 
   const ausDemTab = { id: welt.chrome.runtime.id, tab: { id: 7 }, url: ADRESSE };
   const antwort = await anWorker(
@@ -1791,6 +1827,7 @@ test("V-h: `rekorder:bild` aus dem Tab wird aufgenommen, abgelegt und nur aus de
   welt = attrappeSetzen({
     tab: { ...TAB, active: false },
     bildDatenUrl: "data:image/jpeg;base64,QUJD",
+    ablageLocal: { ...AUFZEICHNUNG_LAEUFT },
   });
   const imHintergrund = await anWorker({ typ: "rekorder:bild", name: "s3.webp" }, ausDemTab);
   assert.equal(imHintergrund.ok, false, "kein Bild vom falschen Tab");
@@ -1803,7 +1840,15 @@ test("V-h2: Ein Bildname, der als Ablageschlüssel nicht taugt, wird abgelehnt",
   /* Der Name kommt aus einer fremden Seite und wird Schlüssel in unserer
      Ablage. Er wird deshalb gemessen und nicht gesäubert: Ein Name, der das
      Muster nicht trifft, ist keiner. */
-  welt = attrappeSetzen({ tab: { ...TAB }, bildDatenUrl: "data:image/jpeg;base64,QUJD" });
+  welt = attrappeSetzen({
+    tab: { ...TAB },
+    bildDatenUrl: "data:image/jpeg;base64,QUJD",
+    /* Dieselbe Vorbedingung wie in V-h, und hier ist sie doppelt wichtig:
+       Ohne laufende Aufzeichnung käme die Absage `keine_aufnahme` — und der
+       Satz behauptete dann, der NAME sei zurückgewiesen worden. Ein grüner
+       Prüfsatz, der die falsche Wache misst, ist schlimmer als ein roter. */
+    ablageLocal: { [WERKSTATT_REKORDER_ABLAGE]: { version: 1, laeuft: true, tabId: 7, schritte: [] } },
+  });
   const ausDemTab = { id: welt.chrome.runtime.id, tab: { id: 7 }, url: ADRESSE };
 
   for (const name of ["", "../../etc/passwd", "__proto__", "s1 .webp", "x".repeat(80)]) {

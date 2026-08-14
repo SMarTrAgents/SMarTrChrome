@@ -63,6 +63,11 @@ export const START_STIL = `
 .sa-punkt { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto;
   background: var(--sa-grau, #7a7a7a); }
 .sa-punkt.an { background: var(--sa-gruen, #2ecc71); }
+/* Der Aufbau laeuft, und die Vorfuehrung ist keine Steuerung. Beide bekommen
+   eine eigene Farbe, und beide sagen es zusaetzlich im Satz daneben: Farbe ist
+   hier nie das einzige Signal, sonst hoerte ein Vorleser den Unterschied nie. */
+.sa-punkt.baut { background: var(--sa-akzent, #00e5ff); }
+.sa-punkt.probe { background: var(--sa-gelb, #f0b400); }
 .sa-start-satz { margin: 0; flex: 1 1 12ch; }
 .sa-start-ziel { font-weight: 600; }
 .sa-start-agent { margin: 0; width: 100%; opacity: .85; font-size: .92em; }
@@ -139,10 +144,25 @@ export function faviconQuelle(tab) {
   return zeichen;
 }
 
-/* Die zuletzt gebaute Startseite. `standSetzen` ist im Vertrag als freie
-   Funktion beschrieben, die Seitenleiste ruft sie ohne Griff — also merkt sich
-   das Modul, welche Startseite gemeint ist. */
-let letzte = null;
+/*
+ * Hier stand bis zum 14.08.2026 ein Modulgedaechtnis `letzte` samt einer freien
+ * Ausfuhr `standSetzen`, die darauf zeigte.
+ *
+ * Befund Abnahme 14.08.2026 (VERBINDUNG-6): Diese freie Funktion hat in der
+ * ganzen Erweiterung niemand gerufen. Der Kommentar darueber behauptete, die
+ * Seitenleiste rufe sie aus ihrem Nachrichtenempfaenger heraus, weil sie dort
+ * keinen Griff zur Hand habe — das stimmt nicht: panel.js haelt den Griff in
+ * `anker.startseite` und geht in JEDEM Fall ueber `startseiteZeichnen()`, auch
+ * aus dem Nachrichtenempfaenger (cloudSitzungZeigen). Gemessen wurde ein
+ * gruener Pruefsatz (S4b) ueber einer Funktion, die im Produktivweg nie laeuft,
+ * also der Befund vom 11.08.2026 in kleiner Ausgabe, und ausgerechnet in der
+ * Datei, deren tote Statusanzeige die letzte Runde gemeldet hat.
+ *
+ * Weggeraeumt statt stehengelassen: Ein zweiter Weg zur selben Anzeige waere
+ * eine zweite Wahrheit darueber, was verbunden ist, und das ist genau die
+ * Fehlerart, die diese Runde schliesst. Wer die Karte setzen will, nimmt den
+ * Griff, den `aufbauen` zurueckgibt.
+ */
 
 function macher(wurzel) {
   const dok = (wurzel && wurzel.ownerDocument) || globalThis.document;
@@ -173,15 +193,44 @@ function beschriften(el, schluessel, text, werte = []) {
 }
 
 /**
+ * Ein Satz OHNE Sprachmarke, weil er aus einem anderen Modul kommt.
+ *
+ * Derselbe Weg wie in `hinweisSetzen` und aus demselben Grund: Ein Satz, den
+ * die Seitenleiste selbst schon uebersetzt hat, bekommt hier keinen zweiten
+ * Schluessel. Zwei Schluessel fuer eine Aussage laufen beim ersten Redigieren
+ * auseinander, und dann sagen die zwei Anzeigeflaechen zweierlei ueber
+ * denselben Augenblick.
+ *
+ * Die Marke wird ausdruecklich WEGGENOMMEN und nicht bloss uebergangen: Sonst
+ * zoege `textEinsetzen` beim naechsten Aufbau den alten Katalogtext wieder
+ * darueber.
+ */
+function nurText(el, text) {
+  el.removeAttribute("data-i18n");
+  el.textContent = String(text || "");
+  return el;
+}
+
+/**
  * Die Startseite in den Anker bauen.
  *
- * @param {object} wurzel   das Element `#startseite` aus panel.html
+ * @param {object} wurzel   das Element `#startseite-liste` aus panel.html
  * @param {object} dienste  { tabsHolen, verbinden, trennen }
  * @returns {object} Griff mit `standSetzen`, `tabsLaden`, `bereit`
  *
  * Wirft nie. Fehlt ein Dienst, bleibt der zugehoerige Knopf weg, statt beim
  * Druck ins Leere zu greifen: Ein Knopf, der nichts tut, ist schlimmer als
  * keiner, weil der Mensch danach glaubt, er habe etwas ausgeloest.
+ *
+ * Der Anker ist AUSDRUECKLICH `#startseite-liste` und nicht der Abschnitt
+ * `#startseite` darum herum (Befund Abnahme 14.08.2026, VERBINDUNG-5): Diese
+ * Funktion raeumt ihren Anker mit `replaceChildren()` leer, und im Abschnitt
+ * standen zwei Knoten, die ihr nicht gehoeren — die Ueberschrift
+ * `#startseite-titel`, auf die das `aria-labelledby` des Abschnitts zeigt, und
+ * `#startseite-liste` selbst, der Anker der Ersatzfassung in panel.js.
+ * Gemessen wurde, dass beide nach dem Aufbau nicht mehr im Dokument stehen:
+ * Der Bereich verliert damit seinen Namen fuer den Bildschirmleser, und
+ * Vorlesen ist der Hauptbedienweg des Inhabers.
  */
 export function aufbauen(wurzel, dienste = {}) {
   if (!wurzel || typeof wurzel.appendChild !== "function") {
@@ -390,16 +439,43 @@ export function aufbauen(wurzel, dienste = {}) {
   /**
    * Den Verbindungsstand anzeigen.
    *
-   * @param {{verbunden:boolean, tab:object, agent:string}} stand
+   * @param {{verbunden:boolean, vorfuehrung:boolean, aufbau:boolean,
+   *          tab:object, agent:string}} stand
    *
    * Was nicht gilt, wird weggelassen: Ohne Verbindung ist der Trennknopf weg
    * und die Agentenzeile leer. Ein ausgegrauter Knopf waere ein Versprechen,
    * das die Oberflaeche nicht halten kann.
+   *
+   * Vier Lagen, und jede hat ihren eigenen Satz (Befunde VERBINDUNG-3 und
+   * VERBINDUNG-4 vom 14.08.2026):
+   *
+   *   `aufbau`      Es wird gerade verbunden. Bis dahin stand hier die Lage
+   *                 „frei" mit der Einladung „Waehle einen Tab, dann geht es
+   *                 los." und einer bedienbaren Tabliste daneben, waehrend der
+   *                 Chip oben schon „Ich stelle die Verbindung her …" sagte.
+   *                 Zwei Statusflaechen, die einander widersprechen, und die
+   *                 stehengebliebene laedt zum zweiten Klick ein.
+   *   `vorfuehrung` Eine Vorfuehrung OHNE Server und ohne Agent. Sie ist eine
+   *                 Sitzung im Sinne der Oberflaeche, aber keine Steuerung —
+   *                 „Verbunden mit …" waere hier die gefaehrlichste
+   *                 Falschaussage der ganzen Datei.
+   *   `verbunden`   Eine echte Sitzung.
+   *   sonst         frei.
+   *
+   * Und ueber allen vier steht dieselbe Regel: Ohne benennbaren Tab wird kein
+   * Tab benannt. Ein Name, den die Karte nicht belegen kann, ist schlimmer als
+   * eine Luecke — genau daraus bestanden VERBINDUNG-1, VERBINDUNG-2 und
+   * VERBINDUNG-7.
    */
   function standSetzenIntern(stand = {}) {
+    const aufbau = !!(stand && stand.aufbau);
     const verbunden = !!(stand && stand.verbunden);
+    const vorfuehrung = verbunden && !!(stand && stand.vorfuehrung);
     const tab = stand && stand.tab ? stand.tab : null;
     const agent = stand && typeof stand.agent === "string" ? saeubern(stand.agent, 40) : "";
+    /* Der Name des Ziels, oder "". `saeubern` kann leer zurueckgeben, der Host
+       auch — dann gibt es keinen Namen, und dann wird keiner behauptet. */
+    const ziel = tab ? saeubern(tab.title, TITEL_ZEICHEN) || tabHost(tab) : "";
 
     /*
      * Läuft eine Sitzung, geht die Tabliste, und die Statuskarte bleibt.
@@ -412,17 +488,47 @@ export function aufbauen(wurzel, dienste = {}) {
      * Die Liste ist der Weg zu einem ZWEITEN Antrag, und den gibt es bei
      * laufender Sitzung nicht, der Weg führt über Stopp. Weggelassen und
      * nicht ausgegraut, wie überall in dieser Datei.
+     *
+     * Der laufende Aufbau zaehlt hier mit: Ein zweiter Anlauf ist in diesem
+     * Augenblick baulich abgewiesen (panel.js, verbindungLaeuftSchon). Eine
+     * Liste, die trotzdem zum Klicken einlaedt, ist ein Angebot, das nicht
+     * einloesbar ist, und das ist keine Auswahl, sondern eine Falle.
      */
-    listeKopf.hidden = verbunden;
-    liste.hidden = verbunden;
-    if (verbunden) hinweisSetzen(null, "");
+    const zu = verbunden || aufbau;
+    listeKopf.hidden = zu;
+    liste.hidden = zu;
+    if (zu) hinweisSetzen(null, "");
 
-    punkt.className = verbunden ? "sa-punkt an" : "sa-punkt";
-    if (verbunden) {
-      beschriften(standWort, "start_stand_verbunden", "Verbunden mit");
-      standZiel.textContent = tab
-        ? saeubern(tab.title, TITEL_ZEICHEN) || tabHost(tab)
-        : "";
+    punkt.className = aufbau && !verbunden
+      ? "sa-punkt baut"
+      : vorfuehrung
+        ? "sa-punkt probe"
+        : verbunden
+          ? "sa-punkt an"
+          : "sa-punkt";
+
+    if (aufbau && !verbunden) {
+      /* AUSDRUECKLICH derselbe Schluessel wie der Chip und die Hinweiszeile in
+         panel.js und nicht ein eigener aus dem `start_`-Bereich: Es ist
+         dieselbe Aussage ueber denselben Augenblick, und zwei Schluessel dafuer
+         laufen beim ersten Redigieren auseinander. Ohne Sprachmarke am Knoten,
+         damit `textEinsetzen` beim naechsten Aufbau nicht einen Katalogtext
+         darueberzieht, der zur naechsten Lage gar nicht mehr passt. */
+      nurText(standWort, t("dialog_verbinde", "Ich stelle die Verbindung her …"));
+      standZiel.textContent = ziel;
+    } else if (vorfuehrung) {
+      if (ziel) beschriften(standWort, "start_stand_vorfuehrung", "Vorführung ohne Agent auf");
+      else beschriften(standWort, "start_stand_vorfuehrung_ohne", "Vorführung ohne Agent.");
+      standZiel.textContent = ziel;
+    } else if (verbunden) {
+      if (ziel) beschriften(standWort, "start_stand_verbunden", "Verbunden mit");
+      else
+        beschriften(
+          standWort,
+          "start_stand_verbunden_ohne",
+          "Verbunden mit einem Tab, den ich gerade nicht benennen kann.",
+        );
+      standZiel.textContent = ziel;
     } else {
       beschriften(standWort, "start_stand_frei", "Wähle einen Tab, dann geht es los.");
       standZiel.textContent = "";
@@ -439,8 +545,11 @@ export function aufbauen(wurzel, dienste = {}) {
       agentZeile.hidden = true;
     }
 
+    /* Waehrend des Aufbaus gibt es noch nichts zu beenden. Der Knopf steht
+       deshalb nicht abgeschaltet da, sondern gar nicht — dieselbe Regel wie
+       ueberall in dieser Datei. */
     trennKnopf.hidden = !verbunden;
-    return { verbunden, agent };
+    return { verbunden, vorfuehrung, aufbau, ziel, agent };
   }
 
   const griff = {
@@ -457,33 +566,10 @@ export function aufbauen(wurzel, dienste = {}) {
     tabsLaden,
     verbindenMit,
   };
-  letzte = griff;
 
   /* Der Anfangszustand steht, bevor die erste Antwort da ist: Eine leere
      Seitenleiste, die nichts sagt, sieht aus wie eine kaputte. */
   standSetzenIntern({ verbunden: false });
   griff.bereit = tabsLaden();
   return griff;
-}
-
-/**
- * Den Verbindungsstand der zuletzt gebauten Startseite setzen.
- *
- * Der Vertrag beschreibt diese Funktion als freie Funktion des Moduls, weil
- * die Seitenleiste sie aus ihrem Nachrichtenempfaenger heraus ruft und dort
- * keinen Griff zur Hand hat.
- *
- * Wirft nie. Gibt es keine Startseite, kommt `false` zurueck, und zwar still:
- * Der Verbindungsstand ist eine Anzeige, kein Gate.
- */
-export function standSetzen(stand) {
-  if (!letzte || typeof letzte.standSetzen !== "function") return false;
-  letzte.standSetzen(stand);
-  return true;
-}
-
-/* Nur fuer Pruefsaetze: den gemerkten Griff wieder wegnehmen, damit ein Lauf
-   nicht den Stand des vorigen sieht. */
-export function _zuruecksetzen() {
-  letzte = null;
 }

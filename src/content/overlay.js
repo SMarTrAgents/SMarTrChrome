@@ -30,6 +30,46 @@
 (() => {
   if (window.__smartrchromeOverlay) return;
 
+  /* ------------------------------------------------------------------ *
+   * Die gemeinsame Messform (`src/gemeinsam/messform.js`).
+   *
+   * Sie wird VOR dieser Datei eingespielt und steht in beiden Einspiellisten
+   * von `src/net/seite.js` ganz vorn, im Pflichtteil wie in der Kür. Fehlt
+   * sie, wird gar nicht erst eingespielt — lieber nicht arbeiten als in einer
+   * anderen Form messen als der Dienst.
+   *
+   * Warum diese Datei sie überhaupt braucht, obwohl hier keine Wache steht:
+   * Vier Vergleiche in dieser Datei entscheiden, WORAUF gehandelt wird — auf
+   * welche Option einer Auswahlliste, auf welches Element hinter einem
+   * Etikett, ob eine Wartebedingung eingetreten ist. Bis zum 14.08.2026
+   * verglichen sie mit `toLowerCase()`. Eine Seite, die in ihre Beschriftung
+   * ein Zeichen ohne Breite streut, bestimmt damit selbst, welche Option der
+   * Agent wählt, obwohl der Mensch beide gleich liest.
+   *
+   * Eine eigene Abschrift der Regel gibt es hier ausdrücklich NICHT
+   * (Festlegung F4): `content/klickwache.js` hatte eine, und es hat genau
+   * EINE Änderung gebraucht, bis die beiden Fassungen verschieden entschieden.
+   * ------------------------------------------------------------------ */
+  const MF = globalThis.SMARTR_MESSFORM || null;
+
+  /** Zwei Texte meinen dasselbe. Ohne Messform: nein, nie. */
+  const textGleich = (a, b) => (MF ? MF.gleicherText(a, b) === true : false);
+
+  /**
+   * Der gesuchte Text steckt im ganzen — beide in der Messform.
+   *
+   * Fehlt die Messform, oder bleibt vom gesuchten Text nach dem Messen nichts
+   * übrig, ist die Antwort nein. Ein leerer Suchtext steckt in JEDEM Text,
+   * und „passt überall" wäre hier keine Milde, sondern eine Auswahl, die die
+   * Seite trifft.
+   */
+  const textEnthaelt = (ganzes, teil) => {
+    if (!MF) return false;
+    const gesucht = MF.messtext(teil);
+    if (!gesucht) return false;
+    return MF.messtext(ganzes).includes(gesucht);
+  };
+
   const GRUEN = "#2aff2a";
   const DUNKEL = "#030612";
   const CYAN = "#00d4ff";
@@ -507,6 +547,14 @@
         }
       } catch (_) { /* Seiten ohne title-Zugriff: nur der Rahmen zeigt es an. */ }
     } else {
+      /* Dieselbe Zeile wie im Not-Aus, und aus demselben Grund gefunden:
+         `overlay:aus` schaltete Zeiger und Fahne auf 0, der Takt des
+         Arbeitszeigers lief weiter und schaltete sie 420 ms später wieder
+         ein. Das ist der Befund NOTAUS-3 an einer zweiten Tür — ein Zeichen,
+         das nach dem Ende der Sitzung weiterwandert, behauptet eine
+         Steuerung, die es nicht mehr gibt. Gemeldet war nur die eine Tür;
+         gebaut ist die Kappung an der einen Stelle, durch die beide gehen. */
+      takteKappen();
       zeiger.setAttribute("data-an", "0");
       fahne.setAttribute("data-an", "0");
       ziel.setAttribute("data-an", "0");
@@ -519,8 +567,124 @@
     }
   };
 
+  /* ------------------------------------------------------------------ *
+   * Die Taktverwaltung — die EINE Stelle, die der Not-Aus kappt.
+   *
+   * Befund NOTAUS-3/NOTAUS-4 vom 14.08.2026, am echten Skript gemessen und
+   * nicht vermutet: `gestoppt()` setzte Zeiger, Fahne und Ziel auf 0 und
+   * rührte den Takt darunter nicht an. `arbeitsZeiger` läuft als
+   * `setInterval` alle 420 ms; 420 ms nach `overlay:gestoppt` stand der Zeiger
+   * wieder auf `data-an="1"` und wanderte weiter, während das Schild
+   * „GESTOPPT, der Agent steuert nicht mehr" zeigte — bis zu 1,7 Sekunden,
+   * deutlich über der Sekunde aus §5. Dieselbe Bauform in der Warteschleife
+   * von `overlay:warten`: Sie stellte sich per `setTimeout` selbst neu und las
+   * bis zu eine Minute nach dem Not-Aus weiter den Seitentext.
+   *
+   * Der Fehler war NICHT, dass an einer Stelle ein `clearInterval` fehlte. Der
+   * Fehler war, dass es überhaupt einzelne Stellen gab: Wer den nächsten Takt
+   * baut, muss daran denken, ihn auch in `gestoppt()` einzutragen — und beim
+   * übernächsten denkt niemand mehr daran. Deshalb gibt es ab jetzt keinen
+   * nackten `setTimeout` und kein nacktes `setInterval` mehr in dieser Datei.
+   * Jeder Takt meldet sich hier an, und `takteKappen()` ist die eine Zeile,
+   * die alle zugleich löscht.
+   *
+   * Zwei Sicherungen statt einer, weil die zweite nichts kostet:
+   *
+   *   1. `clearTimeout`/`clearInterval` nimmt den Takt aus der Warteschlange.
+   *   2. Jeder Rückruf merkt sich den Stand des Zählers `taktStand` und tut
+   *      nichts mehr, wenn dazwischen gekappt wurde. Das trägt auch dann,
+   *      wenn ein Rückruf schon fällig war, als der Not-Aus kam — und genau
+   *      dieser Augenblick ist der schlechteste: Ein Klick, der erst NACH der
+   *      Antwort ausgelöst wird (siehe „Bedienen"), liegt in diesem Fenster.
+   *
+   * Was hier ausdrücklich NICHT mit hineingehört: der Beobachter des Wächters
+   * am Wirt. Er hält das Zeichen sichtbar, und nach dem Not-Aus ist das Schild
+   * „GESTOPPT" das einzige, was der Mensch mit geschlossener Seitenleiste noch
+   * sieht. Ihn zu kappen hiesse, ausgerechnet die Anzeige des Not-Aus
+   * angreifbar zu machen. Er endet mit `anzeigen(false)`.
+   * ------------------------------------------------------------------ */
+
+  let taktStand = 0;
+  const takte = new Set();
+
+  /** Jeden laufenden Takt löschen. Die eine Zeile, die der Not-Aus ruft. */
+  const takteKappen = () => {
+    taktStand += 1;
+    for (const abbrechen of [...takte]) {
+      try { abbrechen(); } catch (_) {}
+    }
+    takte.clear();
+    /* Und die beiden Griffe, die diese Datei selbst aufbewahrt. Sie zeigten
+       sonst auf einen Takt, den es nicht mehr gibt, und `arbeitsZeiger`
+       entschiede beim nächsten Ruf an einem toten Griff, ob es etwas
+       abzubrechen gibt. Zwei Wahrheiten über denselben Takt sind eine zu
+       viel. */
+    arbeitsLauf = null;
+    pulsUhr = null;
+  };
+
+  /* Zwei Wege, einen Takt loszuwerden, und der Unterschied ist wichtig:
+     `kappen()` bricht ihn ab, `abmelden()` nimmt ihn nur aus der Verwaltung.
+     Wer ein `taktFremd` gemeldet hat, dessen Abbruch selbst eine Handlung ist
+     — eine Absage an den Agenten etwa —, darf sie beim regulären Ende nicht
+     versehentlich auslösen. */
+  const taktGriff = (abbrechen) => ({
+    kappen() {
+      takte.delete(abbrechen);
+      try { abbrechen(); } catch (_) {}
+    },
+    abmelden() {
+      takte.delete(abbrechen);
+    },
+  });
+
+  /** Ein einmaliger Takt. Ersetzt `setTimeout` in dieser Datei. */
+  const taktEinmal = (tun, ms) => {
+    const stand = taktStand;
+    let abbrechen = null;
+    const id = setTimeout(() => {
+      if (abbrechen) takte.delete(abbrechen);
+      /* Dazwischen kam der Not-Aus: nicht mehr anfassen, nichts mehr zeigen. */
+      if (stand !== taktStand) return;
+      tun();
+    }, ms);
+    abbrechen = () => { try { clearTimeout(id); } catch (_) {} };
+    takte.add(abbrechen);
+    return taktGriff(abbrechen);
+  };
+
+  /** Ein wiederkehrender Takt. Ersetzt `setInterval` in dieser Datei. */
+  const taktLaufend = (tun, ms) => {
+    const stand = taktStand;
+    let abbrechen = null;
+    const id = setInterval(() => {
+      if (stand !== taktStand) {
+        if (abbrechen) { takte.delete(abbrechen); abbrechen(); }
+        return;
+      }
+      tun();
+    }, ms);
+    abbrechen = () => { try { clearInterval(id); } catch (_) {} };
+    takte.add(abbrechen);
+    return taktGriff(abbrechen);
+  };
+
+  /* Alles andere, was der Not-Aus abbrechen muss und was kein Zeitgeber ist —
+     ein `MutationObserver` etwa, oder eine Zusage, die noch aussteht. */
+  const taktFremd = (abbrechen) => {
+    takte.add(abbrechen);
+    return taktGriff(abbrechen);
+  };
+
   const gestoppt = () => {
     if (overlayTot) return;
+    /* ERST kappen, dann zeigen. Ein Schild, das „GESTOPPT" sagt, während der
+       Zeiger im nächsten Takt weiterwandert, ist die falsche Auskunft im
+       schlechtesten Augenblick — für jemanden, der schlecht sieht und sich auf
+       die Bewegung verlässt, ist die Bewegung die Aussage und nicht der Text.
+       Diese eine Zeile beendet zugleich die Warteschleife, den Arbeitszeiger,
+       den Puls und jeden Klick, der nach seiner Antwort noch aussteht. */
+    takteKappen();
     zielBezug = null;
     /* Ein gestopptes Zeichen ist rot, in jedem Modus. Bliebe die Farbe der
        Automatik stehen, sagte der Rahmen weiter „hier läuft etwas allein". */
@@ -531,7 +695,14 @@
     zeiger.setAttribute("data-an", "0");
     fahne.setAttribute("data-an", "0");
     ziel.setAttribute("data-an", "0");
-    setTimeout(() => {
+    /* Der Ring am Klickpunkt gehörte bis 14.08.2026 nicht dazu. Sein Takt
+       schaltete ihn 650 ms später ab — kappt man den Takt, ohne den Ring
+       abzuschalten, bliebe er stehen. Ein leuchtender Klickring auf einem
+       gestoppten Zeichen behauptet, hier sei gerade geklickt worden. */
+    puls.setAttribute("data-an", "0");
+    /* Der eigene Nachlauf des Schildes ist selbst ein Takt: Kommt der Not-Aus
+       ein zweites Mal, ersetzt er den ersten, statt sich daneben zu stellen. */
+    taktEinmal(() => {
       rahmen.removeAttribute("data-zustand");
       schild.removeAttribute("data-zustand");
       anzeigen(false);
@@ -609,9 +780,12 @@
     if (overlayTot) return;
     overlayTot = true;
     waechterStoppen();
-    try {
-      if (arbeitsLauf) { clearInterval(arbeitsLauf); arbeitsLauf = null; }
-    } catch (_) {}
+    /* Dieselbe eine Zeile wie im Not-Aus. Bis 14.08.2026 stand hier ein
+       einzelnes `clearInterval` für den Arbeitszeiger — genau die Bauform,
+       die den Befund erzeugt hat: Die Warteschleife und der ausstehende Klick
+       liefen weiter, obwohl das Overlay tot war und nichts mehr zeigen
+       konnte. Ein totes Overlay, das noch klickt, ist der schlimmste Fall. */
+    takteKappen();
     zielBezug = null;
     /* Ein totes Zeichen hat keinen Betriebsmodus mehr: weder die Farbe noch
        das Merkmal, an dem das Stylesheet sie festmacht. Sonst atmete ein
@@ -802,21 +976,30 @@
     zurück: [[0.06, 0.08], [0.06, 0.12]],
   };
   let arbeitsLauf = null;
+  /* Den eigenen Takt anhalten — an EINER Stelle, damit „läuft er noch" und
+     „habe ich ihn gelöscht" nicht auseinanderlaufen können. */
+  const arbeitsHalt = () => {
+    if (arbeitsLauf) arbeitsLauf.kappen();
+    arbeitsLauf = null;
+  };
   const arbeitsZeiger = (muster) => {
     const bahn = arbeitsBahn[muster] || arbeitsBahn.lesen;
-    if (arbeitsLauf) { clearInterval(arbeitsLauf); arbeitsLauf = null; }
+    arbeitsHalt();
     const b = innerWidth, h = innerHeight;
     let i = 0;
     const schritt = () => {
       if (i >= bahn.length) {
-        clearInterval(arbeitsLauf); arbeitsLauf = null;
+        arbeitsHalt();
         return;
       }
       const [ax, ay] = bahn[i++];
       zeigerAuf(Math.round(b * ax), Math.round(h * ay), muster);
     };
     schritt();
-    arbeitsLauf = setInterval(schritt, 420);
+    /* Über die Taktverwaltung und nicht über ein nacktes `setInterval`: Genau
+       dieser Takt hat den Zeiger 420 ms nach dem Not-Aus wieder eingeschaltet
+       (Befund NOTAUS-3). */
+    arbeitsLauf = taktLaufend(schritt, 420);
   };
 
   const zielRahmen = (r) => {
@@ -904,8 +1087,13 @@
     puls.setAttribute("data-an", "0");
     void puls.offsetWidth;
     puls.setAttribute("data-an", "1");
-    if (pulsUhr) clearTimeout(pulsUhr);
-    pulsUhr = setTimeout(() => puls.setAttribute("data-an", "0"), 650);
+    if (pulsUhr) pulsUhr.kappen();
+    /* Auch dieser Takt geht über die Verwaltung. Er schaltet den Ring nur AB,
+       richtet also für sich genommen keinen Schaden an — aber ein Takt, der
+       „harmlos" heisst und deshalb an der Verwaltung vorbeiläuft, ist der
+       nächste, den beim übernächsten Umbau niemand mehr findet. Abgeschaltet
+       wird der Ring beim Not-Aus in `gestoppt()` ausdrücklich. */
+    pulsUhr = taktEinmal(() => puls.setAttribute("data-an", "0"), 650);
   };
 
 
@@ -1496,10 +1684,19 @@
    * nie ein geratenes Ersatzelement. Ein Klick auf das falsche Element ist
    * schlimmer als gar keiner.
    *
-   * Der Klick wird NACH der Antwort ausgelöst (setTimeout 0): Löst er eine
-   * Navigation aus, stirbt dieses Skript mit der Seite — die Antwort wäre
+   * Der Klick wird NACH der Antwort ausgelöst (`taktEinmal(..., 0)`): Löst er
+   * eine Navigation aus, stirbt dieses Skript mit der Seite — die Antwort wäre
    * sonst nie abgeschickt, und der Agent läse „keine Antwort vom Browser",
    * obwohl der Klick stattgefunden hat.
+   *
+   * Genau dieses Fenster gehört seit 14.08.2026 der Taktverwaltung, und das
+   * ist keine Aufräumarbeit: Zwischen der Antwort und dem Klick liegt ein
+   * ganzer Durchlauf der Warteschlange, und die Reissleine wird in eben
+   * diesem Augenblick gezogen — der Mensch sieht das Ziel und will es nicht.
+   * Ein `setTimeout`, das niemand kappen kann, hätte hier NACH dem Not-Aus
+   * geklickt, getippt, ausgewählt oder ein Formular abgeschickt. Das ist die
+   * teuerste Erscheinungsform derselben Klasse wie der weiterlaufende
+   * Arbeitszeiger: Dort log eine Anzeige, hier handelte die Erweiterung.
    *
    * In Geheimfelder (Passwort, Karte, Einmalcode) wird nie getippt — dieselbe
    * Liste, nach der ihr Inhalt nie ausgelesen wird (spec-01 V10). Anmelden
@@ -1581,7 +1778,7 @@
          nur dann aufgehen, wenn wirklich geklickt wird. */
       klickPuls(punkt.x, punkt.y);
       /* Erst antworten, dann klicken — siehe Kopf dieses Abschnitts. */
-      setTimeout(() => {
+      taktEinmal(() => {
         try {
           el.focus({ preventScroll: true });
           echterKlick(el);
@@ -1631,9 +1828,12 @@
   /* Absenden. Wie beim Klick NACH der Antwort: Ein abgeschicktes Formular
      navigiert, und mit der Seite stirbt dieses Skript — die Antwort wäre sonst
      nie abgeschickt. `abgesendet:true` heißt deshalb „das Absenden ist
-     ausgelöst", nicht „die Seite hat es schon verarbeitet". */
+     ausgelöst", nicht „die Seite hat es schon verarbeitet".
+     Und wie beim Klick über die Taktverwaltung: Ein Formular, das eine
+     halbe Warteschlange nach dem Not-Aus noch abgeschickt wird, ist die
+     folgenschwerste Handlung, die diese Datei kennt. */
   const absendenAusloesen = (el) => {
-    setTimeout(() => {
+    taktEinmal(() => {
       try {
         for (const art of ["keydown", "keypress", "keyup"]) {
           el.dispatchEvent(
@@ -1782,11 +1982,26 @@
       if (egal) return egal;
     }
 
+    /*
+     * Die Option über ihren TEXT — den die Seite schreibt.
+     *
+     * Bis zum 14.08.2026 stand hier `optionstext(o).toLowerCase() === s`. Eine
+     * Liste mit „Express" und „Exprеss" (mit kyrillischem е) sieht für den
+     * Menschen wie zweimal dasselbe aus; für den Vergleich waren es zwei
+     * verschiedene Werte, und welche der beiden der Agent traf, bestimmte die
+     * Seite. Ab jetzt misst beide Seiten dieselbe Messform.
+     *
+     * Und weil die Messform genau das zusammenfaltet, kann der genaue Treffer
+     * jetzt MEHRDEUTIG sein — das war er vorher nie. `find` nähme dann
+     * stillschweigend die erste Option, also wieder die, die die Seite
+     * vorn hingestellt hat. Mehrdeutig heisst deshalb: keine Auswahl. Lieber
+     * benannt absagen als das Falsche anklicken.
+     */
     if (etikett !== undefined && etikett !== null && etikett !== "") {
-      const s = String(etikett).trim().toLowerCase();
-      const genau = waehlbar.find((o) => optionstext(o).toLowerCase() === s);
-      if (genau) return genau;
-      const teil = waehlbar.filter((o) => optionstext(o).toLowerCase().includes(s));
+      const genau = waehlbar.filter((o) => textGleich(optionstext(o), etikett));
+      if (genau.length === 1) return genau[0];
+      if (genau.length > 1) return null;
+      const teil = waehlbar.filter((o) => textEnthaelt(optionstext(o), etikett));
       if (teil.length === 1) return teil[0];
     }
 
@@ -1821,8 +2036,10 @@
       const gewaehlt = (optionstext(option) || String(option.value || "")).slice(0, 200);
       /* Erst antworten, dann setzen: Sprach- und Sortierlisten navigieren im
          change-Ereignis. Dann stirbt dieses Skript mit der Seite — dieselbe
-         Überlegung wie beim Klick. */
-      setTimeout(() => {
+         Überlegung wie beim Klick, und deshalb auch derselbe Weg über die
+         Taktverwaltung: Der Not-Aus muss diese Auswahl noch abbestellen
+         können. */
+      taktEinmal(() => {
         try {
           el.focus({ preventScroll: true });
           /* Bei -1 hat sich die Liste seit der Antwort geändert. Dann die
@@ -1850,7 +2067,9 @@
       }
       const gewaehlt = soll ? "checked" : "unchecked";
       if (ist === soll) return { ok: true, rolle, name: treffer.name, gewaehlt };
-      setTimeout(() => {
+      /* Auch hier über die Taktverwaltung: Ein Häkchen, das nach dem Not-Aus
+         gesetzt wird, ist eine Zustimmung, die niemand gegeben hat. */
+      taktEinmal(() => {
         try {
           el.focus({ preventScroll: true });
           /* Der Weg, den ein Mensch auch nimmt — er löst alle Ereignisse aus,
@@ -2020,8 +2239,18 @@
 
     const pruefen = () => {
       switch (bedingung) {
+        /* Der Text des AGENTEN im Text der SEITE, beides in der Messform.
+           Vorher `toLowerCase().includes(...)`: Eine Seite, die in ihr „Ihre
+           Bestellung ist eingegangen" ein Zeichen ohne Breite streut, liess
+           die Wartebedingung nie eintreten. Das kostet keine Wache, aber eine
+           volle Frist — und danach schliesst der Agent aus „nicht
+           eingetreten" das Falsche. */
         case "textPresent":
-          return seitentext().toLowerCase().includes(String(wert).trim().toLowerCase());
+          return textEnthaelt(seitentext(), wert);
+        /* Die Adresse bleibt ausdrücklich beim schlichten Vergleich. Die
+           Messform faltet sichtgleiche Fremdbuchstaben zusammen — auf einen
+           WIRTSNAMEN angewandt wäre das ein Loch in der Gegenrichtung:
+           `bаnk.de` mit kyrillischem а ist eine ANDERE Seite. */
         case "urlMatches":
           return jetztUrl().toLowerCase().includes(String(wert).trim().toLowerCase());
         case "refGone": {
@@ -2042,13 +2271,29 @@
     };
 
     let uhr = null;
+    /* Der Beobachter der Ruhe hängt an `document.documentElement` mit
+       `subtree`. Er ist ein Takt wie jeder andere — nur einer, der von der
+       Seite getaktet wird statt von der Uhr — und gehört deshalb in dieselbe
+       Verwaltung. Ohne ihn dort lief er nach dem Not-Aus bis zur eigenen
+       Frist weiter (Befund NOTAUS-4). */
+    let beobachterGriff = null;
+    const beobachterAus = () => {
+      if (!beobachter) return;
+      try { beobachter.disconnect(); } catch (_) {}
+      beobachter = null;
+    };
+    if (beobachter) beobachterGriff = taktFremd(beobachterAus);
+
+    const aufraeumen = () => {
+      if (uhr) uhr.kappen();
+      uhr = null;
+      if (beobachterGriff) beobachterGriff.kappen();
+      else beobachterAus();
+      beobachterGriff = null;
+    };
+
     const beenden = (erfuellt) => {
-      if (uhr) clearTimeout(uhr);
-      if (beobachter) {
-        try {
-          beobachter.disconnect();
-        } catch (_) {}
-      }
+      aufraeumen();
       antwort({
         ok: true,
         erfuellt,
@@ -2058,6 +2303,37 @@
       });
     };
 
+    /*
+     * Der Not-Aus beendet die Warteschleife SOFORT — und zwar mit einer
+     * Antwort und nicht mit Stille.
+     *
+     * Zwei Zusagen stossen hier aneinander: „nach dem Not-Aus liest diese
+     * Seite nichts mehr" und „es gibt keinen Weg, auf dem dieses Skript stumm
+     * bleibt". Beide gelten. Die Schleife hört auf zu lesen, und der Aufrufer
+     * bekommt eine benannte Absage statt eines `erfuellt:false`, das wie ein
+     * abgelaufenes Warten aussähe. `gestoppt` ist kein Ergebnis der Seite,
+     * sondern das Ende der Sitzung, und der Agent darf daraus etwas anderes
+     * schliessen als aus einer verstrichenen Frist.
+     */
+    const abgebrochen = () => {
+      aufraeumen();
+      antwort({
+        ok: false,
+        fehler: "gestoppt",
+        wartezeitMs: Math.round(performance.now() - start),
+        fristMs: frist,
+        gedeckelt,
+      });
+    };
+    const notaus = taktFremd(abgebrochen);
+    /* Die eigene Anmeldung wieder abmelden, wenn die Schleife regulär endet:
+       Sonst hinge an der Verwaltung eine Zusage, die längst beantwortet ist,
+       und der nächste Not-Aus riefe `antwort` ein zweites Mal. Dass die
+       Klammer im Nachrichtenhörer das abfängt, ist kein Grund, es hier
+       falsch zu machen. */
+    const fertigMelden = (tun) => (...w) => { notaus.abmelden(); tun(...w); };
+    const beendenEinmal = fertigMelden(beenden);
+
     const runde = () => {
       let erfuellt = false;
       try {
@@ -2065,10 +2341,10 @@
       } catch (_) {
         erfuellt = false;
       }
-      if (erfuellt) return beenden(true);
+      if (erfuellt) return beendenEinmal(true);
       const rest = frist - (performance.now() - start);
-      if (rest <= 0) return beenden(false);
-      uhr = setTimeout(runde, Math.min(WARTE_TAKT, Math.max(10, rest)));
+      if (rest <= 0) return beendenEinmal(false);
+      uhr = taktEinmal(runde, Math.min(WARTE_TAKT, Math.max(10, rest)));
     };
     runde();
   };
@@ -2105,12 +2381,14 @@
 
   const bereichFinden = (name) => {
     const gesucht = bereichsschluessel(name);
-    const etikettSuche = String(name || "").trim().toLowerCase();
     for (const el of document.querySelectorAll(BEREICHE)) {
       if (el.matches && !el.matches(BEREICHE)) continue;
       if (bereichsschluessel(rolleVon(el)) === gesucht) return el;
-      const etikett = (el.getAttribute("aria-label") || "").toLowerCase();
-      if (etikett && etikettSuche && etikett.includes(etikettSuche)) return el;
+      /* Das Etikett schreibt die SEITE, der Suchtext kommt vom Agenten — also
+         beides durch die Messform. Vorher zwei `toLowerCase()`: Ein Zeichen
+         ohne Breite im `aria-label` genügte, damit der gesuchte Bereich nicht
+         gefunden wird. */
+      if (textEnthaelt(el.getAttribute("aria-label") || "", name)) return el;
     }
     return null;
   };
@@ -2160,9 +2438,12 @@
       return { ok: true, treffer };
     }
 
+    /* Roh aufbewahrt und erst beim Vergleich gemessen — die Messform gehört an
+       die Stelle des Vergleichs und nicht an die des Einsammelns, sonst stünde
+       hier eine zweite, halbe Fassung derselben Regel. */
     const namen = (Array.isArray(felder) ? felder : felder ? [felder] : [])
-      .map((f) => String(f || "").trim().toLowerCase())
-      .filter(Boolean);
+      .map((f) => String(f || ""))
+      .filter((f) => f.trim() !== "");
     const hatRegion = typeof region === "string" && region.trim() !== "";
     if (!hatRegion && !namen.length) return { ok: false, fehler: "nichts_angefragt" };
 
@@ -2179,7 +2460,12 @@
       if (!sichtbar(el, el.getBoundingClientRect())) continue;
       if (bereich && !imBereich(el, bereich)) continue;
       const name = nameVon(el);
-      if (namen.length && !namen.some((f) => name.toLowerCase().includes(f))) continue;
+      /* Der Filter des AGENTEN gegen den Namen von der SEITE, beides in der
+         Messform. Ein verfehlter Filter liefert weniger Treffer und nie mehr
+         Rechte — die Richtung ist also die erlaubte —, aber „weniger Treffer"
+         heisst hier: Der Agent liest das Feld nicht, auf das es ankommt, und
+         welches das ist, entschiede sonst die Seite. */
+      if (namen.length && !namen.some((f) => textEnthaelt(name, f))) continue;
       treffer.push(eintrag(ref, el));
     }
     return { ok: true, treffer };

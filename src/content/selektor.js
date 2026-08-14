@@ -412,8 +412,44 @@
    * genommen — er steht als letzter Ausweg ganz unten, und die Identität hält
    * ab Festlegung F3 der Ausführer dagegen. Ein CSS-Pfad, der dasselbe kann,
    * stünde dagegen WEIT OBEN in der Kaskade und verdrängte den Textanker.
+   *
+   * Befund TEACH-5 vom 14.08.2026: Die Prüfung war zufrieden, sobald IRGENDWO
+   * im Pfad ein `#`, `.` oder `[` stand. Gemessen:
+   * `pfadTraegtMerkmal("form.maske > input:nth-of-type(2)")` war wahr — das
+   * Merkmal sass auf dem VORFAHREN, und das Blattglied zählte weiter nur die
+   * Stelle. Ein eingeschobenes Feld verschiebt sie, der Anker trifft weiter
+   * genau ein Element, nur das falsche.
+   *
+   * Gemessen wird deshalb das BLATT: Der letzte Schritt des Pfades ist der,
+   * der das Ziel benennt. Alles davor sagt nur, wo man suchen soll.
    */
-  const pfadTraegtMerkmal = (pfad) => /[#.\[]/.test(String(pfad || ""));
+  const pfadBlatt = (pfad) => {
+    const teile = String(pfad || "").split(">");
+    return teile[teile.length - 1].trim();
+  };
+
+  const pfadTraegtMerkmal = (pfad) => /[#.\[]/.test(pfadBlatt(pfad));
+
+  /**
+   * Zählt dieser Pfad irgendwo eine Stelle?
+   *
+   * Die zweite Hälfte desselben Befundes, und sie ist an einer anderen Stelle
+   * gemessen worden: `div.feld:nth-of-type(2) > input`. Hier trägt das Blatt
+   * kein Merkmal, aber der Vorfahre zählt — ein davor eingeschobenes
+   * `div.feld` verschiebt die Zählung, und der Anker trifft wieder genau ein
+   * Element, nur das falsche.
+   *
+   * Eine Stellenangabe IRGENDWO im Pfad macht ihn also zur Wette, egal auf
+   * welcher Ebene sie steht. Ein Pfad ohne Stellenangabe ist dagegen auch
+   * dann sicher, wenn er nur Elementnamen nennt: Wird ein Geschwister
+   * eingeschoben, trifft er zwei Elemente, und `kaskadeAufloesen` verlangt
+   * Eindeutigkeit. Er scheitert dann LAUT — und laut scheitern ist der
+   * ganze Unterschied.
+   */
+  const pfadZaehltStellen = (pfad) => /:nth-/.test(String(pfad || ""));
+
+  /** Taugt dieser CSS-Pfad als Anker auf Platz 3 der Kaskade? */
+  const pfadTaugt = (pfad) => !!pfad && pfadTraegtMerkmal(pfad) && !pfadZaehltStellen(pfad);
 
   /**
    * Der kürzeste eindeutige Pfad, höchstens vier Ebenen tief.
@@ -436,12 +472,16 @@
         if (id) {
           teile.unshift(`#${id}`);
           const mitId = teile.join(" > ");
-          return eindeutig(mitId, el, wurzel) ? mitId : null;
+          /* Auch dieser Ausgang geht durch dieselbe Prüfung. Vorher kam er
+             ohne aus, und genau hier entstand `#kasse > input:nth-of-type(2)`
+             — eine Kennung ganz oben macht aus einer Stellenzählerei unten
+             keinen Anker (Befund TEACH-5). */
+          return eindeutig(mitId, el, wurzel) && pfadTaugt(mitId) ? mitId : null;
         }
       }
       teile.unshift(pfadGlied(knoten));
       const jetzt = teile.join(" > ");
-      if (eindeutig(jetzt, el, wurzel) && pfadTraegtMerkmal(jetzt)) return jetzt;
+      if (eindeutig(jetzt, el, wurzel) && pfadTaugt(jetzt)) return jetzt;
       knoten = knoten.parentElement;
     }
     return null;
@@ -685,6 +725,8 @@
     wertTaugt,
     textOffen,
     pfadTraegtMerkmal,
+    pfadZaehltStellen,
+    pfadTaugt,
     traegtInhalt,
     STABILE_MERKMALE,
     ZUFALL_REGELN,

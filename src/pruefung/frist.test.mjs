@@ -72,6 +72,7 @@ const {
   verbinden,
   verlaengernMit,
   trennen,
+  sitzungTabId,
 } = await import("../net/link.js");
 
 /* Der Widerruf beim Relay ist eine zusätzliche Sicherung und darf in dieser
@@ -616,6 +617,52 @@ test("hat der Mensch wirklich verlängert, beginnt die Rechnung von vorn", async
   assert.equal(topf.link_sitzung.verbrauchtMs, 0, "Die neue Sitzung beginnt bei null.");
   assert.equal(restMs(topf.link_sitzung), 30 * MINUTE, "Und sie hat die vollen 30 Minuten.");
   await trennen("nutzer");
+});
+
+test("Not-Aus während der Verlängerung: es entsteht keine neue Leitung", async () => {
+  /*
+   * Derselbe Wiedereintritt nach `await` wie in NOTAUS-2, an der Stelle, an der
+   * er am teuersten wäre: `verlaengernMit` schaltet die alte Leitung stumm,
+   * löscht den Wecker und baut danach eine NEUE Verbindung auf. Fällt der
+   * Not-Aus zwischen das Löschen des Weckers und den neuen Handschlag, wäre
+   * das Ergebnis eine frische, vollwertige Sitzung nach dem Stopp — die
+   * denkbar vollständigste Wiederherstellung.
+   *
+   * Der Not-Aus wird genau in das `await` auf `chrome.alarms.clear` gelegt,
+   * also in dieselbe Lücke, die der Kommentar in `verlaengernMit` selbst als
+   * kritisch beschreibt.
+   */
+  const { topf, draht } = await aufbauen({ code: "sitzung-verl" });
+  const alteLeitung = DrahtAttrappe.letzte;
+
+  const echtClear = globalThis.chrome.alarms.clear;
+  let einmal = true;
+  globalThis.chrome.alarms.clear = async (name) => {
+    const ergebnis = await echtClear.call(globalThis.chrome.alarms, name);
+    if (einmal) {
+      einmal = false;
+      await trennen("notbremse");
+    }
+    return ergebnis;
+  };
+
+  let fehler = null;
+  try {
+    await verlaengernMit({ ticket: "zweites-ticket", ausweis: "ausweis" });
+  } catch (f) {
+    fehler = f;
+  }
+  globalThis.chrome.alarms.clear = echtClear;
+
+  assert.ok(fehler, "Die Verlängerung sagt ab, statt still eine neue Sitzung aufzubauen.");
+  assert.equal(fehler.kennung, "gekappt", "Und sie sagt, warum: Es wurde gestoppt.");
+  assert.equal(
+    DrahtAttrappe.letzte,
+    alteLeitung,
+    "Es ist keine neue Leitung zum Relay aufgebaut worden.",
+  );
+  assert.equal(topf.link_sitzung, undefined, "Und in der Ablage steht keine Sitzung mehr.");
+  assert.equal(sitzungTabId(), null, "Auch der Modulspeicher kennt keine mehr.");
 });
 
 test("nach Ablauf der Dauer wird kein Befehl mehr ausgeführt", async () => {

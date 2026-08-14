@@ -73,6 +73,8 @@ export function attrappeSetzen({
 
   const sitzungsAblage = new Map(Object.entries(ablageSession || {}));
   const oertlicheAblage = new Map(Object.entries(ablageLocal || {}));
+  /* Die gestellten Wecker, Name → Angaben. Siehe `alarms` weiter unten. */
+  const wecker = new Map();
 
   const chrome = {
     runtime: {
@@ -204,11 +206,57 @@ export function attrappeSetzen({
       async request() { return true; },
       async remove() { return true; },
     },
-    alarms: { async create() {}, async clear() {}, onAlarm: ereignis() },
+    /*
+     * Die Wecker — WIRKLICH gemerkt (Befund NOTAUS-6 vom 14.08.2026).
+     *
+     * Bis hierher standen hier zwei leere Funktionen, die nichts in die Spur
+     * schrieben. Damit war jede Zusage der Art „der Wecker ist gelöscht" über
+     * diese Attrappe gar nicht messbar — und genau das ist eine der beiden
+     * Zusagen des Not-Aus: `smartrchat-wache` und `smartrlink-wache` holen
+     * einen abgebrochenen Auftrag nach dem nächsten Start des Dienstarbeiters
+     * sonst WIEDER ab. Ein Not-Aus, den ein Wecker rückgängig macht, ist
+     * keiner.
+     *
+     * Wer das nicht wusste, schrieb einen grünen Prüfsatz, der nichts mass.
+     * `bruecke.test.mjs` hat sich deshalb in `weltNeu` eine eigene Fassung
+     * gebaut und `verzahnung.test.mjs` eine zweite — zwei Abschriften
+     * derselben Attrappe, dieselbe Bauform, gegen die Festlegung F4 steht.
+     * Diese Fassung ist die eine Quelle; sie schreibt in die Spur UND hält
+     * die laufenden Wecker unter `wecker` bereit.
+     */
+    alarms: {
+      async create(name, angaben) {
+        spur.push({ wohin: "alarms.create", name, angaben });
+        wecker.set(String(name), angaben || {});
+      },
+      async clear(name) {
+        spur.push({ wohin: "alarms.clear", name });
+        return wecker.delete(String(name));
+      },
+      async clearAll() {
+        spur.push({ wohin: "alarms.clearAll" });
+        const gab = wecker.size > 0;
+        wecker.clear();
+        return gab;
+      },
+      async get(name) {
+        const angaben = wecker.get(String(name));
+        return angaben ? { name: String(name), ...angaben } : undefined;
+      },
+      async getAll() {
+        return [...wecker].map(([name, angaben]) => ({ name, ...angaben }));
+      },
+      onAlarm: ereignis(),
+    },
   };
 
   globalThis.chrome = chrome;
-  return { chrome, spur };
+  return { chrome, spur, wecker };
+}
+
+/** Die Namen der Wecker, die gerade gestellt sind — ältester zuerst. */
+export function gestellteWecker(wecker) {
+  return [...wecker.keys()];
 }
 
 /** Alles, was an die Seite ging — für Prüfungen der Art „ist nie passiert". */

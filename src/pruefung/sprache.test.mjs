@@ -57,6 +57,39 @@ const OBERFLAECHE_JS = [
      hinsah. Die Datei ist nur zum Teil Oberfläche, siehe `PROTOKOLLRUFE`. */
   "src/net/link.js",
 ];
+
+/*
+ * Dateien, die KEINE Oberfläche sind, aber trotzdem Katalogtext tragen.
+ *
+ * Befund vom 14.08.2026, und er ist derselbe wie M10, nur eine Datei weiter:
+ * `net/ausfuehrer.js` ruft `katalog(schluessel, rueckfall)` für die zwei
+ * Systemmeldungen, die den abwesenden Menschen erreichen — den Ruf nach einer
+ * Freigabe und die Meldung über die angehaltene Automatik. Beide Schlüssel
+ * standen in keinem Katalog, und 929 grüne Prüfsätze haben es nicht bemerkt,
+ * weil die Datei in keiner Liste stand. In der englischen Oberfläche wäre
+ * dort deutscher Text erschienen.
+ *
+ * Warum eine EIGENE Liste und nicht einfach ein Eintrag oben: `ausfuehrer.js`
+ * ist voll von `absage("code", "Satz für den Agenten")`, und die Sätze bleiben
+ * nach §12 ausdrücklich deutsch. Der allgemeine Abtaster würde sie alle für
+ * Katalogschlüssel halten. Hier zählt deshalb nur, was wirklich durch den
+ * Katalog geht: der benannte Ruf `katalog(`.
+ */
+const NUR_KATALOGRUFE = ["src/net/ausfuehrer.js"];
+
+/** `katalog("schluessel", "Notfalltext")` — der benannte Weg in den Katalog. */
+function katalogRufeAusJs(rohquelle) {
+  const quelle = ohneKommentare(rohquelle);
+  const gefunden = [];
+  const muster = /\bkatalog\(\s*"([a-z][a-z0-9_]*)"\s*,/g;
+  let treffer;
+  while ((treffer = muster.exec(quelle)) !== null) {
+    const text = literalLesen(quelle, treffer.index + treffer[0].length);
+    gefunden.push({ schluessel: treffer[1], text });
+  }
+  return gefunden;
+}
+
 const OBERFLAECHE_HTML = ["src/panel/panel.html"];
 
 const KATALOG = new Map();
@@ -69,7 +102,7 @@ for (const sprache of SPRACHEN) {
 const MANIFEST = JSON.parse(await readFile(join(WURZEL, "manifest.json"), "utf8"));
 
 const QUELLE = new Map();
-for (const pfad of [...OBERFLAECHE_JS, ...OBERFLAECHE_HTML]) {
+for (const pfad of [...OBERFLAECHE_JS, ...NUR_KATALOGRUFE, ...OBERFLAECHE_HTML]) {
   QUELLE.set(pfad, await readFile(join(WURZEL, pfad), "utf8"));
 }
 
@@ -268,6 +301,9 @@ function verwendungen() {
     const quelle = QUELLE.get(pfad);
     for (const p of paareAusJs(quelle)) nimm(p.schluessel, p.text, pfad);
     for (const s of merkmalsSchluessel(quelle)) nimm(s, null, pfad);
+  }
+  for (const pfad of NUR_KATALOGRUFE) {
+    for (const p of katalogRufeAusJs(QUELLE.get(pfad))) nimm(p.schluessel, p.text, pfad);
   }
   for (const pfad of OBERFLAECHE_HTML) {
     for (const p of paareAusHtml(QUELLE.get(pfad))) nimm(p.schluessel, p.text, pfad);

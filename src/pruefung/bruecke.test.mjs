@@ -132,6 +132,16 @@ function weltNeu(zusatz = {}) {
       },
     };
   };
+  /*
+   * `chrome.runtime.getURL`, so wie Chrome es liefert: eine ABSOLUTE Adresse
+   * gegen die Erweiterungswurzel, unabhängig davon, wo der Dienstarbeiter
+   * liegt. Die gemeinsame Attrappe kennt es nicht (gemeldet als Fremdbedarf);
+   * ohne diese Zeile liesse sich Befund BRUECKE-8 nicht messen — der
+   * Rückfallpfad in `link.js` gäbe denselben relativen Pfad zurück, den der
+   * Befund beanstandet, und der Prüfsatz wäre auch ohne Reparatur grün.
+   */
+  welt.chrome.runtime.getURL = (pfad) =>
+    `chrome-extension://${welt.chrome.runtime.id}/${String(pfad || "").replace(/^\/+/, "")}`;
   /* Der Wecker wird mitgeschrieben. Ohne diese Fassung liesse sich „an den
      BESTEHENDEN Wecker gehängt, nicht an einen zweiten" nicht messen. */
   welt.wecker = [];
@@ -501,6 +511,282 @@ test("Sichtbarkeit: das Ende nimmt alle drei Zeichen wieder weg", async () => {
 });
 
 /* ================================================================== *
+ * 1b. Der Agentenname: belegt oder gar nicht (Befund BRUECKE-4)
+ * ================================================================== */
+
+test("Sichtbarkeit: ein Name, der nicht auf der Positivliste steht, wird nirgends behauptet", async () => {
+  /*
+   * GEMESSEN am 14.08.2026: `auth_ok` mit dem Agenten „smartrbrowser" (steht
+   * NICHT in `AGENTEN`) ergab den Symboltitel „SMarTrChrome, Cloud-Sitzung
+   * aktiv, smartrbrowser steuert diesen Browser", die Systemmeldung
+   * „smartrbrowser steuert jetzt diesen Browser." und die Dauerzeile mit
+   * demselben Namen — während `link:zustand?` daneben `agent=undefined`
+   * lieferte, weil `worker.js:732` gegen dieselbe Positivliste hält.
+   *
+   * Drei Zeichen aus §8.4, zwei behaupten, das dritte verwirft. Ein Relay oder
+   * Gateway, das den Namen aus einer Selbstauskunft füllt, schreibt dem
+   * Menschen damit einen beliebigen Namen auf den Bildschirm.
+   */
+  weltNeu();
+  const ab = welt.spur.length;
+  await sitzungAufbauen({ agent: "smartrbrowser", code: "s-fremder-name" });
+
+  const z = zeichen(ab);
+  assert.equal(z.zeile[0].nachricht.agent, "", "In der Dauerzeile steht kein unbelegter Name.");
+  assert.equal(
+    z.meldung.length,
+    1,
+    "Die Systemmeldung kommt trotzdem — die Sitzung ist ja echt, nur der Name ist es nicht.",
+  );
+  assert.ok(
+    !z.meldung[0].angaben.message.includes("smartrbrowser"),
+    "Und sie behauptet nicht, wer da steuert.",
+  );
+  assert.match(
+    z.meldung[0].angaben.message,
+    /^Ein Agent steuert jetzt diesen Browser\./,
+    "Sie sagt „Ein Agent“, und das ist belegt.",
+  );
+  const titel = welt.spur.slice(ab).filter((e) => e.wohin === "action.setTitle");
+  assert.ok(titel.length >= 1, "Der Symboltitel wird gesetzt.");
+  assert.ok(
+    !titel.some((t) => String(t.title).includes("smartrbrowser")),
+    "Aber er nennt keinen Namen, den diese Erweiterung nicht belegen kann.",
+  );
+
+  const stand = await link.zustand();
+  assert.equal(stand.agent, "", "Und `link:zustand?` bekommt dieselbe Antwort wie die anderen zwei Zeichen.");
+});
+
+test("Sichtbarkeit: ein belegter Name geht weiterhin überall durch", async () => {
+  /* Die Gegenprobe zur Reparatur: Die Positivliste darf die drei Zeichen nicht
+     verstummen lassen, sie soll nur unbelegte Namen aufhalten. */
+  weltNeu();
+  const ab = welt.spur.length;
+  await sitzungAufbauen({ agent: "SMarTrItgott", code: "s-echter-name" });
+
+  const z = zeichen(ab);
+  assert.equal(z.zeile[0].nachricht.agent, "SMarTrItgott", "Der belegte Name steht in der Zeile.");
+  assert.match(z.meldung[0].angaben.message, /^SMarTrItgott steuert jetzt diesen Browser\./);
+  assert.equal((await link.zustand()).agent, "SMarTrItgott", "Und im Zustand steht er auch.");
+});
+
+test("Das Buch hält den behaupteten Namen fest, auch wenn die Anzeige ihn verwirft", async () => {
+  /*
+   * Die andere Hälfte derselben Entscheidung (BRUECKE-4 zusammen mit
+   * BRUECKE-7): Die Oberfläche darf nur behaupten, was sie belegen kann — das
+   * Buch soll festhalten, was wirklich angekommen ist. Dass ein fremder Name
+   * angeklopft hat, ist genau die Zeile, die man später sucht.
+   *
+   * Gemessen an einer Absage der Brücke selbst (Tab weg): Nur dort schreibt
+   * `link.js` den Eintrag, und nur dort lässt sich messen, WAS sie aus dem
+   * Rahmen genommen hat.
+   */
+  weltNeu();
+  const draht = await sitzungAufbauen({ agent: null, tabId: 99, code: "s-buch-fremd" });
+  const ab = welt.spur.length;
+  await draht.empfangen({ id: "b9", cmd: "snapshot", reason: "Ich sehe nach.", agent: "smartrbrowser" });
+
+  const eintraege = await protokollbuch.lesen();
+  assert.equal(eintraege.length, 1, "Die abgesagte Fernaktion steht im Buch.");
+  assert.equal(
+    eintraege[0].agent,
+    "smartrbrowser",
+    "Und zwar mit dem Namen, unter dem sie angeklopft hat — sonst wäre die Zeile stumm.",
+  );
+  assert.equal(
+    zeichen(ab).zeile.length,
+    0,
+    "In der Seitenleiste wird derselbe Name dagegen NICHT nachgetragen.",
+  );
+});
+
+/* ================================================================== *
+ * 1c. Das Symbol der Systemmeldung (Befund BRUECKE-8)
+ * ================================================================== */
+
+test("Sichtbarkeit: die Systemmeldung nennt ihr Symbol absolut, nicht relativ zum Dienstarbeiter", async () => {
+  /*
+   * Befund BRUECKE-8: Hier stand `iconUrl: "icons/icon-128.png"`, ein
+   * RELATIVER Pfad. Der Dienstarbeiter läuft als
+   * `chrome-extension://ID/src/background/worker.js` und liegt damit zwei
+   * Ordner tief. Löst Chrome den Pfad gegen die Worker-Adresse auf, zeigt er
+   * auf `src/background/icons/icon-128.png`, das es nicht gibt, und
+   * `chrome.notifications.create` schlägt mit „Unable to download all
+   * specified images" fehl — STILL, denn der Fehlschlag wird verschluckt.
+   * Damit fiele genau das eine der drei Zeichen aus §8.4 aus, das den Menschen
+   * im anderen Fenster erreicht.
+   *
+   * Ob Chrome so oder so auflöst, ist hier nicht messbar und auch nicht mehr
+   * die Frage: `chrome.runtime.getURL` löst IMMER gegen die Erweiterungswurzel
+   * auf. Gemessen wird, dass die Meldung diesen Weg nimmt.
+   */
+  weltNeu();
+  const ab = welt.spur.length;
+  await sitzungAufbauen({ agent: "SMarTrCEO", code: "s-symbolpfad" });
+
+  const m = zeichen(ab).meldung[0];
+  assert.ok(m, "Vorbedingung: Es gibt eine Systemmeldung.");
+  assert.match(
+    String(m.angaben.iconUrl),
+    /^chrome-extension:\/\/[a-p]{32}\/icons\/icon-128\.png$/,
+    "Das Symbol steht als absolute Adresse gegen die Erweiterungswurzel.",
+  );
+});
+
+/* ================================================================== *
+ * 3b. Die Freigabe, die keine Seitenleiste erreicht (Befund BRUECKE-3)
+ *
+ * GEMESSEN am 14.08.2026: `navigate` nach `/checkout/payment`, Klassen
+ * [navigieren, zahlung], Seitenleiste zu — `link:schritt-freigabe` ging ins
+ * Leere, der Agent bekam `grant_required`, und es gab NULL Systemmeldungen und
+ * NULL Abzeichenwechsel. `istUnbeaufsichtigt()` hatte im ganzen Baum keinen
+ * einzigen Aufrufer und keinen Prüfsatz, und ein GREP über `setBadgeText` fand
+ * nur „LIVE", das Auge und die leere Zeichenkette — das Fragezeichen, das
+ * `panel.js:3671` dem Menschen zusagt, gab es nirgends.
+ * ================================================================== */
+
+test("Freigabe ohne Seitenleiste: sie erreicht den Menschen über Abzeichen UND Systemmeldung", async () => {
+  weltNeu();
+  await sitzungAufbauen({ agent: "SMarTrCEO", code: "s-freigabe" });
+  await link.unbeaufsichtigtSetzen(true);
+  assert.equal(link.istUnbeaufsichtigt(), true, "Vorbedingung: Es sieht niemand zu.");
+
+  const ab = welt.spur.length;
+  const ruf = link.freigabeRufen({
+    frage: "Soll ich auf Bezahlen drücken?",
+    cmd: "click",
+    id: "f1",
+  });
+
+  assert.equal(ruf.erreicht, true, "Der Mensch ist erreicht worden.");
+  assert.deepEqual(ruf.wege, ["abzeichen", "systemmeldung"], "Und zwar auf beiden Wegen, nicht auf einem.");
+  assert.equal(link.freigabeSteht(), true, "Die Frage steht offen.");
+
+  const abzeichen = welt.spur.slice(ab).filter((e) => e.wohin === "action.setBadgeText");
+  assert.ok(abzeichen.length >= 1, "Am Symbol ändert sich etwas.");
+  assert.equal(abzeichen.at(-1).text, "?", "Und zwar auf das Fragezeichen, das `panel.js` zusagt.");
+
+  const meldungen = welt.spur.slice(ab).filter((e) => e.wohin === "notifications.create");
+  assert.equal(meldungen.length, 1, "Es gibt genau eine Systemmeldung.");
+  assert.match(
+    String(meldungen[0].angaben.message),
+    /Bezahlen/,
+    "Sie trägt die Frage im Klartext — sonst muss der Mensch erst die Seitenleiste öffnen, um zu wissen, worum es geht.",
+  );
+  assert.equal(
+    meldungen[0].id,
+    "smartrlink-freigabe-f1",
+    "Sie trägt die Kennung der Frage, damit genau DIESE wieder wegzunehmen ist.",
+  );
+
+  /* Und sie geht wieder weg, sobald entschieden ist. Ein Fragezeichen, das
+     stehen bleibt, fragt nach etwas, das niemand mehr beantworten kann. */
+  const ab2 = welt.spur.length;
+  assert.equal(link.freigabeRufAus(), true, "Der Ruf lässt sich zurücknehmen.");
+  assert.equal(link.freigabeSteht(), false, "Danach steht keine Frage mehr offen.");
+  const zurueck = welt.spur.slice(ab2).filter((e) => e.wohin === "action.setBadgeText");
+  assert.equal(zurueck.at(-1).text, "👁", "Am Symbol steht wieder das Zeichen der Lage.");
+  assert.ok(
+    welt.spur.slice(ab2).some((e) => e.wohin === "notifications.clear" && e.id === "smartrlink-freigabe-f1"),
+    "Und die Systemmeldung wird weggeräumt.",
+  );
+});
+
+test("Freigabe ohne Seitenleiste: erreicht sie niemanden, gibt es eine BENANNTE Absage", async () => {
+  /*
+   * Stufe 3. Der Unterschied zu `grant_required` ist der ganze Sinn:
+   * `grant_required` heißt „gefragt und keine Zustimmung bekommen",
+   * `grant_unreachable` heißt „ich konnte niemanden fragen". Ein Agent, der
+   * beides gleich behandelt, sagt dem Menschen später das Falsche.
+   */
+  weltNeu();
+  await sitzungAufbauen({ agent: "SMarTrCEO", code: "s-freigabe-taub" });
+  await link.unbeaufsichtigtSetzen(true);
+  delete welt.chrome.notifications;
+  delete welt.chrome.action;
+
+  const ruf = link.freigabeRufen({ frage: "Soll ich auf Bezahlen drücken?", cmd: "click", id: "f-taub" });
+  assert.equal(ruf.erreicht, false, "Kein Weg hat funktioniert.");
+  assert.deepEqual(ruf.wege, [], "Und keiner wird behauptet.");
+  assert.equal(link.freigabeSteht(), false, "Es steht auch keine Frage offen, die niemand sieht.");
+
+  assert.equal(link.FREIGABE_UNERREICHBAR, "grant_unreachable", "Die Absage hat einen eigenen Namen.");
+  assert.notEqual(
+    link.FREIGABE_UNERREICHBAR,
+    "grant_required",
+    "Und ausdrücklich nicht den der abgelehnten Freigabe.",
+  );
+  assert.ok(
+    link.FREIGABE_UNERREICHBAR_TEXT.includes("nichts ausgeführt"),
+    "Der Satz an den Agenten sagt, dass nichts geschehen ist.",
+  );
+  assert.ok(
+    !link.FREIGABE_UNERREICHBAR_TEXT.includes(" — "),
+    "Kein Gedankenstrich in einem Satz, der vorgelesen wird.",
+  );
+});
+
+test("Freigabe ohne Seitenleiste: `nurAbzeichen` holt das Symbol, ohne zweimal zu piepsen", async () => {
+  /*
+   * Das Symbol hat genau EINEN Besitzer, und das ist `link.js` (Festlegung
+   * F4). Ein Aufrufer, der seine Systemmeldung schon selbst setzt — der
+   * Ausführer tut das in `menschRufen` —, soll hier nur das Abzeichen holen
+   * und nicht eine zweite Meldung dazu. Zwei Meldungen für eine Frage sind
+   * schlimmer als eine, und ein zweites Abzeichen an einer zweiten Stelle wäre
+   * genau der Fehler, den F4 verbietet.
+   */
+  weltNeu();
+  await sitzungAufbauen({ agent: "SMarTrCEO", code: "s-nur-abzeichen" });
+  await link.unbeaufsichtigtSetzen(true);
+  const ab = welt.spur.length;
+
+  const ruf = link.freigabeRufen({
+    frage: "Soll ich auf Bezahlen drücken?",
+    cmd: "click",
+    id: "f3",
+    nurAbzeichen: true,
+  });
+  assert.deepEqual(ruf.wege, ["abzeichen"], "Nur das Abzeichen, kein zweiter Piepser.");
+  assert.equal(
+    welt.spur.slice(ab).filter((e) => e.wohin === "notifications.create").length,
+    0,
+    "Von hier aus geht keine Systemmeldung hinaus.",
+  );
+  assert.equal(
+    welt.spur.slice(ab).filter((e) => e.wohin === "action.setBadgeText").at(-1).text,
+    "?",
+    "Das Fragezeichen steht trotzdem.",
+  );
+  assert.equal(link.freigabeSteht(), true, "Und die Frage gilt als offen.");
+  link.freigabeRufAus();
+});
+
+test("Freigabe ohne Seitenleiste: der Not-Aus nimmt die offene Frage mit", async () => {
+  /* Dieselbe Klasse wie NOTAUS-2, an einem neu gebauten Zeichen: Ein
+     Fragezeichen am Symbol, das eine beendete Sitzung überlebt, ist ein
+     Zeichen für etwas, das es nicht mehr gibt. */
+  weltNeu();
+  await sitzungAufbauen({ agent: "SMarTrCEO", code: "s-freigabe-ende" });
+  await link.unbeaufsichtigtSetzen(true);
+  link.freigabeRufen({ frage: "Soll ich auf Bezahlen drücken?", cmd: "click", id: "f2" });
+  assert.equal(link.freigabeSteht(), true, "Vorbedingung: Die Frage steht.");
+
+  const ab = welt.spur.length;
+  await anWorker({ typ: "link:notaus", grund: "seitenleiste" });
+  await runden(20);
+
+  assert.equal(link.freigabeSteht(), false, "Nach dem Not-Aus steht keine Frage mehr offen.");
+  assert.ok(
+    welt.spur.slice(ab).some((e) => e.wohin === "notifications.clear" && e.id === "smartrlink-freigabe-f2"),
+    "Und die Systemmeldung dazu ist weggeräumt.",
+  );
+  const abzeichen = welt.spur.slice(ab).filter((e) => e.wohin === "action.setBadgeText");
+  assert.ok(abzeichen.length >= 1, "Am Symbol ändert sich etwas.");
+  assert.equal(abzeichen.at(-1).text, "", "Und am Ende steht dort nichts mehr.");
+});
+
+/* ================================================================== *
  * 2. Not-Aus (§5)
  * ================================================================== */
 
@@ -669,6 +955,163 @@ test("Not-Aus: der Cloud-Auftrag hört mit auf, auf allen drei Wegen", async () 
   }
 });
 
+test("Not-Aus in der offenen Frage: danach entsteht kein Botengang mehr (NOTAUS-1)", async () => {
+  /*
+   * Der gemessene Fall aus NOTAUS-1, über den Produktivweg: Der Mensch schickt
+   * eine Frage und zieht die Reissleine, WÄHREND `POST /chat/message` noch
+   * unterwegs ist. Das Fenster ist die ganze Antwortzeit des Gateways, bis zu
+   * FRIST_ANFRAGE = 12 Sekunden.
+   *
+   * `chatAbbrechen` findet in diesem Augenblick NICHTS: `lauf` ist null,
+   * `chat_lauf` leer, es geht kein `/chat/cancel` hinaus. Antwortet der POST
+   * danach, baute `chatStarten` den ganzen Botengang neu auf — Wecker,
+   * `chat_lauf` in der Ablage, `weiterAbholen`. Netzspur der Messung:
+   * `/chat/poll` bei +33 ms und +2035 ms NACH dem Not-Aus, `/chat/cancel` null
+   * Mal. Der Auftrag lief bis zu 300 Takte, also zehn Minuten, und kostete
+   * Guthaben.
+   */
+  weltNeu();
+  await chat.chatAbbrechen(); /* Rest aus einem vorigen Durchgang */
+
+  const rufe = [];
+  let frageLoslassen = null;
+  globalThis.fetch = async (adresse, angaben) => {
+    const weg = String(adresse);
+    rufe.push({ weg, angaben });
+    const antwort = (daten) => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => "application/json" },
+      async json() {
+        return daten;
+      },
+    });
+    if (weg.includes("/api/v1/chat/message")) {
+      /* Das Gateway lässt sich Zeit. Genau dieses Fenster ist der Befund. */
+      await new Promise((f) => {
+        frageLoslassen = f;
+      });
+      return antwort({ task_id: "t-rennen", context_id: "c-rennen" });
+    }
+    if (weg.includes("/api/v1/chat/poll/")) return antwort({ status: "processing", steps: [] });
+    return antwort({});
+  };
+
+  await sitzungAufbauen({ agent: "SMarTrCEO", code: "s-chat-rennen" });
+
+  const start = chat.chatStarten({ text: "Was steht hier?", ausweis: "ausweis" });
+  await runden(10);
+  assert.equal(typeof frageLoslassen, "function", "Vorbedingung: Der POST steht noch offen.");
+  assert.equal(
+    (await chat.chatZustand()).laeuft,
+    false,
+    "Vorbedingung: Solange die Frage unterwegs ist, kennt der Dienst noch keinen Botengang.",
+  );
+
+  /* Jetzt zieht der Mensch die Reissleine, über den echten Nachrichtenhörer. */
+  await anWorker({ typ: "notbremse", quelle: "schild" }, ausDemTab(7));
+  await runden(20);
+
+  /* Und JETZT erst antwortet das Gateway. */
+  frageLoslassen();
+  const ergebnis = await start;
+  await runden(30);
+
+  assert.equal(ergebnis.ok, false, "Die Frage endet als abgebrochen, nicht als laufender Auftrag.");
+  assert.equal(ergebnis.kennung, "abgebrochen", "Und sie sagt ehrlich, warum.");
+  assert.equal(
+    (await chat.chatZustand()).laeuft,
+    false,
+    "Nach dem Not-Aus läuft kein Botengang, auch nicht der, der vorher losging.",
+  );
+  assert.deepEqual(
+    await welt.chrome.storage.session.get("chat_lauf"),
+    {},
+    "In der Ablage steht nichts, das die Wache nach einem Neustart wieder auflesen könnte.",
+  );
+  assert.ok(
+    !welt.wecker.some((w) => w.name === chat.CHAT_WECKER_NAME),
+    "Und es steht kein Chat-Wecker, der ihn wieder anwerfen würde.",
+  );
+  assert.equal(rufeAuf(rufe, "/chat/poll/"), 0, "Es wird kein einziges Mal abgefragt.");
+  assert.equal(
+    rufeAuf(rufe, "/chat/cancel"),
+    1,
+    "Der Auftrag wird beim Server gestoppt, genau einmal — er läuft dort ja bereits.",
+  );
+
+  /* Und die Messung, die der Befund wörtlich nennt: zwei Takte später immer
+     noch nichts. Der Takt liegt bei zwei Sekunden, hier wird wirklich
+     gewartet. */
+  await new Promise((f) => setTimeout(f, 2300));
+  assert.equal(rufeAuf(rufe, "/chat/poll/"), 0, "Auch zwei Takte später kommt keine Abfrage.");
+});
+
+test("Not-Aus im Chat-Wecker: der Botengang wird nicht wieder aufgenommen", async () => {
+  /*
+   * Dieselbe Klasse, selbst gefunden, und der Nachsatz des Befundes:
+   * `chat.wacheLaufen` liest den abgelegten Botengang und nimmt das Abholen
+   * wieder auf. Zwischen dem Lesen der Ablage, dem Holen des Ausweises und
+   * dem Aufbau liegen zwei `await`s. Ein Not-Aus dazwischen wäre einer, den
+   * ein Wecker rückgängig macht.
+   */
+  weltNeu({ ablageSession: ausweisAblage() });
+  await chat.chatAbbrechen();
+  const rufe = chatGatewayStellen();
+  await welt.chrome.storage.session.set({
+    chat_lauf: { taskId: "t-wache", contextId: "c-wache" },
+  });
+
+  notausBeimLesen("chat_lauf", () => anWorker({ typ: "notbremse", quelle: "schild" }, ausDemTab(7)));
+
+  await chat.wacheLaufen();
+  await runden(30);
+
+  assert.equal((await chat.chatZustand()).laeuft, false, "Der Wecker hat nichts wieder angeworfen.");
+  assert.deepEqual(
+    await welt.chrome.storage.session.get("chat_lauf"),
+    {},
+    "Und er lässt auch nichts liegen, das der nächste Schlag wieder auflesen könnte.",
+  );
+  await new Promise((f) => setTimeout(f, 2300));
+  assert.equal(rufeAuf(rufe, "/chat/poll/"), 0, "Es wird nicht abgefragt, auch zwei Takte später nicht.");
+});
+
+test("Not-Aus in der Übernahme: ein offener Auftrag wird nicht wieder übernommen", async () => {
+  /*
+   * Dieselbe Klasse, selbst gefunden, am dritten Eingang: `chatFortsetzen` ist
+   * der Weg, den die Seitenleiste geht, wenn sie über `GET /chat/active` einen
+   * offenen Botengang findet. Er legt `chat_lauf` an und stellt den Wecker —
+   * beides nach einem `await`.
+   */
+  weltNeu({ ablageSession: ausweisAblage() });
+  await chat.chatAbbrechen();
+  const rufe = chatGatewayStellen();
+
+  notausBeimSchreiben("chat_lauf", () => anWorker({ typ: "notbremse", quelle: "schild" }, ausDemTab(7)));
+
+  const antwort = await chat.chatFortsetzen({
+    taskId: "t-uebernahme",
+    contextId: "c-uebernahme",
+    ausweis: "ausweis",
+  });
+  await runden(30);
+
+  assert.equal(antwort.ok, false, "Die Übernahme sagt ab, statt still weiterzulaufen.");
+  assert.equal((await chat.chatZustand()).laeuft, false, "Es läuft kein Botengang.");
+  assert.deepEqual(
+    await welt.chrome.storage.session.get("chat_lauf"),
+    {},
+    "Und in der Ablage steht nichts mehr.",
+  );
+  assert.ok(
+    !welt.wecker.some((w) => w.name === chat.CHAT_WECKER_NAME),
+    "Der Chat-Wecker steht nicht.",
+  );
+  await new Promise((f) => setTimeout(f, 2300));
+  assert.equal(rufeAuf(rufe, "/chat/poll/"), 0, "Es wird nicht abgefragt.");
+});
+
 test("Not-Aus: das Zeichen erreicht den Tab auch bei geschlossener Seitenleiste", async () => {
   /*
    * Festlegung F2: Der Dienstarbeiter sendet `overlay:gestoppt` selbst. Bis zum
@@ -707,6 +1150,284 @@ test("Not-Aus: das Ende bekommt seine Zeile im Buch", async () => {
   assert.equal(ende.length, 1, "Genau eine Zeile für das Ende.");
   assert.equal(ende[0].ergebnis, "notbremse", "Und sie sagt, warum Schluss war.");
   assert.equal(ende[0].agent, "SMarTrCEO", "Mit dem Agenten, dem die Sitzung gehörte.");
+});
+
+/* ================================================================== *
+ * 2b. Der Wiedereintritt nach `await` (Befund NOTAUS-2, 14.08.2026)
+ *
+ * DER GRUNDSATZ, den diese Gruppe misst:
+ *
+ *   **Nach einem Not-Aus darf kein Weg mehr etwas WIEDERHERSTELLEN, auch
+ *   nicht ein Weg, der VOR dem Not-Aus begonnen hat.**
+ *
+ * Die Gruppe darüber misst, dass ein Not-Aus SOFORT wirkt. Sie hat am
+ * 14.08.2026 nichts gemerkt, weil der gemessene Fehler ein Rennen ist und kein
+ * fehlender Aufruf: Der Not-Aus wirkte, und ein Weg, der schon vorher begonnen
+ * hatte, machte ihn danach rückgängig. Deshalb hält hier jeder Satz den
+ * Not-Aus MITTEN in ein `await` hinein.
+ * ================================================================== */
+
+/**
+ * Einen Not-Aus genau dann auslösen, wenn ein bestimmter Schlüssel in die
+ * Sitzungsablage geschrieben wird — also mitten im `await` des Schreibenden.
+ *
+ * Das ist die Attrappe der Messung aus dem Befund: `chrome.storage.session.set`
+ * ist ein IPC von wenigen Millisekunden, und genau dorthinein fiel der Not-Aus.
+ * Einmal und nicht öfter, sonst löst das Aufräumen des Not-Aus sich selbst aus.
+ */
+function notausBeimSchreiben(schluessel, ausloesen) {
+  const echt = welt.chrome.storage.session.set.bind(welt.chrome.storage.session);
+  let einmal = true;
+  welt.chrome.storage.session.set = async (daten) => {
+    if (einmal && daten && Object.prototype.hasOwnProperty.call(daten, schluessel)) {
+      einmal = false;
+      await ausloesen();
+      /* Der Not-Aus läuft VOLLSTÄNDIG durch, bevor der Schreibende
+         weitermacht. Ohne diese Runden entscheidet die Reihenfolge der
+         Mikroaufgaben, wer zuletzt schreibt — und ein Prüfsatz, dessen
+         Ergebnis vom Zufall abhängt, misst nichts. */
+      await runden(10);
+    }
+    return echt(daten);
+  };
+}
+
+/** Dasselbe für das LESEN — der Weg nach einem Neustart des Dienstarbeiters. */
+function notausBeimLesen(schluessel, ausloesen) {
+  const echt = welt.chrome.storage.session.get.bind(welt.chrome.storage.session);
+  let einmal = true;
+  welt.chrome.storage.session.get = async (k) => {
+    const wert = await echt(k);
+    if (einmal && k === schluessel) {
+      einmal = false;
+      await ausloesen();
+      await runden(10);
+    }
+    return wert;
+  };
+}
+
+test("Not-Aus im Handschlag: `auth_ok` baut danach nichts mehr auf", async () => {
+  /*
+   * Der gemessene Fall aus NOTAUS-2, in seiner reinsten Form: Der Mensch
+   * drückt Alt+Umschalt+S, WÄHREND der Handschlag läuft. Bis zu FRIST_AUTH =
+   * 20 Sekunden liegen zwischen `new WebSocket` und `auth_ok`.
+   *
+   * Die Leitung wird beim Not-Aus geschlossen, aber Chrome schickt das
+   * close-Ereignis erst, wenn der Relay antwortet — und §5 verbietet
+   * ausdrücklich, darauf zu warten. Antwortet der Relay in dieser Zeit mit
+   * `auth_ok`, lief der ganze Aufbau durch: Sitzung in der Ablage, Herzschlag,
+   * Wecker, `zaehlerNeu()` mit `aktiv = true`, Dauerzeile, Abzeichen,
+   * Systemmeldung. Der Handschlag machte das Kappen rückgängig.
+   */
+  weltNeu();
+  globalThis.WebSocket = DrahtAttrappe;
+  const laeuft = link.verbinden({ ticket: "einweg-ticket", ausweis: "ausweis", tabId: 7 });
+  laeuft.catch(() => {});
+  const draht = DrahtAttrappe.letzte;
+  draht.oeffnen();
+
+  /* Der Not-Aus über den echten Nachrichtenhörer, während der Handschlag steht. */
+  await anWorker({ typ: "link:notaus", grund: "seitenleiste" });
+  await runden(10);
+  assert.equal(widerrufe.length, 0, "Vorbedingung: Es gab noch keine Sitzung, also auch keinen Widerruf.");
+
+  const ab = welt.spur.length;
+  await draht.empfangen({
+    type: "auth_ok",
+    code: "s-zu-spaet",
+    access: "write",
+    allow: ["geizhals.de"],
+    mode: "tab",
+    step_mode: "auto",
+    expiry: 1800,
+    agent: "SMarTrCEO",
+  });
+  await runden(20);
+
+  assert.deepEqual(
+    await welt.chrome.storage.session.get("link_sitzung"),
+    {},
+    "Es liegt keine Sitzung in der Ablage.",
+  );
+  assert.equal(link.sitzungTabId(), null, "Und der Dienst kennt auch keinen Tab mehr.");
+  assert.ok(
+    !welt.wecker.some((w) => w.name === link.WECKER_NAME),
+    "Der 30-Sekunden-Wecker steht nicht — er hielte den Dienstarbeiter zehn Minuten wach.",
+  );
+
+  const z = zeichen(ab);
+  assert.equal(z.zeile.length, 0, "Die Seitenleiste bekommt keine Dauerzeile nach dem Stopp.");
+  assert.equal(z.meldung.length, 0, "Und keine Systemmeldung, die eine Steuerung behauptet.");
+  assert.equal(
+    welt.spur.slice(ab).filter((e) => e.wohin === "action.setBadgeText" && e.text).length,
+    0,
+    "Am Symbol geht kein Abzeichen mehr an.",
+  );
+  assert.equal(
+    welt.spur
+      .slice(ab)
+      .filter((e) => e.wohin === "panel" && e.nachricht && e.nachricht.typ === "link:zustand" && e.nachricht.verbunden === true)
+      .length,
+    0,
+    "Und die Seitenleiste erfährt nicht, sie sei jetzt verbunden.",
+  );
+
+  /* Die Zeile, an der der Befund wörtlich hängt: `ausfuehrer.zaehlerNeu()`
+     setzt `aktiv` bedingungslos wieder auf true. Gemessen wird nicht, ob sie
+     gerufen wurde, sondern ob danach noch ausgeführt wird. */
+  const nachher = await ausfuehrer.befehlAusfuehren(
+    { id: "n2", cmd: "snapshot", reason: "Ich sehe nach." },
+    {}
+  );
+  assert.equal(
+    nachher.error && nachher.error.code,
+    "session_beendet",
+    "Der Handschlag hat den Not-Aus nicht rückgängig gemacht: Es wird nichts mehr ausgeführt.",
+  );
+
+  /* Und die zweite Hälfte des Befundes: Diese Sitzung EXISTIERT beim Relay.
+     Der Not-Aus lief mit `vorher = null` durch, also ohne Widerruf, und das
+     spätere `onclose` ruft `sitzungBeenden` mit `widerrufen: false`. Ohne die
+     Reparatur bliebe sie dort bis zum Ablauf ihrer Frist stehen. */
+  assert.equal(widerrufe.length, 1, "Der Relay wird gebeten, diese Sitzung zu beenden.");
+  assert.equal(
+    JSON.parse(widerrufe[0].angaben.body).code,
+    "s-zu-spaet",
+    "Und zwar genau die, die er gerade angelegt hat.",
+  );
+});
+
+test("Not-Aus im Schreiben der Sitzung: der Handschlag nimmt sie wieder zurück", async () => {
+  /*
+   * Die zweite Stelle desselben Rennens, und die wörtlich gemessene: Der
+   * Not-Aus fällt in das `await` auf `sitzungSchreiben`. Der Satz steht in
+   * diesem Augenblick schon in der Ablage; wer danach weitermacht, hat eine
+   * Sitzung wiederhergestellt, die es nicht mehr geben darf.
+   */
+  weltNeu();
+  globalThis.WebSocket = DrahtAttrappe;
+  const laeuft = link.verbinden({ ticket: "einweg-ticket", ausweis: "ausweis", tabId: 7 });
+  laeuft.catch(() => {});
+  const draht = DrahtAttrappe.letzte;
+  draht.oeffnen();
+
+  notausBeimSchreiben("link_sitzung", () => anWorker({ typ: "link:notaus", grund: "seitenleiste" }));
+
+  const ab = welt.spur.length;
+  await draht.empfangen({
+    type: "auth_ok",
+    code: "s-im-schreiben",
+    access: "write",
+    allow: ["geizhals.de"],
+    mode: "tab",
+    step_mode: "auto",
+    expiry: 1800,
+    agent: "SMarTrCEO",
+  });
+  await runden(30);
+
+  assert.deepEqual(
+    await welt.chrome.storage.session.get("link_sitzung"),
+    {},
+    "Was während des Not-Aus geschrieben wurde, ist wieder weg.",
+  );
+  assert.equal(link.sitzungTabId(), null, "Auch im Modulspeicher steht keine Sitzung mehr.");
+  assert.ok(
+    !welt.wecker.some((w) => w.name === link.WECKER_NAME),
+    "Und es steht kein Wecker, der sie weiterführen könnte.",
+  );
+  assert.equal(
+    welt.spur
+      .slice(ab)
+      .filter((e) => e.wohin === "panel" && e.nachricht && e.nachricht.typ === "link:zustand" && e.nachricht.verbunden === true)
+      .length,
+    0,
+    "Die Seitenleiste bekommt kein `verbunden=true` nach dem Stopp.",
+  );
+
+  const nachher = await ausfuehrer.befehlAusfuehren(
+    { id: "n3", cmd: "snapshot", reason: "Ich sehe nach." },
+    {}
+  );
+  assert.equal(
+    nachher.error && nachher.error.code,
+    "session_beendet",
+    "Es wird nichts mehr ausgeführt — `zaehlerNeu()` hat `aktiv` nicht wieder eingeschaltet.",
+  );
+});
+
+test("Not-Aus im Weckerschlag: der Wecker schreibt die Sitzung nicht zurück", async () => {
+  /*
+   * Dieselbe Klasse, selbst gefunden, und die gefährlichste Fassung davon:
+   * `wacheLaufen` endet mit einem `sitzungSchreiben`, und davor stehen vier
+   * `await`s. Fällt der Not-Aus dazwischen, stünde die gerade weggeräumte
+   * Sitzung danach wieder in `storage.session` — mit frischem Anker, mit
+   * Abzeichen, mit Dauerzeile. Und weil der Wecker alle 30 Sekunden schlägt,
+   * ist das kein enges Fenster, sondern ein Dauerzustand.
+   */
+  weltNeu();
+  await sitzungAufbauen({ agent: "SMarTrCEO", code: "s-wecker-rennen", tabId: 7 });
+  notausBeimSchreiben("link_sitzung", () => anWorker({ typ: "link:notaus", grund: "seitenleiste" }));
+
+  const ab = welt.spur.length;
+  await link.wacheLaufen();
+  await runden(30);
+
+  assert.deepEqual(
+    await welt.chrome.storage.session.get("link_sitzung"),
+    {},
+    "Der Weckerschlag hat die beendete Sitzung nicht wieder hingestellt.",
+  );
+  assert.equal(link.sitzungTabId(), null, "Und der Dienst kennt keinen Tab mehr, an den er senden könnte.");
+  const stand = await link.zustand();
+  assert.equal(stand.verbunden, false, "Nach aussen ist nichts mehr verbunden.");
+  assert.equal(stand.code, undefined, "Und es gibt auch keinen Sitzungscode mehr zu nennen.");
+  assert.equal(
+    zeichen(ab).zeile.length,
+    0,
+    "Die Seitenleiste bekommt keine Dauerzeile für eine Sitzung, die es nicht mehr gibt.",
+  );
+});
+
+test("Not-Aus im Lesen der Ablage: der Modulspeicher wird nicht wiederbelebt", async () => {
+  /*
+   * Dieselbe Klasse, selbst gefunden, an der unauffälligsten Stelle:
+   * `sitzungLesen()` SCHREIBT den Modulspeicher, wenn es aus der Ablage liest.
+   * Das tut es genau dann, wenn der Dienstarbeiter neu gestartet ist — also im
+   * Alltagsfall von MV3. Fällt der Not-Aus in dieses Lesen, hängen `zustand()`,
+   * `sitzungTabId()` und der Wecker danach wieder an einer Sitzung, die
+   * gerade weggeräumt wurde.
+   *
+   * Gemessen über `unbeaufsichtigtSetzen`, den Weg, den die Seitenleiste beim
+   * Schliessen wirklich geht (`panel.js:3679`): Er liest die Sitzung und setzt
+   * danach das Abzeichen.
+   */
+  weltNeu();
+  /* Erst den Modulspeicher leeren — sonst antwortet `sitzungLesen` ohne
+     jedes `await`, und dann gäbe es gar kein Fenster zu messen. */
+  await link.trennen("nutzer");
+  weltNeu();
+  await welt.chrome.storage.session.set({
+    link_sitzung: { ...sitzungAusFremdemLeben(), ankerLeben: link.LEBEN_KENNUNG, code: "s-lesen" },
+  });
+
+  notausBeimLesen("link_sitzung", () => anWorker({ typ: "link:notaus", grund: "seitenleiste" }));
+
+  const ab = welt.spur.length;
+  await link.unbeaufsichtigtSetzen(true);
+  await runden(20);
+
+  assert.equal(
+    link.sitzungTabId(),
+    null,
+    "Der Modulspeicher hat die weggeräumte Sitzung nicht aus der Ablage zurückgeholt.",
+  );
+  assert.equal(
+    welt.spur.slice(ab).filter((e) => e.wohin === "action.setBadgeText" && e.text).length,
+    0,
+    "Und am Symbol geht kein Abzeichen wieder an.",
+  );
 });
 
 /* ================================================================== *

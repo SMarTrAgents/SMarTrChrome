@@ -36,6 +36,14 @@ import {
 
 const QUELLE = new URL("../content/klickwache.js", import.meta.url);
 
+/* Chrome spielt `src/gemeinsam/messform.js` VOR dieser Datei ein
+   (`src/net/seite.js`, OVERLAY_DATEIEN und PFLICHT_DATEIEN). Der Sandkasten
+   fährt seit dem 14.08.2026 dieselbe Reihenfolge: Bis dahin lud er die Wache
+   allein, und deshalb trug sie eine eigene Abschrift von `saeubern` — eine
+   Lage, die es in Chrome nie gab, und genau die Bauform, an der die beiden
+   Fassungen auseinandergelaufen sind. */
+const MESSFORM_QUELLE = new URL("../gemeinsam/messform.js", import.meta.url);
+
 /* Das klassische Skript wird geladen, wie Chrome es lädt: in einen eigenen
    globalen Rahmen, ohne Modulsystem. Was es an `globalThis` hängt, ist das,
    was `overlay.js` später vorfindet — nichts anderes wird hier gemessen.
@@ -43,11 +51,13 @@ const QUELLE = new URL("../content/klickwache.js", import.meta.url);
    nicht: Diese Datei fasst keine einzige Chrome-Schnittstelle an, sie braucht
    einen Seitenbaum. Der steht deshalb weiter unten, klein und örtlich. */
 const quelltext = await readFile(QUELLE, "utf8");
+const messformQuelltext = await readFile(MESSFORM_QUELLE, "utf8");
 
-function wacheLaden() {
+function wacheLaden({ mitMessform = true } = {}) {
   const rahmen = { console };
   rahmen.globalThis = rahmen;
   vm.createContext(rahmen);
+  if (mitMessform) vm.runInContext(messformQuelltext, rahmen, { filename: "messform.js" });
   vm.runInContext(quelltext, rahmen, { filename: "klickwache.js" });
   assert.ok(rahmen.SMARTR_KLICKWACHE, "klickwache.js muss an globalThis.SMARTR_KLICKWACHE hängen");
   return rahmen.SMARTR_KLICKWACHE;
@@ -487,4 +497,26 @@ test("Nichts wirft, was auch immer hereingereicht wird", () => {
       gleichwertig(b, a, `wilde Eingabe ${String(ziel)}`);
     }
   }
+});
+
+test("Ohne die eine Quelle wird der Name weggelassen, nicht ersatzweise erfunden", () => {
+  /* Die Entscheidung der Wache hängt nicht am Namen des Überzugs — der ist
+     reine Fehlersuche. Fehlt `messform.js`, darf hier trotzdem keine zweite
+     Säuberung entstehen: Genau die war der Fehler, den der 14.08.2026 zu
+     Tage gebracht hat. Die Wache sagt dann weiter ab, sie nennt den Überzug
+     nur nicht mehr. */
+  const ohne = wacheLaden({ mitMessform: false });
+  const ziel = knoten("button", { rect: { left: 40, top: 240, width: 120, height: 38 } });
+  const ueberzug = knoten("div", { rect: { left: 0, top: 0, width: 1280, height: 900 }, z: 999999 });
+  const umgebung = { dokument: stapel([ziel, ueberzug]), sichtfeld: SICHTFELD, stil: STIL_NORMAL };
+
+  const mit = WACHE.klickZielFrei(ziel, umgebung);
+  const ohneName = ohne.klickZielFrei(ziel, umgebung);
+
+  assert.equal(mit.ok, false, "mit Messform muss die Wache absagen");
+  assert.equal(ohneName.ok, false, "ohne Messform muss die Wache ERST RECHT absagen");
+  assert.equal(mit.name, "verdeckt");
+  assert.equal(ohneName.name, "verdeckt", "die Entscheidung darf nicht an der Messform hängen");
+  assert.equal(mit.darueber, "div", "mit der einen Quelle wird der Überzug benannt");
+  assert.equal(ohneName.darueber, null, "ohne sie bleibt der Name weg, statt neu erfunden zu werden");
 });

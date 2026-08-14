@@ -27,6 +27,7 @@ const QUELLE = new URL("../content/overlay.js", import.meta.url);
 const WACHE_QUELLE = new URL("../content/klickwache.js", import.meta.url);
 const GEHEIM_QUELLE = new URL("../content/geheim.js", import.meta.url);
 const SELEKTOR_QUELLE = new URL("../content/selektor.js", import.meta.url);
+const MESSFORM_QUELLE = new URL("../gemeinsam/messform.js", import.meta.url);
 
 /* ------------------------------------------------------------------ *
  * Attrappe des Seitenbaums
@@ -449,6 +450,22 @@ function umgebungBauen(elemente, etiketten = []) {
     console,
     setTimeout,
     clearTimeout,
+    /* Befund NOTAUS-6 vom 14.08.2026: Hier fehlte `setInterval`. Solange es
+       fehlte, warf `overlay:arbeitszeiger` im Sandkasten „setInterval is not
+       defined" — der Zweig ist in keinem der bis dahin 809 Prüfsätze je
+       gelaufen. Genau deshalb konnte der Befund NOTAUS-3 (der Arbeitszeiger
+       wandert nach dem Not-Aus weiter) an allen vorbeigehen: Eine Attrappe,
+       die einen Takt gar nicht kennt, meldet jede Zusage über Takte grün,
+       ohne sie zu messen.
+       `unref` hängt dran, damit ein Takt, den ein Prüfsatz vergisst, den
+       Prüflauf nicht am Leben hält. Er misst dadurch nichts anders — er
+       verhindert nur, dass ein hängender Prozess wie ein Fehler aussieht. */
+    setInterval: (f, ms) => {
+      const t = setInterval(f, ms);
+      if (t && typeof t.unref === "function") t.unref();
+      return t;
+    },
+    clearInterval,
     document,
     innerHeight: 900,
     /* Die Breite fehlte bis 14.08.2026. Solange sie fehlte, war `innerWidth`
@@ -596,10 +613,23 @@ function umgebungBauen(elemente, etiketten = []) {
   return { sandbox, zustand };
 }
 
-async function overlayStarten(elemente, etiketten = [], { ohneWache = false, ohneGeheim = false } = {}) {
+async function overlayStarten(elemente, etiketten = [], { ohneWache = false, ohneGeheim = false, ohneMessform = false } = {}) {
   const quelle = await readFile(QUELLE, "utf8");
   const { sandbox, zustand } = umgebungBauen(elemente, etiketten);
   vm.createContext(sandbox);
+  /* Die gemeinsame Messform steht ganz vorn, genau wie in `src/net/seite.js`
+     (in BEIDEN Einspiellisten, Kür wie Pflicht). Vier Vergleiche in
+     `overlay.js` entscheiden, WORAUF gehandelt wird — auf welche Option, auf
+     welches Element hinter einem Etikett, ob eine Wartebedingung eingetreten
+     ist. Ohne die Messform gäbe es dafür entweder eine zweite Abschrift in
+     dieser Datei (verboten seit F4) oder einen Vergleich, den die besuchte
+     Seite mit einem unsichtbaren Zeichen steuert.
+     `ohneMessform` ist die Gegenprobe: Fehlt sie, wird nichts mehr über einen
+     Text gefunden, statt in einer anderen Form zu messen als der Dienst. */
+  if (!ohneMessform) {
+    vm.runInContext(await readFile(MESSFORM_QUELLE, "utf8"), sandbox, { filename: "messform.js" });
+    assert.ok(sandbox.SMARTR_MESSFORM, "messform.js muss sich an globalThis hängen");
+  }
   /* `geheim.js` steht ganz vorn, genau wie in `src/net/seite.js` (Festlegung
      F4 vom 14.08.2026). Vorher trug diese Datei ihre eigene Abschrift der
      Geheimfeld-Erkennung, und `rekorder.js` eine zweite; zwei Abschriften
@@ -683,12 +713,29 @@ function uhrEinbauen(sandbox) {
   sandbox.performance = { now: () => jetzt };
   sandbox.setTimeout = (f, ms) => {
     const id = ++nr;
-    auftraege.set(id, { f, wann: jetzt + Math.max(0, Number(ms) || 0) });
+    auftraege.set(id, { f, wann: jetzt + Math.max(0, Number(ms) || 0), jede: 0 });
     return id;
   };
   sandbox.clearTimeout = (id) => auftraege.delete(id);
+  /* Seit NOTAUS-6 auch der wiederkehrende Takt, und mit derselben Uhr: Der
+     Arbeitszeiger läuft alle 420 ms, seine Bahn dauert bis zu 1,7 Sekunden,
+     und in echter Zeit wäre jede Prüfung darüber eine Prüfung der Geduld.
+     `jede > 0` heisst „stellt sich selbst wieder", genau wie setInterval. */
+  sandbox.setInterval = (f, ms) => {
+    const id = ++nr;
+    const takt = Math.max(1, Number(ms) || 0);
+    auftraege.set(id, { f, wann: jetzt + takt, jede: takt });
+    return id;
+  };
+  sandbox.clearInterval = (id) => auftraege.delete(id);
 
   return {
+    /* Wieviele Takte gerade laufen.
+       Das ist die Zahl, an der sich „der Not-Aus kappt ALLE Takte" messen
+       lässt, ohne jeden einzelnen zu kennen — und damit auch der nächste, den
+       jemand baut, ohne ihn anzumelden. Eine Prüfung, die nur die bekannten
+       Takte abfragt, wüsste vom übernächsten nichts. */
+    offen: () => auftraege.size,
     /* Bis `ziel` vorspulen und dabei jeden fälligen Auftrag in der richtigen
        Reihenfolge ausführen — auch die, die dabei neue Aufträge stellen. */
     async vor(ms) {
@@ -699,9 +746,12 @@ function uhrEinbauen(sandbox) {
           if (a.wann <= ziel && (!naechste || a.wann < naechste[1].wann)) naechste = [id, a];
         }
         if (!naechste) break;
-        auftraege.delete(naechste[0]);
-        jetzt = Math.max(jetzt, naechste[1].wann);
-        naechste[1].f();
+        const [id, a] = naechste;
+        const faellig = a.wann;
+        if (a.jede > 0) a.wann = faellig + a.jede;
+        else auftraege.delete(id);
+        jetzt = Math.max(jetzt, faellig);
+        a.f();
       }
       jetzt = ziel;
       /* Den echten Warteschlangen einen Durchlauf gönnen, damit ein erfülltes
@@ -3335,22 +3385,47 @@ test("Einspielen: die Klickwache kommt vor dem Overlay in die Seite", async () =
 
   const dateien = auftraege();
   assert.equal(dateien.length, 1, "ein Auftrag genügt, wenn alles da ist");
+  /* Geändert am 14.08.2026 mit der gemeinsamen Messform: `src/gemeinsam/
+     messform.js` steht ab jetzt ganz vorn in beiden Einspiellisten von
+     `net/seite.js`. Die Erwartung wird nicht gelockert, sondern erweitert —
+     sie sagt jetzt EINE Zeile mehr zu, nicht eine weniger. Der Grund ist
+     derselbe wie bei `geheim.js`: `klickwache.js` und `overlay.js` fragen die
+     Messform, und wer sie fragt, muss sie vorfinden. Läge sie dahinter, misst
+     die Seite in einer anderen Form als der Dienst. */
   assert.deepEqual(dateien[0], [
+    "src/gemeinsam/messform.js",
     "src/content/geheim.js",
     "src/content/klickwache.js",
     "src/content/selektor.js",
     "src/content/overlay.js",
   ]);
+  assert.equal(
+    dateien[0][0],
+    "src/gemeinsam/messform.js",
+    "die Messform steht ganz vorn — auch vor geheim.js"
+  );
   /* Die Reihenfolge ist die Aussage: overlay.js findet die Wache vor, wenn es
      startet. Umgekehrt liefe der erste Befehl in ein `wache_fehlt`. */
   assert.ok(
     dateien[0].indexOf("src/content/klickwache.js") < dateien[0].indexOf("src/content/overlay.js"),
     "die Wache muss VOR dem Overlay eingespielt werden"
   );
-  /* Festlegung F4 vom 14.08.2026: `geheim.js` steht ganz vorn. Wer sie fragt,
-     muss sie vorfinden — `overlay.js` und `rekorder.js` fragen sie beide, und
-     `overlay.js` hält ohne sie jedes Feld für geheim. */
-  assert.equal(dateien[0][0], "src/content/geheim.js", "die eine Quelle steht ganz vorn");
+  /* Festlegung F4 vom 14.08.2026: `geheim.js` steht vorn. Wer sie fragt, muss
+     sie vorfinden — `overlay.js` und `rekorder.js` fragen sie beide, und
+     `overlay.js` hält ohne sie jedes Feld für geheim.
+     Geändert am 14.08.2026: Sie steht jetzt an zweiter Stelle, weil die
+     gemeinsame Messform vor ihr steht. Die Zusage wird dadurch nicht
+     schwächer, sondern genauer — gemessen wird ab hier die REIHENFOLGE
+     (Messform vor geheim.js vor Wache vor Overlay) und nicht mehr nur ein
+     einzelner Platz. */
+  assert.ok(
+    dateien[0].indexOf("src/gemeinsam/messform.js") < dateien[0].indexOf("src/content/geheim.js"),
+    "die Messform steht vor geheim.js"
+  );
+  assert.ok(
+    dateien[0].indexOf("src/content/geheim.js") < dateien[0].indexOf("src/content/klickwache.js"),
+    "die eine Quelle für Geheimnisse steht vor der Wache"
+  );
 });
 
 test("Einspielen: fehlt die Datei des Teach-Modus, wird trotzdem bedient", async () => {
@@ -3364,11 +3439,20 @@ test("Einspielen: fehlt die Datei des Teach-Modus, wird trotzdem bedient", async
 
   const dateien = auftraege();
   assert.equal(dateien.length, 2, "erst der volle Auftrag, dann der Pflichtteil");
+  /* Geändert am 14.08.2026, aus demselben Grund wie eine Prüfung weiter oben:
+     Die Messform gehört in den PFLICHTTEIL und nicht in die Kür. Fehlt sie,
+     wird gar nicht eingespielt — lieber nicht arbeiten als ohne die Zusage
+     arbeiten, die sie trägt. `selektor.js` darf fehlen, sie trägt keine. */
   assert.deepEqual(dateien[1], [
+    "src/gemeinsam/messform.js",
     "src/content/geheim.js",
     "src/content/klickwache.js",
     "src/content/overlay.js",
   ]);
+  assert.ok(
+    dateien[1].includes("src/gemeinsam/messform.js"),
+    "die Messform gehört zur Pflicht"
+  );
   /* `geheim.js` fällt aus dem Pflichtteil NICHT heraus, anders als
      `selektor.js`. Ohne sie hielte `overlay.js` jedes Feld für geheim, und die
      Erweiterung stünde in der Seite, ohne noch ein Feld lesen zu können. */
@@ -3619,6 +3703,320 @@ test("Notbremse: Esc Esc und der Knopf im Schild sagen dasselbe", async () => {
   assert.equal(schildSatz(ueberEsc.zustand), schildSatz(ueberKnopf.zustand));
 });
 
+
+/* ================================================================== *
+ * Der Not-Aus kappt die TAKTE, nicht nur den Zustand
+ *
+ * Befunde NOTAUS-3, NOTAUS-4 und NOTAUS-6 vom 14.08.2026.
+ *
+ * Die Klasse in einem Satz: `gestoppt()` setzte die Anzeige auf 0 und liess
+ * die Zeitgeber darunter laufen. 420 ms später stellte der Arbeitszeiger sie
+ * wieder her, die Warteschleife las bis zu eine Minute weiter Seitentext, und
+ * ein schon beantworteter Klick wurde nach der Reissleine trotzdem ausgelöst.
+ *
+ * Warum das an 809 grünen Prüfsätzen vorbeikam: Der Sandkasten dieser Datei
+ * kannte `setInterval` gar nicht (NOTAUS-6). `overlay:arbeitszeiger` warf
+ * darin „setInterval is not defined", der Zweig ist nie gelaufen. Eine
+ * Attrappe ohne Takt meldet jede Zusage über Takte grün, ohne sie zu messen —
+ * deshalb steht der Takt jetzt in der Attrappe und in der vorspulbaren Uhr.
+ *
+ * Gemessen wird über den Produktivweg: `overlay:gestoppt` ist die Nachricht,
+ * die der Dienstarbeiter beim Not-Aus wirklich in den Tab schickt
+ * (`background/worker.js`, `notbremseAusloesen`), und der Knopf im Schild ist
+ * der zweite Eingang. Kein Prüfsatz hier ruft eine Funktion von overlay.js
+ * unmittelbar auf.
+ * ================================================================== */
+
+/* Ein laufendes Overlay mit vorspulbarer Uhr. Die Uhr wird NACH dem Start
+   eingebaut: overlay.js schlägt `setTimeout`, `setInterval` und
+   `performance.now` bei jedem Aufruf im globalen Rahmen nach. */
+async function taktStarten(elemente = null) {
+  const seite = seiteBauen();
+  const alles = await overlayStarten(elemente || seite.alle);
+  alles.fragen({ typ: "overlay:an", text: "SMarTrAgent steuert diesen Tab" });
+  const uhr = uhrEinbauen(alles.sandbox);
+  return { ...alles, seite, uhr };
+}
+
+test("Not-Aus: der Arbeitszeiger wandert nicht weiter, auch nicht einen Takt später", async () => {
+  /*
+   * Der gemessene Befund NOTAUS-3, hier über die Nachricht, die der
+   * Dienstarbeiter wirklich schickt. Ohne die Taktverwaltung in overlay.js
+   * steht 420 ms nach `overlay:gestoppt` wieder `data-an="1"` am Zeiger, die
+   * Fahne sagt „lesen", und beides wandert weiter, während das Schild
+   * „GESTOPPT" zeigt. Für einen Menschen, der sich auf die Bewegung verlässt,
+   * ist die Bewegung die Aussage — und sie widerspräche dem Text.
+   */
+  const { fragen, zustand, uhr } = await taktStarten();
+  const zeiger = teilHolen(zustand, "zeiger");
+  const fahne = teilHolen(zustand, "fahne");
+
+  assert.deepEqual(fragen({ typ: "overlay:arbeitszeiger", muster: "lesen" }), { ok: true });
+  assert.equal(zeiger.getAttribute("data-an"), "1", "der erste Schritt steht sofort");
+  await uhr.vor(420);
+  assert.equal(fahne.getAttribute("data-an"), "1", "und der Takt läuft wirklich");
+  const wo = zeiger.style.transform;
+
+  fragen({ typ: "overlay:gestoppt" });
+  assert.equal(zeiger.getAttribute("data-an"), "0", "sofort aus");
+  assert.equal(fahne.getAttribute("data-an"), "0");
+
+  /* Die Bahn „lesen" hat vier Punkte, also bis zu 1,7 Sekunden Nachlauf. Zwei
+     Sekunden decken sie ganz ab, und §5 gibt EINE Sekunde. */
+  await uhr.vor(2000);
+  assert.equal(zeiger.getAttribute("data-an"), "0", "und bleibt aus, Takt für Takt");
+  assert.equal(fahne.getAttribute("data-an"), "0", "die Fahne kommt nicht zurück");
+  assert.equal(zeiger.style.transform, wo, "und der Zeiger bewegt sich nicht mehr");
+});
+
+test("Not-Aus: nach dem Kappen läuft ÜBERHAUPT nur noch ein Takt, und das ist das Schild selbst", async () => {
+  /*
+   * Der allgemeine Satz zur Klasse, und der eigentliche Sinn dieser Runde:
+   * Er zählt die laufenden Takte, statt die bekannten einzeln abzufragen.
+   * Damit fällt auch der NÄCHSTE Takt auf, den jemand baut, ohne ihn bei der
+   * Taktverwaltung anzumelden — und genau daran ist der Befund entstanden.
+   *
+   * Übrig bleiben darf genau einer: der Nachlauf des Schildes, der nach 2,2
+   * Sekunden „GESTOPPT" wieder wegnimmt. Er IST der Not-Aus und nicht etwas,
+   * das ihn überlebt.
+   */
+  const bed = bedienseiteBauen();
+  const { fragen, fragenSpaeter, zustand, uhr } = await taktStarten(bed.alle);
+  const baum = fragen({ typ: "overlay:baum" });
+
+  /* Vier verschiedene Takte auf einmal: Arbeitszeiger (wiederkehrend),
+     Warteschleife (stellt sich selbst neu), Klickpuls und die ausstehende
+     Auswahl nach ihrer Antwort. */
+  fragen({ typ: "overlay:arbeitszeiger", muster: "lesen" });
+  const wartet = beobachten(
+    fragenSpaeter({ typ: "overlay:warten", bedingung: "textPresent", wert: "kommt nie", fristMs: 30000 })
+  );
+  const auswahl = fragen({
+    typ: "overlay:auswaehlen", ref: refVon(baum, "Versandart"), epoche: baum.epoche, wert: "exp",
+  });
+  assert.equal(auswahl.ok, true, "die Auswahl ist beantwortet und steht noch aus");
+  assert.ok(uhr.offen() >= 3, `es müssen mehrere Takte laufen, es sind ${uhr.offen()}`);
+
+  fragen({ typ: "overlay:gestoppt" });
+  assert.equal(
+    uhr.offen(),
+    1,
+    "nach dem Not-Aus läuft nur noch der Nachlauf des Schildes — jeder andere Takt ist einer zu viel"
+  );
+  await uhr.vor(0);
+  assert.equal(wartet.fertig, true, "und die Warteschleife hat geantwortet, statt einfach zu verschwinden");
+
+  await uhr.vor(2200);
+  assert.equal(
+    teilHolen(zustand, "rahmen").getAttribute("data-zustand"),
+    null,
+    "und danach räumt auch der sich selbst weg"
+  );
+  assert.equal(uhr.offen(), 0, "am Ende läuft gar nichts mehr");
+});
+
+test("Not-Aus: die Warteschleife hört sofort auf zu lesen und bleibt trotzdem nicht stumm", async () => {
+  /*
+   * Befund NOTAUS-4. Gemessen wird beides, weil beides zugesagt ist: dass die
+   * Seite nach dem Not-Aus nicht mehr gelesen wird, UND dass kein Weg dieses
+   * Skripts stumm bleibt. Die Absage heisst `gestoppt` und nicht
+   * `erfuellt:false` — eine verstrichene Frist ist ein Ergebnis der Seite, ein
+   * Not-Aus ist das Ende der Sitzung, und der Agent darf daraus etwas anderes
+   * schliessen.
+   */
+  const { fragen, fragenSpaeter, sandbox, uhr } = await taktStarten();
+  let gelesen = 0;
+  Object.defineProperty(sandbox.document.body, "innerText", {
+    configurable: true,
+    get() { gelesen += 1; return "die Seite sagt nichts Passendes"; },
+  });
+
+  const lauf = beobachten(
+    fragenSpaeter({ typ: "overlay:warten", bedingung: "textPresent", wert: "Versandbestätigung", fristMs: 30000 })
+  );
+  await uhr.vor(2000);
+  assert.ok(gelesen >= 2, `die Schleife muss wirklich lesen, sie hat ${gelesen} Mal gelesen`);
+  assert.equal(lauf.fertig, false, "und sie läuft noch");
+  const bisher = gelesen;
+
+  fragen({ typ: "overlay:gestoppt" });
+  await uhr.vor(30000);
+  assert.equal(gelesen, bisher, "nach dem Not-Aus wird kein einziges Mal mehr gelesen");
+  assert.equal(lauf.fertig, true, "und der Aufrufer bekommt eine Antwort, keine Stille");
+  assert.equal(lauf.wert.ok, false);
+  assert.equal(lauf.wert.fehler, "gestoppt", "benannt, damit der Agent es von einer Frist unterscheidet");
+});
+
+test("Not-Aus: der Beobachter der Ruhe wird abgehängt, nicht bloss übergangen", async () => {
+  /*
+   * `bedingung: "idle"` hängt einen MutationObserver an
+   * `document.documentElement` mit `subtree`, `childList`, `characterData` und
+   * `attributes` — das teuerste, was dieses Skript an einer fremden Seite tut.
+   * Ein Zeitgeber, den man kappt, während der Beobachter hängen bleibt, wäre
+   * die halbe Reparatur.
+   */
+  const { fragen, fragenSpaeter, zustand, uhr } = await taktStarten();
+  const vorher = zustand.beobachter.filter((b) => b.__aktiv).length;
+
+  const lauf = beobachten(
+    fragenSpaeter({ typ: "overlay:warten", bedingung: "idle", fristMs: 30000 })
+  );
+  assert.equal(
+    zustand.beobachter.filter((b) => b.__aktiv).length,
+    vorher + 1,
+    "die Wartebedingung hängt ihren eigenen Beobachter an"
+  );
+
+  fragen({ typ: "overlay:gestoppt" });
+  assert.equal(
+    zustand.beobachter.filter((b) => b.__aktiv).length,
+    vorher,
+    "und nach dem Not-Aus hängt er nicht mehr"
+  );
+  await uhr.vor(100);
+  assert.equal(lauf.fertig, true);
+  assert.equal(lauf.wert.fehler, "gestoppt");
+});
+
+test("Not-Aus: ein Klick, der schon beantwortet ist, wird nicht mehr ausgelöst", async () => {
+  /*
+   * Die teuerste Erscheinungsform derselben Klasse, und die einzige, bei der
+   * die Erweiterung nach dem Not-Aus nicht nur etwas Falsches ZEIGT, sondern
+   * etwas TUT.
+   *
+   * Der Klick wird absichtlich NACH der Antwort ausgelöst — sonst stürbe
+   * dieses Skript bei einer Navigation, bevor der Agent seine Antwort hat.
+   * Zwischen Antwort und Klick liegt ein ganzer Durchlauf der Warteschlange,
+   * und genau in diesem Augenblick zieht ein Mensch die Reissleine: Er sieht
+   * den Zielrahmen und will ihn nicht.
+   *
+   * Hier läuft absichtlich die ECHTE Uhr des Sandkastens, weil `taktEinmal(…,
+   * 0)` genau dieses eine Warteschlangenfenster ist.
+   */
+  const seite = seiteBauen();
+  const { fragen, zustand } = await overlayStarten(seite.alle);
+  fragen({ typ: "overlay:an", text: "SMarTrAgent steuert diesen Tab" });
+  const baum = fragen({ typ: "overlay:baum" });
+  const ref = refVon(baum, "Startseite");
+  assert.ok(ref, "der Link steht im Baum");
+
+  /* Erst die Gegenprobe: Ohne Not-Aus kommt der Klick an. Ohne sie misst der
+     Satz unten nichts — ein Klick, der nie ausgelöst wird, ist auch ohne
+     Reparatur „nicht ausgelöst". */
+  assert.equal(fragen({ typ: "overlay:klicken", ref, epoche: baum.epoche }).ok, true);
+  await gleich();
+  assert.equal(seite.start.__klicks, 1, "ohne Not-Aus klickt es");
+
+  const zweiterBaum = fragen({ typ: "overlay:baum" });
+  const ref2 = refVon(zweiterBaum, "Startseite");
+  assert.equal(fragen({ typ: "overlay:klicken", ref: ref2, epoche: zweiterBaum.epoche }).ok, true);
+  /* Und jetzt die Reissleine, im Fenster zwischen Antwort und Klick. */
+  fragen({ typ: "overlay:gestoppt" });
+  await gleich();
+  await gleich();
+  assert.equal(seite.start.__klicks, 1, "nach dem Not-Aus kommt kein zweiter Klick mehr an");
+  assert.equal(
+    teilHolen(zustand, "puls").getAttribute("data-an"),
+    "0",
+    "und der Ring am Klickpunkt leuchtet nicht weiter, als sei gerade geklickt worden"
+  );
+});
+
+test("Not-Aus: eine ausstehende Auswahl und ein ausstehendes Absenden werden ebenso abbestellt", async () => {
+  /* Dieselbe Klasse an den drei anderen Stellen, die NACH ihrer Antwort
+     handeln: `select`, Ankreuzfeld und das Absenden eines Formulars. Ein
+     Häkchen, das nach dem Not-Aus gesetzt wird, ist eine Zustimmung, die
+     niemand gegeben hat; ein abgeschicktes Formular ist noch mehr. */
+  const bed = bedienseiteBauen();
+  const { fragen } = await overlayStarten(bed.alle);
+  fragen({ typ: "overlay:an", text: "SMarTrAgent steuert diesen Tab" });
+  const baum = fragen({ typ: "overlay:baum" });
+
+  const wahl = fragen({
+    typ: "overlay:auswaehlen", ref: refVon(baum, "Versandart"), epoche: baum.epoche, wert: "exp",
+  });
+  assert.equal(wahl.ok, true);
+  const haken = fragen({
+    typ: "overlay:auswaehlen", ref: refVon(baum, "AGB gelesen"), epoche: baum.epoche, wert: true,
+  });
+  assert.equal(haken.ok, true);
+  const tippen = fragen({
+    typ: "overlay:tippen", ref: refVon(baum, "Produktsuche"), epoche: baum.epoche,
+    text: "SSD", absenden: true,
+  });
+  assert.equal(tippen.ok, true);
+
+  fragen({ typ: "overlay:gestoppt" });
+  await gleich();
+  await gleich();
+
+  assert.equal(bed.versand.selectedIndex, 0, "die Liste steht noch auf ihrer alten Stelle");
+  assert.equal(bed.versand.options[1].selected, false, "und Express wurde nicht gewählt");
+  assert.equal(bed.agb.__klicks, 0, "das Ankreuzfeld wurde nicht geklickt");
+  assert.equal(bed.form.__abgeschickt, 0, "und das Formular nicht abgeschickt");
+});
+
+test("Not-Aus über den Knopf im Schild kappt dieselben Takte wie die Nachricht", async () => {
+  /* Zwei Eingänge in dieselbe Reissleine dürfen nicht zwei Lagen hinterlassen.
+     Der Knopf ruft `gestoppt()` selbst, ohne auf den Dienst zu warten — also
+     muss er auch selbst kappen. */
+  const { fragen, fragenSpaeter, zustand, uhr } = await taktStarten();
+  fragen({ typ: "overlay:arbeitszeiger", muster: "lesen" });
+  const wartet = beobachten(
+    fragenSpaeter({ typ: "overlay:warten", bedingung: "textPresent", wert: "kommt nie", fristMs: 30000 })
+  );
+  assert.ok(uhr.offen() >= 2);
+
+  notausDruecken(zustand);
+  assert.equal(uhr.offen(), 1, "auch über den Knopf bleibt nur der Nachlauf des Schildes");
+  assert.equal(teilHolen(zustand, "zeiger").getAttribute("data-an"), "0");
+  await uhr.vor(0);
+  assert.equal(wartet.fertig, true, "und auch hier bleibt die Warteschleife nicht stumm");
+});
+
+test("Auch `overlay:aus` kappt die Takte — dieselbe Klasse an der zweiten Tür", async () => {
+  /*
+   * Selbst gefunden beim Schliessen der Klasse und nicht gemeldet: `anzeigen
+   * (false)` setzte Zeiger und Fahne auf 0 und liess den Takt des
+   * Arbeitszeigers laufen. 420 ms nach dem regulären Ende der Sitzung stand
+   * der Zeiger wieder da und wanderte weiter — ein Zeichen, das eine Steuerung
+   * behauptet, die es nicht mehr gibt. Wer den Not-Aus repariert und diese
+   * Tür stehen lässt, hat die Stelle repariert und nicht die Klasse.
+   */
+  const { fragen, zustand, uhr } = await taktStarten();
+  const zeiger = teilHolen(zustand, "zeiger");
+  fragen({ typ: "overlay:arbeitszeiger", muster: "lesen" });
+  assert.equal(zeiger.getAttribute("data-an"), "1");
+
+  fragen({ typ: "overlay:aus" });
+  assert.equal(zeiger.getAttribute("data-an"), "0");
+  assert.equal(uhr.offen(), 0, "nach dem Ende der Sitzung läuft kein Takt mehr");
+  await uhr.vor(2000);
+  assert.equal(zeiger.getAttribute("data-an"), "0", "und der Zeiger kommt nicht zurück");
+});
+
+test("Ein totes Overlay lässt ebenfalls keinen Takt zurück", async () => {
+  /* `totMelden` löschte bis zum 14.08.2026 genau einen Takt von Hand, den des
+     Arbeitszeigers. Die Warteschleife und ein ausstehender Klick liefen
+     weiter — in einem Overlay, das nichts mehr zeigen kann. Ein totes
+     Zeichen, das noch klickt, ist der schlimmste Fall dieser Klasse. */
+  const { fragen, fragenSpaeter, zustand, sandbox, uhr } = await taktStarten();
+  fragen({ typ: "overlay:arbeitszeiger", muster: "lesen" });
+  const wartet = beobachten(
+    fragenSpaeter({ typ: "overlay:warten", bedingung: "textPresent", wert: "kommt nie", fristMs: 30000 })
+  );
+  assert.ok(uhr.offen() >= 2);
+
+  /* Der Produktivweg in den Tod: Die Erweiterung ist weg, der Knopf kann seine
+     Meldung nicht mehr absetzen. */
+  sandbox.chrome.runtime.id = undefined;
+  notausDruecken(zustand);
+  assert.equal(teilHolen(zustand, "schild").getAttribute("data-zustand"), "tot");
+  assert.equal(uhr.offen(), 0, "ein totes Overlay lässt keinen Takt zurück");
+  await uhr.vor(0);
+  assert.equal(wartet.fertig, true, "und die Warteschleife bekommt auch im Tod ihre Antwort");
+});
+
 /* ================================================================== *
  * Festlegung F3 — `overlay:kaskade` antwortet mit Identität
  *
@@ -3700,4 +4098,156 @@ test("Geheimquelle: fehlt geheim.js, gilt jedes Feld als geheim", async () => {
   const mit = await overlayStarten([suche]);
   const b = mit.fragen({ typ: "overlay:baum" });
   assert.equal(b.knoten.find((k) => k.art === "element").wert, "SSD 2TB");
+});
+
+/* ================================================================== *
+ * Die gemeinsame Messform in der Zielauswahl
+ *
+ * Fremdbedarf aus `fundament.md` §5.5, hier eingebaut und gemessen. Vier
+ * Vergleiche in `content/overlay.js` entscheiden nicht, OB gehandelt werden
+ * darf — das entscheiden die Wache und die Freigabe —, wohl aber, WORAUF
+ * gehandelt wird. Und diese Frage beantwortete bis zum 14.08.2026 ein
+ * `toLowerCase()`.
+ *
+ * Der Angriff ist immer derselbe und braucht kein Skript: Die Seite streut in
+ * ihre eigene Beschriftung ein Zeichen ohne Breite. Der Mensch liest
+ * „Express", der Vergleich liest etwas anderes — und damit bestimmt die Seite,
+ * welche Option gewählt, welcher Bereich gefunden und welches Feld gelesen
+ * wird. Es gibt dabei keine Fehlermeldung; es passiert nur das Falsche.
+ *
+ * Alle Prüfsätze hier gehen über die Nachrichten des Ausführers, keiner ruft
+ * eine Funktion von overlay.js unmittelbar auf.
+ * ================================================================== */
+
+/* Ein Zeichen ohne Breite, wie es jede Seite in ihren eigenen Text schreiben
+   kann. Für den Menschen ist es nicht da, für einen Vergleich mit
+   `toLowerCase()` ist es ein Unterschied. */
+const UNSICHTBAR = "​";
+
+test("Messform: ein unsichtbares Zeichen in der Option verhindert die Auswahl nicht mehr", async () => {
+  const versand = knoten("select", {
+    attrs: { "aria-label": "Versandart" },
+    optionen: [option("Standard", "std"), option(`Ex${UNSICHTBAR}press`, "exp")],
+  });
+  const { fragen } = await overlayStarten([versand]);
+  const baum = fragen({ typ: "overlay:baum" });
+  const a = fragen({
+    typ: "overlay:auswaehlen", ref: refVon(baum, "Versandart"), epoche: baum.epoche, etikett: "Express",
+  });
+  assert.equal(a.ok, true, `die Seite darf die Auswahl nicht mit einem unsichtbaren Zeichen abbiegen: ${JSON.stringify(a)}`);
+  await gleich();
+  assert.equal(versand.selectedIndex, 1, "und gewählt wird die Option, die der Mensch liest");
+});
+
+test("Messform: zwei sichtgleiche Optionen werden nicht geraten, sondern abgesagt", async () => {
+  /*
+   * Die andere Richtung derselben Reparatur, und der Grund, warum hier kein
+   * `find` mehr steht: Weil die Messform sichtgleiche Fremdbuchstaben
+   * zusammenfaltet, kann der GENAUE Treffer mehrdeutig werden — vorher war er
+   * das nie. `find` nähme stillschweigend die erste Option, also die, die die
+   * Seite vorn hingestellt hat. Welche der beiden der Mensch gemeint hat, als
+   * er zustimmte, weiss niemand. Also keine.
+   */
+  const versand = knoten("select", {
+    attrs: { "aria-label": "Versandart" },
+    /* Zweimal „Express", einmal mit kyrillischem е. Auf dem Schirm nicht zu
+       unterscheiden. */
+    optionen: [option("Express", "echt"), option("Ехpress", "falsch")],
+  });
+  const { fragen } = await overlayStarten([versand]);
+  const baum = fragen({ typ: "overlay:baum" });
+  assert.deepEqual(
+    fragen({ typ: "overlay:auswaehlen", ref: refVon(baum, "Versandart"), epoche: baum.epoche, etikett: "Express" }),
+    { ok: false, fehler: "auswahl_nicht_gefunden" },
+    "zwischen zwei sichtgleichen Optionen wird nicht geraten"
+  );
+  await gleich();
+  assert.equal(versand.selectedIndex, 0, "und es wird auch nichts gesetzt");
+});
+
+test("Messform: die Wartebedingung tritt ein, auch wenn die Seite den Text zerlegt", async () => {
+  /* Vorher lief `waitFor` in diesem Fall bis zur vollen Frist und meldete
+     „nicht eingetreten". Das kostet keine Wache, aber eine Minute — und danach
+     schliesst der Agent aus einem Ergebnis, das die Seite erfunden hat. */
+  const seite = seiteBauen();
+  const { fragenSpaeter, sandbox } = await overlayStarten(seite.alle);
+  sandbox.document.body.innerText = `Ihre Bestel${UNSICHTBAR}lung ist eingegangen`;
+
+  const da = await fragenSpaeter({
+    typ: "overlay:warten", bedingung: "textPresent", wert: "Bestellung ist eingegangen", fristMs: 3000,
+  });
+  assert.equal(da.ok, true);
+  assert.equal(da.erfuellt, true, "was der Mensch liest, gilt als da");
+  assert.ok(da.wartezeitMs < 800, "und zwar sofort, nicht erst nach der Frist");
+});
+
+test("Messform: ein Suchtext, von dem nichts messbar übrig bleibt, trifft NICHTS", async () => {
+  /* Die Richtung, in die eine Messform fallen muss. Nach dem Messen ist von
+     „•••" kein Wort mehr übrig, und ein leerer Suchtext steckt in jedem Text.
+     „Passt überall" wäre hier keine Milde, sondern eine Wartebedingung, die
+     immer sofort erfüllt ist. */
+  const seite = seiteBauen();
+  const { fragenSpaeter, sandbox } = await overlayStarten(seite.alle);
+  sandbox.document.body.innerText = "Ihre Bestellung ist eingegangen";
+  const nichts = await fragenSpaeter({
+    typ: "overlay:warten", bedingung: "textPresent", wert: "•••", fristMs: 300,
+  });
+  assert.equal(nichts.ok, true);
+  assert.equal(nichts.erfuellt, false, "aus nichts folgt kein Treffer");
+});
+
+test("Messform: ein Bereich wird über sein Etikett gefunden, auch mit unsichtbarem Zeichen", async () => {
+  const nav = knoten("nav", { art: "bereich", attrs: { "aria-label": `Haupt${UNSICHTBAR}menü` } });
+  const start = knoten("a", { attrs: { href: "/" }, text: "Startseite" });
+  start.parentElement = nav;
+  const { fragen } = await overlayStarten([nav, start]);
+  const baum = fragen({ typ: "overlay:baum" });
+  const treffer = fragen({ typ: "overlay:auslesen", region: "Hauptmenü", epoche: baum.epoche });
+  assert.equal(treffer.ok, true, `der Bereich muss gefunden werden: ${JSON.stringify(treffer)}`);
+  assert.deepEqual(treffer.treffer.map((t) => t.name), ["Startseite"]);
+});
+
+test("Messform: der Feldfilter von auslesen misst denselben Text, den der Mensch liest", async () => {
+  const feld = knoten("input", {
+    attrs: { type: "text", "aria-label": `Kunden${UNSICHTBAR}nummer` },
+    type: "text",
+    value: "4711",
+  });
+  const { fragen } = await overlayStarten([feld]);
+  const baum = fragen({ typ: "overlay:baum" });
+  const treffer = fragen({ typ: "overlay:auslesen", felder: ["Kundennummer"], epoche: baum.epoche });
+  assert.equal(treffer.ok, true);
+  assert.deepEqual(
+    treffer.treffer.map((t) => t.wert),
+    ["4711"],
+    "sonst entscheidet die Seite, welches Feld der Agent zu sehen bekommt"
+  );
+});
+
+test("Messform: fehlt sie, wird über Text gar nichts mehr gefunden — statt in einer anderen Form zu messen", async () => {
+  /*
+   * Die Gegenprobe zur Einspielreihenfolge. `src/net/seite.js` führt
+   * `messform.js` in BEIDEN Listen ganz vorn, sie kann im Betrieb also nicht
+   * fehlen. Wenn sie es doch täte, ist die Richtung die entscheidende Frage:
+   * Ein Rückfall auf `toLowerCase()` wäre genau die zweite Fassung derselben
+   * Regel, gegen die Festlegung F4 steht — und sie führe leise wieder in den
+   * Befund. Also lieber nichts finden.
+   */
+  const versand = knoten("select", {
+    attrs: { "aria-label": "Versandart" },
+    optionen: [option("Standard", "std"), option("Express", "exp")],
+  });
+  const { fragen } = await overlayStarten([versand], [], { ohneMessform: true });
+  const baum = fragen({ typ: "overlay:baum" });
+  assert.deepEqual(
+    fragen({ typ: "overlay:auswaehlen", ref: refVon(baum, "Versandart"), epoche: baum.epoche, etikett: "Express" }),
+    { ok: false, fehler: "auswahl_nicht_gefunden" },
+    "ohne Messform wird nichts über einen Text gewählt"
+  );
+  /* Über den WERT der Seite geht es weiterhin: Der ist keine Beschriftung,
+     sondern eine Kennung, und er läuft nicht über die Messform. */
+  const ueberWert = fragen({
+    typ: "overlay:auswaehlen", ref: refVon(baum, "Versandart"), epoche: baum.epoche, wert: "exp",
+  });
+  assert.equal(ueberWert.ok, true, "der Weg über den Wert bleibt");
 });

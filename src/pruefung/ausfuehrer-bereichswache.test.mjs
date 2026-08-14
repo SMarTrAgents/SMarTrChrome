@@ -412,11 +412,21 @@ test("Wache — JEDER Befehl bricht ab, wenn der Tab nach der Freigabe abgewande
 
 test("Wache — JEDER Befehl läuft weiter, wenn nur die Unterseite gewechselt hat", async () => {
   /* Die Gegenprobe zum vorigen Prüfsatz. Ohne sie wäre eine Wache, die
-     grundsätzlich ablehnt, ebenfalls grün. */
+     grundsätzlich ablehnt, ebenfalls grün.
+
+     ADRESSE GEÄNDERT am 14.08.2026 (Befund AUTOMODUS-6): Hier stand
+     `https://geizhals.de/kasse`. Die Adresse war als „irgendeine andere
+     Unterseite desselben Wirtes" gemeint, ist aber keine harmlose: Seit
+     `nachDemWechsel` die neue Adresse klassifiziert, trägt sie die harte
+     Klasse `zahlung`, und `back` landet damit auf einer Kassenseite, über die
+     in diesem Schritt niemand gefragt wurde. Der Prüfsatz misst weiterhin
+     dasselbe — derselbe Wirt, andere Unterseite —, nur eben an einer
+     Unterseite, die wirklich harmlos ist. Dass die Kassenseite ANGEHALTEN
+     wird, misst der Prüfsatz „AUTOMODUS-6" weiter unten, samt Gegenprobe. */
   for (const cmd of Object.keys(BEFEHLE)) {
     const { ergebnis, spur } = await laufen(rahmenFuer(cmd, "wc"), {
       sitzung: sitzungFuer(cmd),
-      beiFreigabe: (t) => { t.url = "https://geizhals.de/kasse"; t.title = "Kasse"; },
+      beiFreigabe: (t) => { t.url = "https://geizhals.de/angebote"; t.title = "Angebote"; },
     });
 
     assert.equal(ergebnis.success, true,

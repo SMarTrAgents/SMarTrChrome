@@ -63,6 +63,43 @@
  * Harmlos-Beleg. Erst wenn all das durch ist, wird gelesen. Ein Passwortfeld
  * wird damit nie angefasst, und das ist der Unterschied, den §7.2 wörtlich
  * macht.
+ *
+ * ------------------------------------------------------------------------
+ * NACHTRAG 14.08.2026, zweite Abnahme (TEACH-1 bis TEACH-4 und TEACH-7).
+ *
+ * Die Richtung stimmte, die MESSUNG nicht. Jede Formprüfung lief gegen die
+ * GANZE Zeichenkette, und ein Geheimnis tritt fast nie allein auf, sondern
+ * in einem Satz. Gemessen am echten Rekorderlauf:
+ *
+ *   - `textHarmlos("849271")` war falsch, `textHarmlos("Dein Code lautet
+ *     849271")` aber wahr. Derselbe Code landete danach im Textanker, in der
+ *     Beschreibung und im Etikett eines `select`-Schrittes. Dasselbe für
+ *     „Ihre Kartennummer 4111111111111111".
+ *   - `harmlosBeleg` prüfte `flach.includes(wort)` über die ganze
+ *     Etikettzeile. „Wir haben dir eine E-Mail geschickt, trag die sechs
+ *     Ziffern hier ein" enthält „mail", also galt das Feld als belegt
+ *     harmlos, und der Einmalcode wurde als `value` gespeichert — obwohl im
+ *     selben Formular ein `type=password` stand.
+ *   - Die Formprüfung kannte nur reine Ziffern, Luhn und `^[A-Z0-9]{6,12}$`.
+ *     Durch kamen `a3f9c2`, `sk-live-9f3a2b`, `a1b2c-3d4e5` — also genau die
+ *     Wiederherstellungsschlüssel, die GitHub, Discord und die
+ *     Authenticator-Verfahren ausgeben.
+ *
+ * Vier Sätze halten das ab hier zusammen:
+ *
+ *   1. Gesucht wird als TEILKETTE. Eine Ziffernkette, eine Luhn-Nummer und
+ *      ein Mischcode zählen auch mitten im Satz (`geheimGestalt`).
+ *   2. Ein Beleg ist eine BEZEICHNUNG, kein Wort in einem Satz. Ein Etikett
+ *      aus dreizehn Wörtern benennt kein Feld, es erklärt eine Seite.
+ *   3. Neben einem Geheimfeld muss auch die GESTALT des Wertes harmlos sein.
+ *      „julian" bleibt „julian", „849271" wird zur Übergabe an den Menschen.
+ *   4. Wo nur noch der Elementname übrig bleibt, sagt `beschreibungVon` das
+ *      (`OHNE_NAMEN`), statt still „input" zu antworten. Zwei verschiedene
+ *      Felder hiessen sonst beide „input", und die Identitätswache aus F3
+ *      verglich zwei Namen, die keine sind.
+ *
+ * Gemessen wird jede dieser vier Zusagen über den Produktivweg in
+ * `pruefung/rekorder.test.mjs` und `pruefung/selektor.test.mjs`.
  */
 
 (() => {
@@ -76,6 +113,16 @@
 
   /* §7.2 wörtlich: die Begründung, die an die Stelle des Geheimnisses tritt. */
   const VERBOT_GRUND = "Login/2FA";
+
+  /* Die Vorsilbe, mit der `beschreibungVon` sagt: Was hier steht, ist der
+     ELEMENTNAME und kein Name. Sie steht als Vorsilbe und nicht als eigenes
+     Feld, weil die Beschreibung durch `chrome.runtime.sendMessage`, durch
+     `sa_workflows` und durch `schritt.beschreibung` läuft — überall dort ist
+     sie eine Zeichenkette, und ein zweites Feld wäre auf jedem dieser Wege
+     einzeln nachzuziehen. Ein Feld, das nur an einer Stelle mitwandert, ist
+     genau die Art Zusage, die am 11.08.2026 grün geprüft und ungenutzt
+     ausgeliefert wurde. */
+  const OHNE_NAMEN = "ohne-namen:";
 
   /* Spiegel von `WERKSTATT_GRENZEN.beschreibungZeichen` aus
      `src/net/werkstatt.js`. Die Zahl steht hier ein zweites Mal, weil ein
@@ -119,6 +166,34 @@
      eine Messreihe. */
   const ZIFFERN_MINDEST = 4;
   const ZIFFERN_HOECHSTENS = 24;
+
+  /* Eingebettet in einen längeren Text zählt erst die FÜNFTE Stelle.
+     Der Unterschied ist gemessen und keine Bequemlichkeit: Eine
+     vierstellige Ziffernkette mitten in einem Satz ist eine Jahreszahl, ein
+     Preis oder eine Hausnummer („Angebot vom 14.08.2026 bearbeiten"), und
+     wer sie verwirft, verliert die Beschreibung jedes zweiten Knopfes und
+     bekommt dafür eine Rückfrage, die nichts schützt. Allein stehend bleibt
+     dieselbe Kette bei vier Stellen ein Code — dort steht kein Satz drum
+     herum, der sie erklären könnte. */
+  const ZIFFERN_EINGEBETTET = 5;
+
+  /* Ab wann Ziffergruppen als EINE Nummer gelesen werden: gleich lange
+     Gruppen ab drei Stellen. „4111 1111 1111 1111" ist eine Kartennummer,
+     „14 08 2026" sind drei Zahlen, und „12 34" sind zwei. */
+  const GRUPPE_MINDEST = 3;
+
+  /* Wie lang ein Merkmal höchstens sein darf, damit es noch eine BEZEICHNUNG
+     ist und nicht ein Satz. Befund TEACH-3 vom 14.08.2026: „Wir haben dir
+     eine E-Mail geschickt, trag die sechs Ziffern hier ein" enthält „mail"
+     und gab damit einen Einmalcode frei. Ein Feld heisst „E-Mail", es heisst
+     nicht in dreizehn Wörtern. */
+  const BEZEICHNUNG_WOERTER = 6;
+  const BEZEICHNUNG_ZEICHEN = 60;
+
+  /* Ein Wiederherstellungsschlüssel wird in gleich langen Gruppen ausgegeben
+     („abcd efgh ijkl mnop"). Vier Gruppen sind das Mindeste, das man von
+     einem Satz unterscheiden kann. */
+  const GRUPPENKETTE_MINDEST = 4;
 
   /* Kartennummern nach ISO/IEC 7812: 13 bis 19 Stellen mit gültiger
      Luhn-Prüfziffer. */
@@ -179,12 +254,26 @@
    * Was freigibt — die Listen, deren Lücke eine Rückfrage kostet
    * ------------------------------------------------------------------ */
 
-  /* Feldarten, die sich selbst erklären. `text` und `number` stehen bewusst
-     NICHT dabei: Ein Einmalcode ist beides. */
+  /* Feldarten, die sich selbst erklären, weil sie die GESTALT des Inhalts
+     festlegen: In ein `type=date` passt kein Einmalcode. `text` und `number`
+     stehen bewusst NICHT dabei — ein Einmalcode ist beides. */
   const HARMLOS_TYP = new Set([
-    "email", "url", "tel", "search", "date", "datetime-local",
+    "email", "url", "date", "datetime-local",
     "month", "week", "time", "color",
   ]);
+
+  /* Befund TEACH-7 vom 14.08.2026: `type="tel"` war ein bedingungsloser
+     Beleg, und `<input id="s" type="tel" value="849271">` ergab
+     `{"ok":true,"wert":"849271","beleg":"feldtyp"}`. Auf Bestätigungs- und
+     Zahlungsmasken ist `tel` die übliche Wahl, weil sie die Zifferntastatur
+     öffnet — über den INHALT sagt sie damit nichts, sie sagt etwas über die
+     Tastatur. Dasselbe gilt für `search`: Es beschreibt, wo das Feld steht,
+     nicht was darin liegt.
+     Beide sind ab hier gar kein Beleg mehr. Sie brauchen dafür auch keine
+     eigene Regel: Ein Feld, das wirklich ein Telefonfeld ist, heisst
+     „telefon", „mobil" oder „handy" und ist damit über seine BEZEICHNUNG
+     belegt — denselben Weg gehen alle anderen Felder auch. Ein Feld, das nur
+     `tel` heisst, ist eine Tastaturwahl und kein Nachweis. */
 
   /* Autocomplete-Marken aus demselben Standard wie die geheimen, nur von der
      anderen Seite. Wer sein Feld so auszeichnet, hat gesagt, was darin steht. */
@@ -278,6 +367,29 @@
     }
     return rest.includes("code");
   };
+
+  /**
+   * Benennt dieser Text ein Geheimnis?
+   *
+   * Die Wörterfrage aus `geheim()`, herausgezogen und benannt. Sie steht hier
+   * einzeln, weil sie ab dem 14.08.2026 an einer zweiten Stelle gebraucht
+   * wird: `rekorder.js` fragt sie für den NAMEN eines Adressparameters
+   * (`?token=…`, `#access_token=…`). Zwei Abschriften derselben Wortlisten
+   * wären genau der Befund, den Festlegung F4 abgeschafft hat — also eine
+   * Funktion, zwei Aufrufer.
+   *
+   * @param {string} text ein einzelnes Merkmal, nie mehrere aneinandergehängt
+   * @returns {boolean}
+   */
+  function bezeichnungGeheim(text) {
+    for (const wort of woerterVon(text)) {
+      if (GEHEIM_WORT.has(wort)) return true;
+    }
+    const flach = flachVon(text);
+    if (!flach) return false;
+    if (GEHEIM_TEIL.some((t) => flach.includes(t))) return true;
+    return codeGeheim(flach);
+  }
 
   /** Kann dieses Element überhaupt einen Inhalt tragen? */
   function traegtInhalt(el) {
@@ -398,16 +510,10 @@
       if (m.startsWith("cc-")) return true; // die ganze Karten-Familie
     }
 
+    /* Jedes Merkmal für sich, wie die Wortstücke auch: Eine Beschriftung
+       „Gutscheincode" darf ein Feld namens „cvv" nicht harmlos machen. */
     for (const beschrift of merkmaleVon(el)) {
-      for (const wort of woerterVon(beschrift)) {
-        if (GEHEIM_WORT.has(wort)) return true;
-      }
-      const flach = flachVon(beschrift);
-      if (!flach) continue;
-      if (GEHEIM_TEIL.some((t) => flach.includes(t))) return true;
-      /* Jedes Merkmal für sich, wie die Wortstücke auch: Eine Beschriftung
-         „Gutscheincode" darf ein Feld namens „cvv" nicht harmlos machen. */
-      if (codeGeheim(flach)) return true;
+      if (bezeichnungGeheim(beschrift)) return true;
     }
     return false;
   }
@@ -527,11 +633,26 @@
    */
   function codeKasten(el) {
     const mass = kastenMass(el);
-    if (!mass || mass > CODE_KASTEN_HOECHSTENS) return false;
+    if (mass > CODE_KASTEN_HOECHSTENS) return false;
     const art = feldTyp(el);
-    if (art === "number") return true;
+    const nurZiffern =
+      art === "number" ||
+      merkmal(el, "inputmode").toLowerCase() === "numeric" ||
+      /\\d|\[0-9\]/.test(merkmal(el, "pattern"));
+    if (!nurZiffern) return false;
+    if (mass) return true;
+    /* Befund TEACH-7 vom 14.08.2026: `kastenMass` gibt ohne `maxlength` 0
+       zurück, `codeKasten` stieg deshalb sofort mit false aus, und ein Feld
+       ohne Längenbegrenzung gab jeden kurzen Zahlencode frei. `maxlength` ist
+       aber die Kür, nicht die Pflicht — die halbe Netzwelt setzt statt dessen
+       nur `inputmode="numeric"`.
+       Ohne Längenbegrenzung zählt deshalb der zweite Hinweis: eine
+       ausdrückliche Zifferntastatur ODER ein Muster, das eine feste Länge
+       verlangt. Eine Mengenangabe (`type=number`) fällt bewusst NICHT
+       darunter — sie ist der Alltag jedes Warenkorbs, und ihre Zahl ist
+       kurz. */
     if (merkmal(el, "inputmode").toLowerCase() === "numeric") return true;
-    return /\\d|\[0-9\]/.test(merkmal(el, "pattern"));
+    return /\{\s*\d+\s*(,\s*\d*\s*)?\}/.test(merkmal(el, "pattern"));
   }
 
   /**
@@ -590,15 +711,110 @@
   const kernVon = (roh) => String(roh == null ? "" : roh).replace(/[\s.\-/ ]/g, "");
 
   /**
-   * Darf dieser Text in einen Anker, eine Beschreibung oder einen Ablauf?
+   * Alle Ziffernketten eines Textes, in der Lesart, in der ein Mensch sie
+   * schreibt.
+   *
+   * Gleich lange Gruppen ab drei Stellen werden zusammengezogen, alles andere
+   * bleibt getrennt. Ohne diese Unterscheidung wäre „4111 1111 1111 1111"
+   * vier harmlose Zahlen und „14.08.2026" ein achtstelliger Code — also
+   * genau verkehrt herum.
+   *
+   * @param {string} text
+   * @returns {string[]} die Ketten, ohne Trenner
+   */
+  function ziffernketten(text) {
+    const raus = [];
+    const gruppen = String(text == null ? "" : text).match(/[0-9]+(?:[ \-][0-9]+)*/g) || [];
+    for (const gruppe of gruppen) {
+      const teile = gruppe.split(/[ \-]/).filter(Boolean);
+      const gleichLang = teile.every((t) => t.length === teile[0].length);
+      if (teile.length > 1 && gleichLang && teile[0].length >= GRUPPE_MINDEST) {
+        raus.push(teile.join(""));
+        continue;
+      }
+      for (const t of teile) raus.push(t);
+    }
+    return raus;
+  }
+
+  /**
+   * Hat dieses EINE Wort die Gestalt eines Codes?
+   *
+   * Befund TEACH-4 vom 14.08.2026: Erkannt wurden nur reine Ziffern, Luhn und
+   * `^[A-Z0-9]{6,12}$`. Durch kamen `a3f9c2`, `sk-live-9f3a2b`,
+   * `a1b2c-3d4e5`, `8s7d6f5g`, `kl4us-2026` — die übliche Ausgabe eines
+   * Wiederherstellungsschlüssels.
+   *
+   * Die Regel, die sie alle fasst, ohne halbe Seiten mitzunehmen: Ziffern und
+   * Buchstaben wechseln sich ab, es gibt also MEHRERE getrennte Ziffernläufe.
+   * Ein Wort mit einer Zahl am Ende hat genau einen — „iPhone13",
+   * „Windows10", „MP3-Player", „hunter2" bleiben damit stehen. Das ist eine
+   * ausgeschriebene Entscheidung und keine Lücke: Ein Passwort dieser Gestalt
+   * hängt am Feld (`type=password`, `name=pw`, kein Beleg) und nicht an
+   * seiner Schreibweise, und die Anker der halben Seite wegzuwerfen, kostet
+   * jedes Abspielen.
+   *
+   * @param {string} roh ein einzelnes Wort, nie ein Satz
+   * @returns {string|null} Name der Regel, die zugeschlagen hat
+   */
+  function tokenGestalt(roh) {
+    const kern = kernVon(roh);
+    if (kern.length < 6) return null;
+    if (!/[A-Za-z]/.test(kern)) return null; // reine Ziffern: eigene Regel
+    /* Der Einmalcode in Grossbuchstaben und Ziffern, wie ihn Authenticator
+       und Wiederherstellungsschlüssel ausgeben: „A3F9C2", „7KD4-9PX2". */
+    if (/^[A-Z0-9]{6,12}$/.test(kern) && /[0-9]/.test(kern) && /[A-Z]/.test(kern)) {
+      return "grosscode";
+    }
+    if ((kern.match(/[0-9]+/g) || []).length >= 2) return "mischcode";
+    return null;
+  }
+
+  /**
+   * Steckt in diesem Text ein Geheimnis — und wenn ja, welcher Art?
    *
    * Befund B6 vom 14.08.2026: Auf einer 2FA-Seite wurde
    * `<span class="otp-anzeige">849271</span>` zum Anker `text=849271` und zur
    * `beschreibung` „849271", und `<button data-code="849271">` zum Anker
-   * `[data-code="849271"]`. Der Textanker kannte KEINERLEI Geheimprüfung, und
-   * das Datenmerkmal liess reine Ziffernketten durch, weil die
-   * Zufallserkennung in `selektor.js` Ziffernabschnitte als Ordnungszahlen
-   * überspringt — zu Recht für `col-md-6`, verheerend für einen Einmalcode.
+   * `[data-code="849271"]`. Der Textanker kannte KEINERLEI Geheimprüfung.
+   *
+   * Befund TEACH-2 vom 14.08.2026, dieselbe Stelle ein zweites Mal: Die
+   * Reparatur zu B6 mass die GANZE Kette. „849271" war verboten, „Dein Code
+   * lautet 849271" erlaubt — und genau so steht ein Code auf einer Seite.
+   * Deshalb wird ab hier als TEILKETTE gesucht.
+   *
+   * Jede Regel trägt ihren Namen, damit ein Prüfsatz sie einzeln halten kann
+   * statt nur das Ergebnis (dieselbe Bauart wie `ZUFALL_REGELN` in
+   * `selektor.js`).
+   *
+   * @param {string} text
+   * @returns {string|null} null heisst: nichts dagegen
+   */
+  function geheimGestalt(text) {
+    const s = String(text == null ? "" : text).trim();
+    if (!s) return null; // nichts da, nichts zu verraten
+    const kern = kernVon(s);
+    /* Die ganze Kette allein: hier zählt schon die vierte Stelle. */
+    if (/^[0-9]+$/.test(kern)) {
+      if (kern.length >= ZIFFERN_MINDEST && kern.length <= ZIFFERN_HOECHSTENS) return "ziffernkette";
+    }
+    if (luhnGueltig(kern)) return "kartennummer";
+    /* Und jede Kette IM Text, ab der fünften Stelle. Die Prüfziffer zählt
+       auch hier: Eine Kartennummer mitten in einem Satz ist eine
+       Kartennummer. */
+    for (const kette of ziffernketten(s)) {
+      if (luhnGueltig(kette)) return "kartennummer";
+      if (kette.length >= ZIFFERN_EINGEBETTET) return "ziffernkette";
+    }
+    for (const wort of s.split(/\s+/)) {
+      const regel = tokenGestalt(wort);
+      if (regel) return regel;
+    }
+    return null;
+  }
+
+  /**
+   * Darf dieser Text in einen Anker, eine Beschreibung oder ein Etikett?
    *
    * Ein Anker weniger kostet einen schwächeren Anker weiter unten in der
    * Kaskade. Ein Einmalcode im Ablauf kostet das Konto.
@@ -607,23 +823,128 @@
    * @returns {boolean} wahr, wenn nichts dagegen spricht
    */
   function textHarmlos(text) {
-    const s = String(text == null ? "" : text).trim();
-    if (!s) return true; // nichts da, nichts zu verraten
-    const kern = kernVon(s);
-    if (/^[0-9]+$/.test(kern)) {
-      if (kern.length >= ZIFFERN_MINDEST && kern.length <= ZIFFERN_HOECHSTENS) return false;
+    return geheimGestalt(text) === null;
+  }
+
+  /**
+   * Die Gestalt eines FELDINHALTS.
+   *
+   * Sie ist nicht dieselbe Frage wie die eines Textes, und der Unterschied
+   * ist die eigentliche Arbeit dieser Datei: Eine reine Ziffernkette IST der
+   * Inhalt einer Artikelnummer, einer Bestellnummer und einer Postleitzahl.
+   * Wer sie im Wert verbietet, hat den Teach-Modus abgeschafft, nicht
+   * gesichert — deshalb entscheidet über reine Ziffern weiterhin das FELD
+   * (`geheim`, `zifferngruppe`, `codeKasten`) und nicht der Wert.
+   *
+   * Was der Wert allein entscheidet, ist alles, was keine Zahl mehr ist: die
+   * Luhn-Prüfziffer, der Mischcode und die Gruppenkette eines
+   * Wiederherstellungsschlüssels.
+   *
+   * @param {string} roh
+   * @returns {string|null} Name der Regel, oder null
+   */
+  function wertGestalt(roh) {
+    const s = String(roh == null ? "" : roh).trim();
+    if (!s) return null;
+    if (luhnGueltig(kernVon(s))) return "kartennummer";
+    for (const kette of ziffernketten(s)) {
+      if (luhnGueltig(kette)) return "kartennummer";
     }
-    if (luhnGueltig(kern)) return false;
-    /* Der Einmalcode in Grossbuchstaben und Ziffern, wie ihn Authenticator und
-       Wiederherstellungsschlüssel ausgeben: „A3F9C2", „7KD4-9PX2". Ein Wort
-       ohne Ziffern fällt nicht darunter, ein Satz ebenso wenig. */
-    if (/^[A-Z0-9]{6,12}$/.test(kern) && /[0-9]/.test(kern) && /[A-Z]/.test(kern)) return false;
-    return true;
+    for (const wort of s.split(/\s+/)) {
+      const regel = tokenGestalt(wort);
+      if (regel) return regel;
+    }
+    if (gruppenkette(s)) return "gruppenkette";
+    return null;
+  }
+
+  /**
+   * Spricht das ein Mensch aus?
+   *
+   * Kein Vokal, oder drei Mitlaute am Stück. Dieselbe Frage wie `vokallos` in
+   * `selektor.js`, nur eine Stufe genauer: „efgh" trägt ein „e" und ist
+   * trotzdem kein Wort. Was ein Mensch nicht aussprechen kann, hat auch
+   * keiner vergeben.
+   */
+  const unaussprechbar = (t) =>
+    !/[aeiouyäöü]/i.test(t) || /[bcdfghjklmnpqrstvwxzß]{3,}/i.test(t);
+
+  /**
+   * Vier und mehr gleich lange Gruppen, von denen die meisten kein Wort sind:
+   * die Ausgabe eines Wiederherstellungsschlüssels („abcd efgh ijkl mnop",
+   * „x7f2 k9p3 q8r1 m5n2").
+   *
+   * Die Gleichlänge allein genügt nicht: „Haus Baum Ball Wald" sind ebenfalls
+   * vier gleich lange Gruppen. Den Unterschied macht, ob ein Mensch sie
+   * aussprechen würde.
+   *
+   * Was diese Regel NICHT fängt und auch nicht fangen kann, steht hier, damit
+   * es niemand für erledigt hält: eine aufgeschriebene Merkwortfolge aus
+   * echten Wörtern („abandon ability able about"). Sie ist von einem Satz an
+   * ihrer Gestalt nicht zu unterscheiden. Dagegen schützt das FELD und nicht
+   * der Wert — „seed", „recovery", „wiederherstell" gehören in `GEHEIM_TEIL`,
+   * sobald jemand eine Maske dieser Art misst.
+   */
+  function gruppenkette(text) {
+    const teile = String(text == null ? "" : text).trim().split(/[\s\-]+/).filter(Boolean);
+    if (teile.length < GRUPPENKETTE_MINDEST) return false;
+    if (!teile.every((t) => /^[A-Za-z0-9]{3,8}$/.test(t))) return false;
+    if (!teile.every((t) => t.length === teile[0].length)) return false;
+    return teile.filter(unaussprechbar).length * 2 >= teile.length;
+  }
+
+  /**
+   * Darf dieser FELDINHALT in einen gespeicherten Ablauf?
+   *
+   * @param {string} roh
+   * @returns {boolean}
+   */
+  function wertHarmlos(roh) {
+    return wertGestalt(roh) === null;
   }
 
   /* ------------------------------------------------------------------ *
    * Der Beleg — und nur er gibt frei
    * ------------------------------------------------------------------ */
+
+  /**
+   * Ist dieses Merkmal eine BEZEICHNUNG — also etwas, das ein Feld benennt?
+   *
+   * Befund TEACH-3 vom 14.08.2026: `harmlosBeleg` prüfte `flach.includes(wort)`
+   * über die ganze Etikettzeile. Die Beschriftung „Wir haben dir eine E-Mail
+   * geschickt, trag die sechs Ziffern hier ein" enthält „mail", also galt das
+   * Feld als belegt harmlos, und `wertFreigeben` schrieb den Einmalcode als
+   * `value` in den Ablauf.
+   *
+   * Ein Feld heisst „E-Mail". Es heisst nicht in dreizehn Wörtern. Was so
+   * lang ist, erklärt eine Seite, und eine Erklärung ist kein Nachweis.
+   *
+   * Die Lücke kostet hier ausdrücklich nichts als eine Rückfrage: Ein Feld
+   * mit einem erklärenden Satz statt eines Namens wird `user_input_required`,
+   * und der Mensch füllt es beim Abspielen einmal aus.
+   */
+  function bezeichnungTaugt(text) {
+    const woerter = woerterVon(text);
+    if (!woerter.length || woerter.length > BEZEICHNUNG_WOERTER) return false;
+    return flachVon(text).length <= BEZEICHNUNG_ZEICHEN;
+  }
+
+  /**
+   * Trägt diese Bezeichnung ein Wort aus `HARMLOS_WORT`?
+   *
+   * Gesucht wird das Wortstück INNERHALB eines einzelnen Wortes und nicht in
+   * der zusammengezogenen Zeile. „artikelnummer" trägt „artikel", das soll
+   * so sein. „Alp Assistent" ergäbe zusammengezogen „pass" — ein Fund, den es
+   * nicht gibt, und in der anderen Richtung genau derselbe Fehler wie oben.
+   */
+  function harmlosWortIn(text) {
+    for (const wort of woerterVon(text)) {
+      for (const stueck of HARMLOS_WORT) {
+        if (wort.includes(stueck)) return stueck;
+      }
+    }
+    return "";
+  }
 
   /**
    * Womit weist dieses Feld nach, dass es ein gewöhnliches Formularfeld ist?
@@ -637,11 +958,9 @@
       if (HARMLOS_MARKEN.has(m)) return { quelle: "autocomplete", wert: m };
     }
     for (const beschrift of merkmaleVon(el)) {
-      const flach = flachVon(beschrift);
-      if (!flach) continue;
-      for (const wort of HARMLOS_WORT) {
-        if (flach.includes(wort)) return { quelle: "beschriftung", wert: wort };
-      }
+      if (!bezeichnungTaugt(beschrift)) continue;
+      const treffer = harmlosWortIn(beschrift);
+      if (treffer) return { quelle: "beschriftung", wert: treffer };
     }
     return null;
   }
@@ -683,26 +1002,49 @@
     if (zifferngruppe(el)) return { ok: false, grund: "zifferngruppe" };
 
     const beleg = harmlosBeleg(el);
+    /* Auch diese Frage wird VOR dem Lesen beantwortet, obwohl sie erst weiter
+       unten noch einmal gebraucht wird. Sie hängt am Baum und nicht am Wert,
+       und zweimal denselben Abschnitt abzulaufen kostet auf einer grossen
+       Seite mehr als eine Zeile hier. */
+    const nebenGeheimnis = imGeheimAbschnitt(el);
     /* Ein Feld ohne Nachweis im Umfeld eines Geheimnisses ist der Einmalcode
        neben dem Passwort. Ein Feld ohne Nachweis irgendwo sonst ist das
        Passwortfeld nach dem Klick aufs Auge (`name="pw"`, `type=text`). In
        beiden Fällen übernimmt der Mensch. */
     if (!beleg) {
-      return { ok: false, grund: imGeheimAbschnitt(el) ? "abschnitt_geheim" : "unbelegt" };
+      return { ok: false, grund: nebenGeheimnis ? "abschnitt_geheim" : "unbelegt" };
     }
 
     const roh = angaben.wert === undefined ? wertLesen(el) : String(angaben.wert);
     const kern = kernVon(roh);
-    /* Auch ein belegtes Feld kann eine Kartennummer tragen: Ein Shop, der
+    /* Auch ein belegtes Feld kann eine Kartennummer, einen
+       Wiederherstellungsschlüssel oder einen Mischcode tragen: Ein Shop, der
        seine Zahlungsmaske aus demselben Bauteil baut wie seine Adressmaske,
-       nennt das Feld dann „nummer". Die Luhn-Prüfziffer sagt es trotzdem. */
-    if (luhnGueltig(kern)) return { ok: false, grund: "kartennummer" };
+       nennt das Feld dann „nummer". Die Prüfziffer und die Gestalt sagen es
+       trotzdem (Befund TEACH-4: `a1b2c-3d4e5` stand mit
+       `"beleg":"beschriftung"` im Ablauf). */
+    const gestalt = wertGestalt(roh);
+    if (gestalt) return { ok: false, grund: gestalt === "kartennummer" ? "kartennummer" : "wertgestalt" };
     /* Und die Bauform des Kästchens sagt es auch dann, wenn der Name harmlos
        klingt: Ein kurzes Feld, das nur Ziffern annimmt, mit einer reinen
        Ziffernkette darin, ist ein Code. Eine Bestellnummer in einem Feld ohne
-       Längenbegrenzung bleibt davon unberührt. */
+       Zifferntastatur bleibt davon unberührt. */
     if (/^[0-9]+$/.test(kern) && kern.length >= ZIFFERN_MINDEST && codeKasten(el)) {
       return { ok: false, grund: "codegestalt" };
+    }
+    /* Befund TEACH-3 vom 14.08.2026: Der Riegel `abschnitt_geheim` griff
+       ausdrücklich NUR bei Feldern OHNE Beleg. Ein Feld mit der Beschriftung
+       „Bestellung bestaetigen" trug damit den Einmalcode in den Ablauf,
+       obwohl im selben `<form>` ein `type=password` stand.
+       Neben einem Geheimfeld muss deshalb auch die Gestalt des Wertes
+       harmlos sein — und dort zählt die reine Ziffernkette mit, die ein Feld
+       an jeder anderen Stelle der Seite tragen dürfte. Der Grund steht
+       daneben: Wer neben einem Passwortfeld sechs Ziffern eintippt, tippt
+       keine Bestellnummer.
+       Was der Mensch dort wirklich schreibt, bleibt: „julian" ist auch neben
+       einem Passwortfeld ein Benutzername (gemessen in R4 und R36). */
+    if (nebenGeheimnis && !textHarmlos(roh)) {
+      return { ok: false, grund: "abschnitt_geheim" };
     }
     return { ok: true, wert: roh, beleg: beleg.quelle };
   }
@@ -741,32 +1083,79 @@
    * Auswahlliste, bearbeitbarer Bereich —, ist der Text IM Element das
    * Getippte.
    */
-  function beschreibungVon(el, grenze = BESCHREIBUNG_ZEICHEN) {
-    if (!el || el.nodeType !== 1) return "";
-    const kandidaten = [merkmal(el, "aria-label"), merkmal(el, "title")];
+  function beschreibungBefund(el, grenze = BESCHREIBUNG_ZEICHEN) {
+    if (!el || el.nodeType !== 1) return { text: "", quelle: "kein_element", benannt: false };
+    const kandidaten = [
+      ["aria-label", merkmal(el, "aria-label")],
+      ["title", merkmal(el, "title")],
+    ];
     const doc = dokument();
     const bez = merkmal(el, "aria-labelledby");
     if (bez && doc && typeof doc.getElementById === "function") {
       for (const id of bez.split(/\s+/)) {
         try {
           const n = id && doc.getElementById(id);
-          if (n) kandidaten.push(n.textContent || "");
+          if (n) kandidaten.push(["aria-labelledby", n.textContent || ""]);
         } catch (_) {
           /* kein Etikett unter dieser Kennung */
         }
       }
     }
-    if (!traegtInhalt(el)) kandidaten.push(el.textContent || "");
-    kandidaten.push(merkmal(el, "placeholder"), merkmal(el, "alt"), merkmal(el, "name"));
-    for (const k of kandidaten) {
-      const s = kuerzen(k, grenze);
+    /* Befund TEACH-1 vom 14.08.2026: Genau hier fehlten `label[for]` und das
+       umschliessende `<label>` — beim häufigsten Formularbau überhaupt. Zwei
+       verschiedene Felder hiessen dann beide „input", `vergleichsform` machte
+       daraus auf beiden Seiten " input ", und die Identitätswache aus F3 ging
+       durch: Die Artikelnummer wurde ins Titelfeld getippt, und der Ablauf
+       meldete Erfolg.
+       Gelesen wird dieselbe Beschriftung, die `beschriftungVon` schon immer
+       gelesen hat. Zwei Etikettbegriffe in einer Datei waren der Fehler; ab
+       hier ist es einer. */
+    for (const etikett of beschriftungVon(el)) kandidaten.push(["beschriftung", etikett]);
+    if (!traegtInhalt(el)) kandidaten.push(["text", el.textContent || ""]);
+    kandidaten.push(
+      ["placeholder", merkmal(el, "placeholder")],
+      ["alt", merkmal(el, "alt")],
+      ["name", merkmal(el, "name")]
+    );
+    for (const [quelle, roh] of kandidaten) {
+      const s = kuerzen(roh, grenze);
       if (!s) continue;
-      /* Der Befund B6 an genau dieser Stelle: Die Beschreibung des
+      /* Gemessen wird der UNGEKÜRZTE Text, zurückgegeben der gekürzte.
+         Andersherum wäre die Kürzung die Wache: Ein Einmalcode hinter Zeichen
+         400 fiele bei der Kürzung heraus und der Rest ginge als „harmlos"
+         durch — dieselbe Bauform wie AUTOMODUS-2 vom selben Tag.
+         Der Befund B6 an genau dieser Stelle: Die Beschreibung des
          Einmalcode-Feldes WAR der Einmalcode. */
-      if (!textHarmlos(s)) continue;
-      return s;
+      if (!textHarmlos(roh)) continue;
+      return { text: s, quelle, benannt: true };
     }
-    return kuerzen(marke(el).toLowerCase(), grenze);
+    return { text: kuerzen(marke(el).toLowerCase(), grenze), quelle: "marke", benannt: false };
+  }
+
+  function beschreibungVon(el, grenze = BESCHREIBUNG_ZEICHEN) {
+    const befund = beschreibungBefund(el, grenze);
+    if (befund.benannt) return befund.text;
+    if (!befund.text) return "";
+    /* Der Elementname ist KEIN Name, und ab hier sagt die Antwort das auch.
+       Vorher stand hier still „input" oder „button" — auf beiden Seiten des
+       Identitätsvergleichs aus F3 dasselbe Wort, und die Wache verglich zwei
+       Namen, die keine sind (Befund TEACH-1, zweimal gemessen: das falsche
+       Eingabefeld und die falsche Tabellenzeile).
+       Ein Wort, das nicht vorkommen kann: Ein echter Name mit einem
+       Doppelpunkt darin behält ihn, aber keiner beginnt mit „ohne-namen:". */
+    return `${OHNE_NAMEN}${befund.text}`;
+  }
+
+  /**
+   * Sagt dieser Name „ich habe keinen Namen"?
+   *
+   * Für jeden, der einen aufgezeichneten Namen gegen einen frisch gelesenen
+   * hält: Zwei namenlose Elemente sind nicht dasselbe Element, sie sind zwei
+   * Elemente ohne Namen. Wer sie trotzdem gleichsetzt, hat die Wache
+   * abgeschaltet.
+   */
+  function namenlos(text) {
+    return String(text == null ? "" : text).startsWith(OHNE_NAMEN);
   }
 
   globalThis.SMARTR_GEHEIM = Object.freeze({
@@ -779,11 +1168,25 @@
     wertFreigeben,
     harmlosBeleg,
     textHarmlos,
+    wertHarmlos,
+    /* Beide Gestaltprüfungen geben den NAMEN der Regel zurück, die
+       zugeschlagen hat. Ein Prüfsatz, der nur das Ergebnis misst, kann nicht
+       unterscheiden, ob die richtige Regel gegriffen hat oder eine andere
+       zufällig auch — dieselbe Bauart wie `ZUFALL_REGELN` in `selektor.js`. */
+    geheimGestalt,
+    wertGestalt,
+    ziffernketten,
+    tokenGestalt,
+    bezeichnungGeheim,
+    bezeichnungTaugt,
     luhnGueltig,
     beschreibungVon,
+    beschreibungBefund,
+    namenlos,
     beschriftungVon,
     traegtInhalt,
     VERBOT_GRUND,
+    OHNE_NAMEN,
     BESCHREIBUNG_ZEICHEN,
     /* Offen für die Prüfsätze: Die Listen sind die einzige Regel hier, die man
        am Ergebnis nicht ablesen kann — ein nicht aufgezeichneter Wert sieht

@@ -66,7 +66,16 @@ import {
   freigabeNoetig,
   schrittMarke,
   einschleusungVerdacht,
+  KLASSEN,
+  HART,
+  WEICH,
 } from "./befehle.js";
+/* Die EINE Messform (`src/gemeinsam/messform.js`, über den Mantel daneben).
+   Sie wird hier für den Identitätsvergleich der Kaskade gebraucht: `gleicherText`
+   misst Gleichheit als GANZES, nach derselben Normalisierung, mit der auch der
+   Klassifizierer arbeitet. Ein zweiter Vergleich mit eigenen Regeln wäre der
+   F4-Fehler in seiner dritten Auflage. */
+import { gleicherText, messtext } from "./messform.js";
 import { AGENTEN, regelnFuer, agentDarf } from "./matrix.js";
 import { workflowHolen, platzhalterFuellen } from "./werkstatt.js";
 import { eintragen as buchEintragen } from "./protokollbuch.js";
@@ -423,6 +432,62 @@ async function modusAnDieSeite(tabId, modus, zwingend = false, signal = null) {
 }
 
 /* --------------------------------------------------------------------- *
+ * Werte, die von der besuchten Seite kommen
+ *
+ * Die Fehlerklasse aus der Abnahme vom 14.08.2026 (H1, AUTOMODUS-2), in einem
+ * Satz:
+ *
+ *   **Es wird gekürzt, bevor gemessen wird.**
+ *
+ * `saeubern` schneidet die MITTE heraus — also genau das Wort, auf das es
+ * ankommt. Gemessen: Ein Knopf mit 208 Zeichen barrierefreiem Namen, in dessen
+ * Mitte „kaufen" steht, ergibt am Klassifizierer ungekürzt `hart=zahlung`,
+ * über den Produktivweg aber `fragen=0` und `erfolg=true` im Modus `auto`. Und
+ * die besuchte Seite bestimmt selbst, wie lang ihre Namen sind.
+ *
+ * Ab hier gilt in dieser Datei die Trennung, und sie ist sichtbar gemacht:
+ *
+ *   - **Messeingänge bleiben ungekürzt.** Alles, was in `klassenBestimmen`,
+ *     in `einschleusungVerdacht` oder in die Identitätswache der Kaskade geht,
+ *     geht ganz hinein. Ein Deckel dort ist ein Schalter, den die Seite
+ *     bedient.
+ *   - **Gekürzt wird ausschliesslich für Anzeige und Protokoll**, und zwar in
+ *     einem eigenen Feld (`anzeigename`), damit an der Aufrufstelle zu sehen
+ *     ist, welches der beiden gerade benutzt wird.
+ *   - **Kennungen werden gemessen, nicht geschnitten.** Eine Epoche ist kein
+ *     Anzeigetext, sie wird auf GLEICHHEIT geprüft. Zwei verschiedene, lange
+ *     Kennungen können nach einer mittigen Kürzung dieselbe sein — dann
+ *     stimmt eine Epochenprüfung zu, die nie stattgefunden hat. Zu lang heisst
+ *     deshalb ungültig und nicht „gekürzt gültig".
+ *
+ * Die Gegenwache dazu steht in `befehle.js` (`kuerzungsspur`) und in
+ * `pruefung/gattung.test.mjs` (Positivliste `KUERZUNGEN`).
+ * --------------------------------------------------------------------- */
+
+/* Was `overlay.js` als Epoche vergibt: `s<Nummer>.<vier Zeichen>` (siehe
+   `DOKUMENTMARKE` dort). Das Muster ist bewusst etwas weiter gefasst als die
+   heutige Form — es soll eine Kennung von einem Fliesstext trennen, nicht eine
+   Fassung festnageln. */
+const EPOCHE_MUSTER = /^[A-Za-z0-9._:-]{1,64}$/;
+
+/** Eine Epoche von der Seite: entweder ganz oder gar nicht. */
+function epocheRoh(roh) {
+  return typeof roh === "string" && EPOCHE_MUSTER.test(roh) ? roh : null;
+}
+
+/*
+ * Ein Text von der Seite, wie er GEMESSEN wird: ungekürzt.
+ *
+ * Er wird nur in eine Zeichenkette gebracht — was über die Leitung kommt, ist
+ * JSON und kann eine Zahl oder `null` sein, und ein Vergleich gegen `undefined`
+ * hätte am Ende die Wortliste nie gesehen. Gekürzt wird hier nichts: Diese
+ * Werte gehen in den Klassifizierer.
+ */
+function messeingang(roh) {
+  return roh === null || roh === undefined ? "" : String(roh);
+}
+
+/* --------------------------------------------------------------------- *
  * Rahmenbau
  * --------------------------------------------------------------------- */
 
@@ -741,7 +806,7 @@ async function freigabeFragen({ frage, quelle, cmd, id, frist, signal = null }) 
     uhr = setTimeout(() => fertig("frist"), Math.max(1000, frist));
   });
   const abbruchLauf = signal ? signal.versprechen.then(() => "abbruch") : null;
-  const fragenLauf = chrome.runtime
+  const stellen = () => chrome.runtime
     /* `frist` geht mit: Die Freigabekarte zeigt eine Restzeit, und panel.js
        rechnet sie sonst selbst aus `BEFEHLE[cmd].frist` aus. Seit die
        Bedenkzeit nicht mehr aus der Befehlsfrist stammt (M3), wäre diese
@@ -758,8 +823,46 @@ async function freigabeFragen({ frage, quelle, cmd, id, frist, signal = null }) 
     })
     .catch(() => "keine_stelle");
 
+  /*
+   * Der Weg zum abwesenden Menschen (Befund BRUECKE-2 und BRUECKE-3).
+   *
+   * Antwortet niemand auf die Frage, ist die Seitenleiste zu — und im
+   * Hintergrundbetrieb ist sie das immer. Bis zum 14.08.2026 endete es hier:
+   * `grant_required`, null Systemmeldungen, null Abzeichenwechsel. Der Agent
+   * blieb an der Kasse stehen, und der Mensch erfuhr es erst, wenn er die
+   * Seitenleiste von sich aus wieder öffnete. `panel.js` sagt ihm dabei
+   * wörtlich zu, der Dienst mache „mit dem Fragezeichen am Symbol auf sich
+   * aufmerksam".
+   *
+   * Also wird er gerufen, bevor abgesagt wird: eine Systemmeldung, die auch
+   * ohne offene Seitenleiste ankommt, und die Bitte an `link.js`, das
+   * Abzeichen umzustellen (das Symbol gehört dort hin, und zwei Besitzer für
+   * ein Abzeichen wären der F4-Fehler).
+   *
+   * Danach bekommt eine Seitenleiste, die gerade aufgeht, EINE zweite
+   * Gelegenheit. Die Nachfrist ist bewusst kurz: Der Ruf ist der Kanal, der
+   * den Menschen erreicht, das zweite Fragen fängt nur die Seitenleiste ein,
+   * die schon im Aufgehen war. Wer erst danach kommt, ist nicht verloren —
+   * die Absage ist BENANNT und `retryable`, der Agent schickt den Schritt
+   * noch einmal, und dann steht die Frage vor einem Menschen, der zusieht.
+   * Eine halbe Minute lang blind zu warten wäre für jeden Einzelbefehl eine
+   * halbe Minute Stillstand und würde den Menschen keinen Deut früher
+   * erreichen.
+   */
+  const rufen = async () => {
+    const erste = await stellen();
+    if (erste !== "keine_stelle") return erste;
+    menschRufen(cmd);
+    await schlafen(RUF_NACHFRIST_MS, signal && signal.abbruch);
+    const zweite = await stellen();
+    /* Auch beim zweiten Mal niemand da: Das ist eine eigene Lage und bekommt
+       einen eigenen Namen. „Es war kein Fenster offen" wäre jetzt falsch —
+       gerufen wurde, und niemand kam. */
+    return zweite === "keine_stelle" ? "unerreichbar" : zweite;
+  };
+
   try {
-    const laeufe = [fragenLauf, uhrenLauf];
+    const laeufe = [rufen(), uhrenLauf];
     if (abbruchLauf) laeufe.push(abbruchLauf);
     return await Promise.race(laeufe);
   } finally {
@@ -768,7 +871,53 @@ async function freigabeFragen({ frage, quelle, cmd, id, frist, signal = null }) 
        weg — sonst beantwortet er eine Frage, auf die niemand mehr wartet
        (spec-01 §3.6.3, „Verspätete Freigabe"). */
     melden({ typ: "link:freigabe-zurueckziehen", id });
+    /* Und das Fragezeichen am Symbol geht mit der Frage weg. Ein Zeichen, das
+       stehenbleibt, nachdem es nichts mehr zu beantworten gibt, ist beim
+       dritten Mal keines mehr. */
+    if (gerufen) {
+      gerufen = false;
+      melden({ typ: "link:freigabe-wartet", an: false });
+    }
   }
+}
+
+/*
+ * Wie lange eine Seitenleiste Zeit bekommt, die gerade aufgeht.
+ *
+ * Kurz und begründet: siehe `freigabeFragen`. Sie steht als benannte
+ * Konstante, weil eine Zahl mitten im Ablauf eine Entscheidung versteckt.
+ */
+const RUF_NACHFRIST_MS = 1200;
+
+/* Steht gerade ein Ruf aus? Im Modul, nicht in der Ablage — stirbt der
+   Dienstprozess, ist auch die Frage weg, die er stellen wollte. */
+let gerufen = false;
+
+/**
+ * Den Menschen rufen, der gerade nicht zusieht (§8.4, Befund BRUECKE-3).
+ *
+ * Zwei Zeichen, und sie tun Verschiedenes: Die Systemmeldung ist der
+ * Augenblick („dein Browser wartet gerade auf dich"), das Abzeichen ist der
+ * Zustand („da ist noch etwas offen"). Beides ist Beste-Kraft und niemals
+ * eine Bedingung — ein Schutz, der an einer fehlenden Berechtigung stürzte,
+ * wäre schlimmer als einer, der leise ist.
+ *
+ * Das Abzeichen selbst wird hier NICHT gesetzt. `chrome.action` ist global,
+ * und `link.js` führt es bereits über den Verbindungszustand; zwei Stellen,
+ * die dasselbe Zeichen setzen, sind die Bauform, die Festlegung F4 verbietet.
+ * Diese Datei sagt nur Bescheid. Hört dort heute niemand zu, bleibt die
+ * Systemmeldung — und das ist gemeldeter Fremdbedarf, keine stille Lücke.
+ */
+function menschRufen(cmd) {
+  gerufen = true;
+  melden({ typ: "link:freigabe-wartet", an: true, cmd });
+  systemmeldung(
+    katalog("freigabe_ruf_titel", "SMarTrChrome wartet auf deine Freigabe"),
+    katalog(
+      "freigabe_ruf_text",
+      "Ein Schritt braucht deine Zustimmung, und es ist gerade keine Seitenleiste offen. Öffne SMarTrChrome, dann zeige ich dir, worum es geht."
+    )
+  );
 }
 
 /* --------------------------------------------------------------------- *
@@ -943,6 +1092,24 @@ async function regelnZusammen(adresse, zieladresse) {
 }
 
 /**
+ * Darf dieser Agent die Klasse auf BEIDEN Wirten (Befund AUTOMODUS-5)?
+ *
+ * Dieselbe Zusammenlegung wie in `regelnZusammen`, nur für die Agentenmatrix:
+ * Erlaubt ist, was auf der Herkunft UND auf dem Ziel erlaubt ist. Ohne Ziel
+ * (jeder Befehl ausser `navigate`) bleibt es bei der Herkunft.
+ *
+ * Warum die strengere Richtung und nicht „eines von beiden genügt": Eine
+ * Freischaltung ist eine Aussage über EINEN Wirt. Aus „darf auf geizhals.de
+ * navigieren" folgt nichts über fremd.de — und der Befehl, der den Wirt
+ * wechselt, liefert am Ende die Wahrnehmung des ZIELS an den Agenten.
+ */
+async function agentDarfBeides(agent, adresse, zieladresse, klasse) {
+  if (!(await agentDarf(agent, adresse, klasse))) return false;
+  if (!zieladresse) return true;
+  return agentDarf(agent, zieladresse, klasse);
+}
+
+/**
  * Steht dieser Wirt auf der Sperrliste, ohne dass jemand danach gefragt wurde?
  *
  * Wirft nie: Eine Matrix, die sich nicht lesen lässt, hält keine Sitzung an —
@@ -956,7 +1123,14 @@ async function wirtGesperrt(adresse, wirte) {
     const regeln = await regelnFuer(adresse);
     return regeln && regeln.gesperrt === true;
   } catch (_) {
-    return false;
+    /* Der Rückfall führt zur STRENGEREN Antwort und nicht zur milderen.
+       Hier stand `return false`, also „nicht gesperrt" — und damit hätte eine
+       Matrix, die sich nicht lesen lässt, jede Sperre des Menschen aufgehoben.
+       Das ist dieselbe Fehlerklasse wie ein `catch`, der eine Freigabe
+       erfindet: Wer nicht nachsehen konnte, weiss nicht, dass es erlaubt ist.
+       `regelnFuer` wirft heute nicht (matrix.js fängt selbst); dass dieser
+       Zweig tot ist, ist kein Grund, ihn falsch stehen zu lassen. */
+    return true;
   }
 }
 
@@ -1018,9 +1192,23 @@ const SEITEN_RESERVE_MS = 1500;
  * verdächtig. Das Muster ist UNSER Wort aus der Liste, nie der Fremdtext, in
  * dem es stand.
  */
-async function einschleusungMessen(lage, text, adresse = "") {
+/*
+ * Der fertige Befund, nicht der Text.
+ *
+ * Befund AUTOMODUS-2, dritte Fundstelle derselben Bauform (Merkzettel
+ * `fundament.md`, 5.4): Hier stand `einschleusungMessen(lage, baum.text, …)`,
+ * und `baum.text` ist DREIFACH gedeckelt — 400 rohe Knoten, 120 Zeichen je
+ * Name, 12.000 Zeichen im Ganzen. Ein „ignore previous instructions" hinter
+ * Zeichen 12.000 oder in der 401. Zeile wurde nie gefunden, und eine Seite
+ * bestimmt selbst, wie lang sie ist.
+ *
+ * `textbaumBauen` misst den Verdacht deshalb selbst, über `baum.volltext` aus
+ * den ROHEN Knoten und ohne jede Kürzung. Diese Funktion nimmt das Ergebnis
+ * entgegen; sie lässt an der Aufrufstelle nichts mehr auszuwählen.
+ */
+async function einschleusungMelden(lage, befund, adresse = "") {
   if (!lage) return;
-  const v = einschleusungVerdacht(text);
+  const v = befund && typeof befund === "object" ? befund : { verdacht: false, muster: "" };
   if (!v.verdacht) return;
   /* Nur der erste Treffer zählt. Ein zweiter Fund im selben Schritt wäre
      dieselbe Aussage ein zweites Mal, und der Modus steht dann schon. */
@@ -1073,9 +1261,43 @@ async function einschleusungMessen(lage, text, adresse = "") {
      Fachartikel über Einschleusung eine Meldung zu werfen, wäre der schnellste
      Weg, sie abzuschalten — und dann meldet auch die wichtige nichts mehr. */
   if (heruntergestuft) systemmeldung(
-    "SMarTrChrome hat die Automatik angehalten",
-    "Auf der offenen Seite steht ein Versuch, dem Agenten neue Anweisungen unterzuschieben. Ab jetzt wird wieder bei jedem Schritt gefragt."
+    katalog(
+      "einschleusung_meldung_titel",
+      "SMarTrChrome hat die Automatik angehalten"
+    ),
+    katalog(
+      "einschleusung_meldung_text",
+      "Auf der offenen Seite steht ein Versuch, dem Agenten neue Anweisungen unterzuschieben. Ab jetzt wird wieder bei jedem Schritt gefragt."
+    )
   );
+}
+
+/*
+ * Ein Satz für den MENSCHEN, aus dem Sprachkatalog (Befund BRUECKE-5).
+ *
+ * Gemessen am 14.08.2026 mit dem echten englischen Katalog: Die Start-
+ * Systemmeldung und der Symboltitel kamen englisch, die Einschleusungsmeldung
+ * blieb deutsch — sie war die einzige Zeile dieser Erweiterung, die den
+ * abwesenden Menschen erreicht, und ein englischsprachiger Käufer bekam sie
+ * auf Deutsch. Vertrag §12 nimmt nur die Sätze AN DEN AGENTEN aus; das hier
+ * ist Oberfläche.
+ *
+ * Der deutsche Wortlaut bleibt als Rückfall stehen und ist kein Schmuck:
+ * `chrome.i18n.getMessage` gibt bei einem fehlenden Schlüssel die LEERE
+ * Zeichenkette zurück (so verhält sich Chrome), und eine Systemmeldung ohne
+ * Text ist eine Warnung, die niemand lesen kann. Solange die Schlüssel in
+ * `_locales/*` fehlen, meldet diese Stelle also weiter auf Deutsch — das ist
+ * gemeldeter Fremdbedarf und keine stille Lücke.
+ */
+function katalog(schluessel, rueckfall) {
+  try {
+    const t = chrome.i18n && typeof chrome.i18n.getMessage === "function"
+      ? chrome.i18n.getMessage(schluessel)
+      : "";
+    return typeof t === "string" && t.length ? t : rueckfall;
+  } catch (_) {
+    return rueckfall;
+  }
 }
 
 /*
@@ -1089,9 +1311,23 @@ async function einschleusungMessen(lage, text, adresse = "") {
 function systemmeldung(titel, text) {
   try {
     if (!chrome.notifications || typeof chrome.notifications.create !== "function") return;
+    /*
+     * Der Pfad des Symbols wird gegen die Erweiterungswurzel aufgelöst und
+     * nicht gegen die Adresse des Dienstarbeiters (Befund BRUECKE-8).
+     * `worker.js` liegt unter `chrome-extension://ID/src/background/`; ein
+     * relatives „icons/icon-128.png" zeigte von dort auf
+     * `src/background/icons/…`, das es nicht gibt, und
+     * `chrome.notifications.create` scheitert dann mit „Unable to download all
+     * specified images" — der `catch` unten verschluckt den Fehlschlag, und
+     * damit fällt STUMM genau das eine der drei Zeichen aus §8.4 aus, das den
+     * Menschen im anderen Fenster erreicht.
+     */
+    const symbol = typeof chrome.runtime.getURL === "function"
+      ? chrome.runtime.getURL("icons/icon-128.png")
+      : "icons/icon-128.png";
     const zurueck = chrome.notifications.create("", {
       type: "basic",
-      iconUrl: "icons/icon-128.png",
+      iconUrl: symbol,
       title: titel,
       message: text,
     });
@@ -1099,6 +1335,35 @@ function systemmeldung(titel, text) {
   } catch (_) {
     /* Ohne Meldungsrecht bleibt das Buch der Weg. */
   }
+}
+
+/*
+ * Seitentext, der den Browser verlässt, ohne durch die Wahrnehmung zu gehen.
+ *
+ * Der Verdacht wird über die ROHEN Werte gelegt — vor jedem Deckel und vor
+ * jedem `saeubern`. Die Aufrufer geben einfach hinein, was sie ausliefern
+ * wollen; was davon eine Zeichenkette ist, entscheidet `messeingang`.
+ */
+async function seitentextMessen(lage, werte) {
+  if (!lage) return;
+  const teile = [];
+  const sammeln = (w) => {
+    if (Array.isArray(w)) {
+      for (const e of w) sammeln(e);
+      return;
+    }
+    if (w && typeof w === "object") {
+      teile.push(messeingang(w.name), messeingang(w.wert), messeingang(w.rolle));
+      return;
+    }
+    teile.push(messeingang(w));
+  };
+  sammeln(werte);
+  await einschleusungMelden(
+    lage,
+    einschleusungVerdacht(teile.join(" ")),
+    (lage.kopf && lage.kopf.url) || ""
+  );
 }
 
 /** Was der Agent über einen Einschleusungsverdacht erfährt. */
@@ -1138,12 +1403,21 @@ async function wahrnehmen(tabId, kopf, frist, offscreen = false, lage = null) {
     epoche: roh.epoche,
   });
   /* Vor dem Verpacken, nicht danach: Der Modus soll schon stehen, wenn der
-     nächste Schritt die Entscheidungstabelle fragt. */
-  await einschleusungMessen(lage, baum.text, kopf.url);
+     nächste Schritt die Entscheidungstabelle fragt.
+
+     Gemessen wird `baum.einschleusung` und nicht mehr `baum.text`: Der Befund
+     entsteht in `textbaumBauen` aus den ROHEN Knoten, ohne die drei Deckel des
+     Anzeigetextes (Begründung bei `einschleusungMelden`). Hier bleibt nichts
+     mehr auszuwählen — die Aufrufstelle kann die Wache nicht mehr aus
+     Versehen an den gekürzten Text hängen. */
+  await einschleusungMelden(lage, baum.einschleusung, kopf.url);
   return {
     ok: true,
     snapshot: {
-      epoch: saeubern(roh.epoche, 24),
+      /* Die Epoche ist eine Kennung und wird gemessen, nicht geschnitten
+         (siehe `epocheRoh`). Der Agent schickt sie als `snapshotEpoch` zurück,
+         und die Seite prüft sie auf Gleichheit. */
+      epoch: epocheRoh(roh.epoche) || "",
       url: kopf.url,
       title: saeubern(kopf.titel, 120),
       text: baum.text,
@@ -1334,7 +1608,10 @@ async function zeigerZeigen(lage) {
       typ: "overlay:zeiger",
       x: ziel.mitte.x,
       y: ziel.mitte.y,
-      beschriftung: ziel.name,
+      /* ANZEIGE, nicht Messung: Die Beschriftung steht neben dem Zeiger im
+         Sichtfenster. Der ungekürzte Name ist der Messeingang und bleibt es
+         (siehe `messeingang` und AUTOMODUS-2). */
+      beschriftung: ziel.anzeigename,
       rect: ziel.rect,
     },
     Math.max(1000, lage.seitenfrist()),
@@ -1397,7 +1674,10 @@ async function tuHighlight(rahmen, lage) {
       typ: "overlay:zeiger",
       x: ziel.mitte.x,
       y: ziel.mitte.y,
-      beschriftung: ziel.name,
+      /* ANZEIGE, nicht Messung: Die Beschriftung steht neben dem Zeiger im
+         Sichtfenster. Der ungekürzte Name ist der Messeingang und bleibt es
+         (siehe `messeingang` und AUTOMODUS-2). */
+      beschriftung: ziel.anzeigename,
       rect: ziel.rect,
     },
     lage.seitenfrist(),
@@ -1408,6 +1688,10 @@ async function tuHighlight(rahmen, lage) {
       "Ich konnte den Zeiger auf dieser Seite nicht setzen.",
       { retryable: true, m: lage.meta() });
   }
+  /* `highlight` ist der zweite Weg, der Seitentext ausliefert, ohne eine
+     Wahrnehmung mitzuschicken (`shown.name` unten). Also auch hier die
+     Einschleusungswache, über den UNGEKÜRZTEN Namen — siehe `tuExtract`. */
+  await seitentextMessen(lage, [ziel.name, ziel.rolle]);
   return gelungen(lage.id, lage.cmd, {
     shown: { ref: ziel.ref, role: saeubern(ziel.rolle, 40), name: saeubern(ziel.name, GRENZEN.nameZeichen) },
   }, lage.meta());
@@ -1668,6 +1952,25 @@ async function tuExtract(rahmen, lage) {
   }
 
   const treffer = Array.isArray(antwort.antwort.treffer) ? antwort.antwort.treffer : [];
+
+  /*
+   * Die Einschleusungswache, auch hier — und über die ROHEN Treffer.
+   *
+   * Dieselbe Fehlerklasse wie AUTOMODUS-2, nur in ihrer anderen Gestalt: nicht
+   * „gekürzt gemessen", sondern „an dieser Aufrufstelle gar nicht gemessen".
+   * `einschleusungMelden` hängt an `wahrnehmen`, und `extract` ist ausdrücklich
+   * der eine Weg, der Seitentext ausliefert, OHNE durch die Wahrnehmung zu
+   * gehen (siehe die Wache oben, Punkt 3). Damit ging ein „ignore previous
+   * instructions" ungemessen an den Agenten, sobald er es gezielt abliest
+   * statt die Seite zu lesen — und gezielt ablesen ist der billigere Weg, den
+   * ein sparsamer Agent bevorzugt.
+   *
+   * Gemessen wird VOR den Deckeln dieser Funktion (`extraktRefs`,
+   * `extraktZeichen`) und ohne `saeubern`: Der Deckel unten ist die Anzeige
+   * für den Agenten, nicht der Messeingang.
+   */
+  await seitentextMessen(lage, treffer);
+
   const zeilen = [];
   let zeichen = 0;
   let ausgelassen = plan.ausgelassen || 0;
@@ -1760,6 +2063,14 @@ async function tuWaitFor(rahmen, lage) {
         "`textPresent` und `urlMatches` brauchen den Text, auf den gewartet wird.", false],
       leer: ["seitenskript_fehler", "Das Warten ist auf dieser Seite fehlgeschlagen.",
         "Mit `readPage` nachsehen, wie die Seite jetzt aussieht — oder auf eine andere Bedingung warten.", true],
+      /* Der Not-Aus, gemeldet von der Warteschleife selbst (overlay.js, Befund
+         M6 vom 14.08.2026). Das ist KEIN Ergebnis der Seite und keine
+         verstrichene Frist: Die Sitzung ist zu Ende. Ohne eigene Zeile fiele
+         es auf „Ich konnte auf dieser Seite nicht warten" mit
+         `retryable: true` — und der Agent versuchte es in einer Sitzung noch
+         einmal, die es nicht mehr gibt. */
+      gestoppt: ["session_beendet", "Die Browsersitzung wurde beendet, während ich gewartet habe. Ich warte nicht weiter.",
+        "Das ist kein Fehler der Seite. Der Nutzer hat die Sitzung beendet — für einen neuen Versuch braucht es eine neue Freigabe.", false],
     }, {
       code: "tab_gone",
       satz: "Ich konnte auf dieser Seite nicht warten.",
@@ -1991,6 +2302,57 @@ export async function rekorderBild(tabId, angaben = {}) {
        stehen, nur ohne Bild. Ein Bild vom falschen Tab wäre schlimmer als
        keines. */
     return { ok: false, kennung: "tab_im_hintergrund", klartext: "Der Tab steht nicht vorn, deshalb ohne Bild." };
+  }
+
+  /*
+   * Wovon KEIN Bild gemacht wird (Befund TEACH-8 vom 14.08.2026).
+   *
+   * `captureVisibleTab` nimmt den GANZEN sichtbaren Tab auf. Gemessen an einem
+   * echten Rekorderlauf auf einer 2FA-Seite: Der Klick auf den Hinweistext
+   * ergab eine Bildanforderung genau in dem Augenblick, in dem der Einmalcode
+   * auf dem Schirm stand. Geprüft wurden bis dahin Name, Tab, Ursprung, Grösse
+   * und Anzahl — nie, WAS auf dem Bild ist. Das Bild liegt danach als rohes
+   * JPEG in `chrome.storage.local`.
+   *
+   * Was diese Datei allein messen kann, misst sie jetzt: Adresse und Titel des
+   * Tabs gehen durch denselben Klassifizierer wie jeder andere Schritt. Trägt
+   * die Seite eine harte Klasse — `geheim` („Bestätigungscode eingeben"),
+   * `zahlung` („/kasse/bezahlen"), `unwiderruflich`, `berechtigung`, `datei`,
+   * `captcha` —, wird nicht fotografiert. Der Schritt bleibt stehen, nur ohne
+   * Bild, genau wie beim Tab im Hintergrund.
+   *
+   * Das ist ausdrücklich NICHT die ganze Reparatur, und es soll auch nicht so
+   * aussehen: Ein Code kann auf einer Seite stehen, deren Adresse und Titel
+   * harmlos sind. Die vollständige Antwort wäre eine Auskunft der SEITE („hier
+   * steht gerade ein Geheimfeld"), und die liegt in `content/rekorder.js` und
+   * `background/worker.js` — gemeldeter Fremdbedarf. Diese Wache ist das Netz,
+   * das ohne fremde Dateien gespannt werden kann, und sie fällt in die sichere
+   * Richtung: lieber ein Bild zu wenig.
+   */
+  /* Gefragt wird mit `type` und nicht mit `screenshot`, und das ist Absicht:
+     `type` ist der einzige Befehl, unter dem der Klassifizierer den Namen auch
+     gegen `WORTE_GEHEIM` hält („Bestätigungscode eingeben", „Einmalcode"). Ein
+     Bild von der ganzen Seite ist mindestens so heikel wie ein Tippen in
+     dieses Feld — also wird hier die strengste Lesart genommen, die der
+     Klassifizierer hergibt. */
+  const seitenbefund = klassenBestimmen(
+    "type",
+    {},
+    { name: messeingang(tab.title), rolle: "", marke: "", typ: "", formularGeheim: false },
+    /* Die Adresse steht auch als ZIEL. Zwei Klassen — `unwiderruflich` und
+       ein Teil von `zahlung` — hängen ausdrücklich am Ziel und nicht an der
+       Herkunft, weil bei einem Ortswechsel die Adresse die Handlung ist. Für
+       ein Bild gilt dasselbe: Die Seite, die fotografiert wird, IST der
+       Gegenstand. `/konto/loeschen` wäre sonst gemessen worden, als stünde man
+       nur zufällig dort. */
+    { url: tab.url, titel: messeingang(tab.title), ziel: tab.url }
+  );
+  if (seitenbefund.hart) {
+    return {
+      ok: false,
+      kennung: "seite_zu_heikel",
+      klartext: "Auf dieser Seite nehme ich kein Bild auf, dafür steht dort zu viel.",
+    };
   }
 
   const stufen = Array.isArray(GRENZEN.bildQualitaeten) && GRENZEN.bildQualitaeten.length
@@ -2235,6 +2597,60 @@ async function nachDemWechsel(lage, fristMs) {
     };
   }
 
+  /*
+   * Und die harten Klassen der NEUEN Adresse (Befund AUTOMODUS-6 vom
+   * 14.08.2026).
+   *
+   * Bis hierher prüfte dieser Nachlauf Bereich und Sperrliste — beides sind
+   * Aussagen darüber, WO gearbeitet werden darf, keine darüber, WAS dort
+   * steht. Gemessen: `navigate` auf `https://shop.de/angebot/1` mit
+   * Weiterleitung auf `https://shop.de/kasse/bezahlen?jetzt=1` endete im
+   * Modus `auto` mit `fragen=0`, `erfolg=true` und lieferte die vollständige
+   * Wahrnehmung der Kassenseite an den Agenten. Der Vertrag begründet die
+   * Klasse `zahlung` ausdrücklich damit, dass auf einer Kassenseite auch das
+   * LESEN eine Rückfrage wert ist, weil dort der Warenkorb eines Menschen
+   * steht.
+   *
+   * Verglichen wird gegen das, worüber in diesem Schritt schon entschieden
+   * wurde (`lage.klassen`): Bei `navigate` auf eine Kassenadresse hat der
+   * Mensch die Klasse `zahlung` bereits gehört und Ja gesagt — dann ist sie
+   * hier keine Überraschung mehr. Eine harte Klasse, die ERST durch die
+   * Weiterleitung entsteht, ist eine, und Überraschungen werden hier nicht
+   * gelesen. Dieselbe Trennung wie beim gesperrten Wirt eine Ebene höher:
+   * gefragt = erlaubt, überraschend = nicht.
+   *
+   * Angehalten wird das Lesen, nicht die Seite. Der Tab bleibt stehen, wo er
+   * steht — der Schutz besteht darin, NICHT ZU LESEN, nicht darin, dem
+   * Menschen seinen Tab kaputtzumachen (dieselbe Abweichung von spec-01 §5.2
+   * wie beim Bereich darüber).
+   */
+  const neueKlassen = klassenBestimmen(lage.cmd, {}, null, {
+    url: adresse,
+    titel: "",
+    /* Die neue Adresse steht auch als ZIEL: Nach einer Weiterleitung ist sie
+       das, worauf dieser Schritt gebracht hat, und nur so werden die Klassen
+       gemessen, die ausdrücklich am Ziel hängen (`unwiderruflich`). */
+    ziel: adresse,
+  });
+  const schonEntschieden = new Set(Array.isArray(lage.klassen) ? lage.klassen : []);
+  const ueberraschung = neueKlassen.klassen.filter((k) => HART.has(k) && !schonEntschieden.has(k));
+  if (ueberraschung.length) {
+    protokoll("Nach dem Wechsel steht hier etwas, wofür niemand gefragt wurde. Ich lese es nicht.", {
+      cmd: lage.cmd,
+      ergebnis: "guardrail_blocked",
+    });
+    return {
+      ok: false,
+      code: "guardrail_blocked",
+      /* Der Satz nennt die KLASSE und nicht die Adresse — die Klasse ist unser
+         eigenes Wort, die Adresse wäre die Auskunft darüber, wo der Mensch
+         gerade steht (siehe `WACHE_ABGEWANDERT`). */
+      satz: "Dieser Wechsel ist woanders gelandet als angekündigt, und dort steht etwas, wofür in diesem Schritt niemand gefragt wurde. Ich lese die neue Seite nicht.",
+      hinweis: "Die Adresse selbst mit `navigate` aufrufen, dann wird über sie entschieden, bevor sie gelesen wird.",
+      retryable: false,
+    };
+  }
+
   const overlay = await overlaySicherstellen(lage.tabId, { signal: lage.abbruch });
   if (!overlay.ok) {
     return {
@@ -2383,6 +2799,135 @@ const SCHRITT_TEXT = Object.freeze({
   user_input_required: "auf den Menschen warten",
 });
 
+/* --------------------------------------------------------------------- *
+ * Die Vorklassifizierung eines Ablaufs (Befund BRUECKE-2, 14.08.2026)
+ *
+ * Der Befund, in einem Satz: **Ein Ablauf liess sich im Hintergrund baulich
+ * nie abspielen.**
+ *
+ * Gemessen: gespeicherter Ablauf `wf_kasse`, Modus `auto`, Seitenleiste zu,
+ * `run_workflow` über den Draht → sofort `grant_required` („Es war kein
+ * Fenster offen …"), null Schritte ausgeführt. Mit offener, zustimmender
+ * Seitenleiste lief derselbe Ablauf durch. Ursache: `run_workflow` trägt in
+ * `befehle.js` absichtlich KEINE Grundklasse, und `freigabeNoetig` fragt bei
+ * einem Schritt ohne bekannte Klasse in JEDEM Modus („Ein neuer Befehl, der
+ * still durchläuft, wäre genau die Lücke, die niemand bemerkt"). Damit war
+ * die Hintergrundbedienung, die der Vertrag zusagt, in keiner Einstellung
+ * erreichbar.
+ *
+ * Die Entscheidung des Inhabers vom 14.08.2026 löst das auf, ohne die Regel
+ * aufzuweichen, aus der sie folgte:
+ *
+ *   **Der Ablauf wird VOR dem ersten Schritt vorklassifiziert.** Jeder Schritt
+ *   geht durch denselben Klassifizierer, soweit er ohne die Seite messbar ist
+ *   — Schritttyp, Zieladresse und die aufgezeichnete Beschreibung samt
+ *   Textankern. Die VEREINIGUNG dieser Klassen ist die Klasse des
+ *   `run_workflow`. Ein Ablauf aus lauter weichen Schritten läuft im Modus
+ *   `auto` damit ohne eine einzige Rückfrage; ein Ablauf, in dem irgendwo
+ *   „Zur Kasse" steht, fragt — und zwar EINMAL, vorher, statt mittendrin.
+ *
+ * Drei Dinge, die diese Funktion ausdrücklich NICHT ist:
+ *
+ *  1. **Kein Freibrief.** Sie ist eine UNTERGRENZE. Jeder Schritt geht bei der
+ *     Ausführung trotzdem durch den vollen Klassifizierer in `einzeln` — mit
+ *     dem echten Elementnamen, den die Seite dann wirklich nennt. Ein Schritt,
+ *     der sich als härter herausstellt als vorhergesagt, fragt dann eben doch.
+ *     Sie kann Rückfragen nur HINZUFÜGEN, nie eine wegnehmen.
+ *  2. **Keine Messung an der Seite.** Was hier gemessen wird, steht in der
+ *     gespeicherten Datei. Der Elementname kommt erst bei der Auflösung der
+ *     Kaskade dazu, und der ist der eigentliche Messeingang.
+ *  3. **Keine Abkürzung um die Agentenmatrix.** Im Gegenteil: Weil die Klassen
+ *     jetzt schon vor dem ersten Schritt feststehen, wird die Matrix für sie
+ *     ALLE gefragt, bevor irgendetwas geschieht (Schritt 9c).
+ * --------------------------------------------------------------------- */
+
+/**
+ * Was ein einzelner Ablaufschritt an Klassen trägt, ohne die Seite zu fragen.
+ *
+ * @returns {object|null} Befund aus `klassenBestimmen`, oder null bei einem
+ *          Schritttyp, den diese Fassung nicht abspielt (dann scheitert der
+ *          Schritt später an `schrittRahmenBauen`, und bis dahin trägt er
+ *          keine Klasse bei — sein Beitrag zur Untergrenze ist „unbekannt",
+ *          und `freigabeNoetig` fragt bei „unbekannt" ohnehin).
+ */
+function schrittVorbefund(schritt, adresse) {
+  const cmd = eigen(SCHRITT_BEFEHL, schritt && schritt.type);
+  if (typeof cmd !== "string") return null;
+
+  /* Alles, was beim Aufzeichnen über das Ziel festgehalten wurde, geht als
+     Name in die Messung: die Beschreibung, die Textanker der Kaskade und bei
+     `select` das Etikett der Option. Das ist derselbe Text, gegen den auch
+     die Identitätswache hält — und er ist das Einzige, was hier über das Ziel
+     bekannt ist. UNGEKÜRZT, wie jeder Messeingang (AUTOMODUS-2). */
+  const teile = [messeingang(schritt.beschreibung)];
+  if (Array.isArray(schritt.selector_cascade)) {
+    for (const anker of schritt.selector_cascade) {
+      if (typeof anker === "string" && anker.startsWith("text=")) teile.push(anker.slice(5));
+    }
+  }
+  if (schritt.label !== undefined) teile.push(messeingang(schritt.label));
+
+  const ziel = {
+    name: teile.filter(Boolean).join(" "),
+    rolle: "",
+    /* Marke, Feldtyp und Geheimformular sind Bauform und stehen erst auf der
+       Seite fest. Sie fehlen hier — und ihr Fehlen macht den Befund milder,
+       nie strenger. Genau deshalb ist das hier eine Untergrenze. */
+    marke: "",
+    typ: "",
+    formularGeheim: false,
+  };
+
+  const plan = {};
+  if (schritt.type === "input" && schritt.submit === true) plan.absenden = true;
+
+  return klassenBestimmen(cmd, plan, ziel, {
+    url: adresse,
+    titel: "",
+    /* Die Zieladresse eines aufgezeichneten Ortswechsels ist ohne die Seite
+       messbar und gehört deshalb hierher (dieselbe Begründung wie bei B1:
+       Bei einem Ortswechsel IST die Adresse die Handlung). */
+    ziel: schritt.type === "navigate" ? schritt.url : null,
+  });
+}
+
+/**
+ * Den Befund des `run_workflow` um die Klassen seiner Schritte erweitern.
+ *
+ * Für jeden anderen Befehl gibt sie den Befund unverändert zurück — es gibt
+ * hier keinen Weg, der einem Einzelbefehl etwas wegnimmt oder hinzufügt.
+ */
+function ablaufBefund(cmd, eigenerBefund, plan, adresse) {
+  if (cmd !== "run_workflow") return eigenerBefund;
+  const schritte = plan && plan.workflow && Array.isArray(plan.workflow.steps)
+    ? plan.workflow.steps
+    : [];
+
+  const alle = new Set(eigenerBefund.klassen);
+  let unvollstaendig = eigenerBefund.unvollstaendig === true;
+  const gruende = [];
+  for (const schritt of schritte) {
+    const b = schrittVorbefund(schritt, adresse);
+    if (!b) continue;
+    for (const k of b.klassen) alle.add(k);
+    if (b.unvollstaendig === true) unvollstaendig = true;
+    if (b.hart) gruende.push(b.grund);
+  }
+
+  const klassen = KLASSEN.filter((k) => alle.has(k));
+  return {
+    klassen,
+    hart: klassen.find((k) => HART.has(k)) || null,
+    weich: klassen.filter((k) => WEICH.has(k)),
+    /* Der Grund nennt weiterhin ausschliesslich UNSERE Wörter aus den Listen,
+       nie den aufgezeichneten Fremdtext, in dem sie standen. */
+    grund: gruende.length
+      ? `Aus den Schritten dieses Ablaufs: ${gruende.join(" ")}`
+      : eigenerBefund.grund,
+    unvollstaendig,
+  };
+}
+
 /**
  * Eine Ankerkaskade auf der Seite zu einem Element machen (§7.1).
  *
@@ -2417,23 +2962,81 @@ async function kaskadeAufloesen(lage, kaskade) {
      die es nicht gibt — und der Agent läse dann `element_not_found` statt
      „dein Anker findet nichts mehr". */
   if (!ref) return { ok: false, fehler: "kaskade_gebrochen" };
-  const epoche = typeof antwort.antwort.epoche === "string" ? saeubern(antwort.antwort.epoche, 24) : null;
-  /* Name und Rolle sind Text von der besuchten Seite und werden wie jeder
-     solche Text gesäubert und gedeckelt. Sie gehen nie in einen Satz für den
-     Menschen, sondern ausschliesslich in den Vergleich unten. */
-  const name = saeubern(antwort.antwort.name, GRENZEN.nameZeichen);
-  const rolle = saeubern(antwort.antwort.rolle, 40);
+  /* Die Epoche ist eine KENNUNG und wird gemessen, nicht geschnitten
+     (`epocheRoh`). Sie stand hier als `saeubern(…, 24)`: Zwei verschiedene
+     Epochen, die sich erst nach dem 24. Zeichen unterscheiden, wären danach
+     dieselbe — und eine Epochenprüfung, die zwei Wahrnehmungen für eine hält,
+     ist keine. */
+  const epoche = epocheRoh(antwort.antwort.epoche);
+  /*
+   * Name und Rolle sind Text von der besuchten Seite — und sie gehen in eine
+   * WACHE (`zielIstDasAufgezeichnete`), nicht in einen Satz für den Menschen.
+   *
+   * Bis zum 14.08.2026 standen sie hier als `saeubern(…, GRENZEN.nameZeichen)`
+   * und `saeubern(…, 40)`, also gekürzt. Das ist dieselbe Bauform wie
+   * AUTOMODUS-2, nur an der Identitätswache statt am Klassifizierer: Die
+   * besuchte Seite hätte über die LÄNGE ihres Namens mitbestimmt, ob der
+   * Vergleich überhaupt vergleichbaren Text sieht. Ein gekürzter Name ist
+   * ausserdem nie mehr gleich dem aufgezeichneten — die Wache hätte bei
+   * langen, richtigen Namen Alarm geschlagen und wäre abgeschaltet worden.
+   */
+  const name = messeingang(antwort.antwort.name);
+  const rolle = messeingang(antwort.antwort.rolle);
   return { ok: true, ref, epoche, name, rolle };
 }
 
-/**
+/*
+ * Namen, die nichts belegen: der Rückfall auf den HTML-Elementnamen.
+ *
+ * Befund TEACH-1 vom 14.08.2026, gemessen an echten Dateien in einem echten
+ * DOM: `content/geheim.js` (`beschreibungVon`) liest weder `label[for]` noch
+ * das umschliessende `<label>` und fällt deshalb auf den Elementnamen zurück
+ * (dort Zeile 769, `kuerzen(marke(el).toLowerCase())`). Ein Formular
+ * `<label for=":r2:">Artikelnummer</label><input id=":r2:">` ergibt damit
+ * `beschreibung: "input"`. Wird ein Pflichtfeld davor eingeschoben, trifft
+ * der Stellenanker `div.feld:nth-of-type(2) > input` weiter GENAU EIN
+ * Element, jetzt das Titelfeld — und dessen Name ist ebenfalls „input".
+ * Gleich gegen gleich, die Wache liess durch, `{{artikelnummer}}` landete im
+ * Titelfeld, Antwort `success`.
+ *
+ * Zwei Werte, die nur deshalb übereinstimmen, weil BEIDE nichts sagen, sind
+ * kein Beleg. Diese Liste ist deshalb keine Liste verbotener Wörter, sondern
+ * die Liste dessen, was der Rückfall erzeugen KANN: der Name eines
+ * HTML-Elements, klein und ohne Leerzeichen. Trifft ein Knopf zufällig
+ * wirklich die Beschriftung „button", hält die Wache ihn ebenfalls für
+ * unbelegt — das ist die sichere Richtung und kostet eine Nachfrage.
+ *
+ * Sie steht hier und nicht in `geheim.js`, weil sie hier gebraucht wird: Die
+ * Wache muss sich auf die Beschreibung nicht verlassen können. Dass
+ * `beschreibungVon` ein Etikett lesen sollte, ist gemeldeter Fremdbedarf und
+ * macht diese Liste danach nicht überflüssig — sie ist das Netz darunter.
+ */
+const MARKEN_RUECKFALL = Object.freeze(new Set([
+  "a", "abbr", "article", "aside", "b", "body", "button", "canvas", "caption",
+  "cite", "code", "col", "datalist", "dd", "details", "dialog", "div", "dl",
+  "dt", "em", "embed", "fieldset", "figure", "footer", "form", "h1", "h2",
+  "h3", "h4", "h5", "h6", "header", "hr", "i", "iframe", "img", "input",
+  "label", "legend", "li", "main", "mark", "menu", "meter", "nav", "object",
+  "ol", "optgroup", "option", "output", "p", "picture", "pre", "progress",
+  "section", "select", "slot", "small", "span", "strong", "sub", "summary",
+  "sup", "svg", "table", "tbody", "td", "template", "textarea", "tfoot", "th",
+  "thead", "time", "tr", "u", "ul", "video",
+]));
+
+/** Sagt dieser Text überhaupt etwas, oder ist er nur ein Elementname? */
+function belegtNichts(roh) {
+  const t = messtext(roh);
+  if (!t) return true;
+  return MARKEN_RUECKFALL.has(t);
+}
+
+/*
  * Ist das gefundene Element auch das gemeinte? (Festlegung F3)
  *
  * Verglichen wird der Name, den die Seite JETZT nennt, mit dem, was beim
- * Aufzeichnen über dieses Element festgehalten wurde. Alles wird flach
- * gemacht, damit Grossschreibung, Umlautschreibweise und Satzzeichen keine
- * Rolle spielen; verglichen wird auf Gleichheit oder darauf, dass eines im
- * anderen als ganzes Wort steckt.
+ * Aufzeichnen über dieses Element festgehalten wurde. Beide Seiten gehen
+ * durch `gleicherText` aus der gemeinsamen Messform — dieselbe Form, in der
+ * auch der Klassifizierer misst, und Gleichheit als GANZES.
  *
  * Festgehalten wurde ZWEIERLEI, und beides zählt:
  *
@@ -2450,20 +3053,44 @@ async function kaskadeAufloesen(lage, kaskade) {
  * und der Vergleich allein gegen die Prosa des Menschen hätte den Ablauf mit
  * „falsches Ziel" abgebrochen. Eine Wache, die bei jedem zweiten richtigen
  * Ablauf Alarm schlägt, wird abgeschaltet, und dann schützt sie gar nichts.
- * Die Zusage bleibt trotzdem stehen: Trifft der Anker etwas, das WEDER zur
- * Beschreibung noch zu einem Textanker passt, ist das kein Erfolg.
  *
- * Fehlt jede Angabe — kein Name von der Seite, keine Beschreibung, kein
- * Textanker —, wird nicht verglichen. Das ist die milde Richtung, und sie ist
- * hier die richtige: Ein Inhaltsskript älterer Fassung antwortet ohne `name`,
- * ein Ablauf aus einer älteren Werkbank hat keine Beschreibung. Beides darf
- * nicht dazu führen, dass gar nichts mehr läuft — der Schritt geht ohnehin
- * durch Klassifizierer, Modus und Freigabe wie jeder andere.
+ * ================================================================
+ * DREI ÄNDERUNGEN VOM 14.08.2026, ALLE DREI GEGEN GEMESSENE FUNDE
+ * ================================================================
+ *
+ * **1. Kein `includes` mehr (Befund TEACH-6).** Hier stand
+ * `a === b || a.includes(b) || b.includes(a)` über `vergleichsform`, also
+ * über Text mit Randleerzeichen. Gemessen mit der wortwörtlichen Funktion:
+ * aufgezeichnet „Abbrechen" trifft „Bestellung abbrechen" DURCH, „Speichern"
+ * trifft „Speichern und beenden" DURCH, „Loeschen" trifft „Alles
+ * unwiderruflich loeschen" DURCH, „Weiter" trifft „Weiter ohne zu speichern"
+ * DURCH. Das sind genau die gefährlichen Verwechslungen: Ein umgebautes
+ * Bedienfeld, auf dem der alte Knopf durch einen umfassenderen ersetzt wurde,
+ * war für die Wache dasselbe Element. Die Randleerzeichen machten aus dem
+ * Teilwort ein ganzes Wort, aus dem Teilsatz aber nicht denselben Satz.
+ * Ab jetzt gilt Gleichheit als Ganzes (`gleicherText`).
+ *
+ * **2. Ein Beleg, der nichts sagt, ist keiner (Befund TEACH-1).** Siehe
+ * `MARKEN_RUECKFALL` darüber.
+ *
+ * **3. Ohne Beleg wird angehalten, nicht durchgelassen.** Bis hierher stand
+ * an zwei Stellen `return true`: bei fehlendem Namen von der Seite und bei
+ * fehlendem Beleg im Ablauf. Begründet war das mit älteren Fassungen von
+ * Inhaltsskript und Werkbank. Der Preis dieser Milde ist aber genau die
+ * Lücke, um die es geht — und der Name kommt VON DER SEITE: Ein Element ohne
+ * barrierefreien Namen schaltete die Wache ab, und welche Elemente keinen
+ * Namen haben, bestimmt die Seite. Diese Funktion soll Identität BELEGEN;
+ * aus „es gibt nichts zu vergleichen" folgt kein Beleg.
+ *
+ * Was der Preis wirklich ist: Der Ablauf hält an, der Agent bekommt die
+ * mitgelieferte Wahrnehmung und darf die Referenz selbst nennen (§7.4). Er
+ * verliert also einen Umlauf, nicht den Auftrag. Und weil „ich habe das
+ * falsche Element gefunden" etwas anderes ist als „ich kann es nicht
+ * belegen", tragen die beiden Lagen ab jetzt verschiedene Kennungen.
+ *
+ * @returns {"belegt"|"anderes_ziel"|"unbelegt"}
  */
 function zielIstDasAufgezeichnete(name, schritt) {
-  const a = vergleichsform(name);
-  if (!a) return true;
-
   const belege = [];
   if (schritt && schritt.beschreibung) belege.push(schritt.beschreibung);
   if (Array.isArray(schritt && schritt.selector_cascade)) {
@@ -2471,12 +3098,18 @@ function zielIstDasAufgezeichnete(name, schritt) {
       if (typeof anker === "string" && anker.startsWith("text=")) belege.push(anker.slice(5));
     }
   }
-  if (!belege.length) return true;
 
-  return belege.some((roh) => {
-    const b = vergleichsform(roh);
-    return b && (a === b || a.includes(b) || b.includes(a));
-  });
+  /* Nur Belege, die überhaupt etwas behaupten. Zwei Felder, die beide „input"
+     heissen, belegen einander nicht. */
+  const brauchbar = belege.filter((b) => !belegtNichts(b));
+  if (!brauchbar.length) return "unbelegt";
+
+  /* Und der Name der Seite muss ebenfalls etwas sagen. Ohne ihn — oder wenn er
+     auch nur der Elementname ist — gibt es nichts, woran der Beleg hängen
+     könnte. */
+  if (belegtNichts(name)) return "unbelegt";
+
+  return brauchbar.some((roh) => gleicherText(name, roh)) ? "belegt" : "anderes_ziel";
 }
 
 /** Aus einem geprüften Schritt den Befehlsrahmen bauen, den `einzeln` erwartet. */
@@ -2539,14 +3172,32 @@ async function schrittRahmenBauen(lage, schritt, nr, gesamt) {
        gefundenen Elements von dem ab, was der Mensch aufgezeichnet hat, ist
        das kein Erfolg, sondern ein anderes Ziel — und ein Ablauf, der
        zuverlässig das Falsche trifft, ist gefährlicher als einer, der
-       abbricht. */
-    if (!zielIstDasAufgezeichnete(gefunden.name, schritt)) {
+       abbricht.
+
+       Drei Ausgänge statt zwei (Befund TEACH-1 vom 14.08.2026): „belegt",
+       „anderes_ziel" und „unbelegt". Der dritte ist neu und hielt bis dahin
+       für „belegt" her — zwei Felder, die beide „input" heissen, galten als
+       dasselbe Element. Er bekommt einen eigenen Code und einen eigenen Satz,
+       weil er eine ANDERE Lage beschreibt: Beim falschen Ziel ist die Seite
+       umgebaut, hier fehlt schlicht der Beleg. Beides unter einem Namen zu
+       melden hiesse, dem Agenten zwei Lagen als dieselbe zu verkaufen. */
+    const identitaet = zielIstDasAufgezeichnete(gefunden.name, schritt);
+    if (identitaet === "anderes_ziel") {
       return {
         ok: false,
         kaskade: true,
         fehler: "kaskade_falsches_ziel",
         satz: `Schritt ${nr} hat ein Element gefunden, aber nicht das aufgezeichnete: Der Anker trifft jetzt etwas anderes.`,
         hinweis: "Die Seite wurde vermutlich umgebaut. Die mitgelieferte Wahrnehmung zeigt, was jetzt dasteht. Nenne mir die Referenz des gemeinten Elements, oder den Schritt in der Werkbank neu aufzeichnen.",
+      };
+    }
+    if (identitaet === "unbelegt") {
+      return {
+        ok: false,
+        kaskade: true,
+        fehler: "kaskade_unbelegt",
+        satz: `Schritt ${nr} hat ein Element gefunden, kann aber nicht belegen, dass es das aufgezeichnete ist: Weder die Aufzeichnung noch die Seite nennt einen Namen, der etwas aussagt.`,
+        hinweis: "Die mitgelieferte Wahrnehmung zeigt, was jetzt dasteht. Nenne mir die Referenz des gemeinten Elements, oder den Schritt in der Werkbank neu aufzeichnen — mit einem Feld, das eine Beschriftung trägt.",
       };
     }
     rahmen.ref = gefunden.ref;
@@ -2883,12 +3534,41 @@ async function einzeln(rahmen, sitzung, { id, cmd, begonnen, meineGeneration, no
          Quelle, die wir nicht selbst schreiben — also wird sie gemessen, nicht
          geglaubt. Was nicht auf der Positivliste steht, ist kein Agent.
 
-         Ein Rahmen OHNE Kennung läuft weiter. Das ist eine bewusste
+         Ein Rahmen OHNE das Feld läuft weiter. Das ist eine bewusste
          Übergangsentscheidung und keine Nachlässigkeit: Der Relay setzt das
          Feld erst ab v3.5 (§11.2), und ein Client, der ohne es gar nichts mehr
          täte, wäre gegen jede heute laufende Gegenstelle taub. Sobald ein Name
-         dasteht, gilt er — und dann gilt auch die Matrix. */
+         dasteht, gilt er — und dann gilt auch die Matrix.
+
+         ============================================================
+         Befund AUTOMODUS-7 vom 14.08.2026: „ohne das Feld" und „das Feld ist
+         leer" sind NICHT dasselbe.
+         ============================================================
+
+         §11.2 sagt, der Relay säubere jeden Namen auf `[A-Za-z]{1,32}` — und
+         was er nicht lesen kann, macht er dabei gerade zu LEER. Ein leeres
+         Feld ist also keine fehlende Behauptung, sondern eine, die niemand
+         entziffern konnte. Gemessen: Mit `agent: ""` lief der Befehl im Modus
+         `auto` mit `fragen=0` und `erfolg=true` durch, während derselbe
+         Befehl mit `agent: "SMarTrTrader"` an der leeren Matrix scheiterte.
+         Ein Aufrufer, dessen Kennung der Relay nicht lesen kann, bekam damit
+         MEHR Rechte als ein bekannter Agent — genau die falsche Richtung.
+
+         Ab jetzt: Feld nicht da → Übergangsweg wie bisher. Feld da, aber
+         nicht lesbar (leer, nur Leerraum, keine Zeichenkette) → Absage. Wer
+         etwas behauptet hat, muss es lesbar behaupten. */
+  const kennungDa = !!rahmen && Object.prototype.hasOwnProperty.call(rahmen, "agent") &&
+    rahmen.agent !== undefined && rahmen.agent !== null;
   const agent = typeof (rahmen && rahmen.agent) === "string" ? rahmen.agent.trim() : "";
+  if (kennungDa && !agent) {
+    return misslungen(id, cmd, "agent_not_permitted",
+      "Dieser Rahmen trägt eine Agentenkennung, die niemand lesen kann. Eine Kennung, die nichts benennt, gilt hier nicht.",
+      {
+        retryable: false,
+        hint: `Den Namen des Agenten ungekürzt mitsenden, oder das Feld ganz weglassen. Zugelassen sind: ${AGENTEN.join(", ")}.`,
+        m: m(),
+      });
+  }
   if (agent && !AGENTEN.includes(agent)) {
     return misslungen(id, cmd, "agent_not_permitted",
       `„${saeubern(agent, 40)}" steht nicht auf der Liste der Agenten, die diesen Browser steuern dürfen.`,
@@ -3052,20 +3732,53 @@ async function einzeln(rahmen, sitzung, { id, cmd, begonnen, meineGeneration, no
         hinweis: "Den Nutzer bitten, den Tab offen zu lassen, und es noch einmal versuchen.",
       });
     }
+    /*
+     * Befund AUTOMODUS-2 vom 14.08.2026, und er stand genau hier.
+     *
+     * Bis dahin hiess diese Zeile
+     * `name: saeubern(nachschlag.antwort.name, GRENZEN.nameZeichen)`. Der
+     * Name wurde also auf 120 Zeichen gekürzt, BEVOR `klassenBestimmen` ihn
+     * sah — und `saeubern` schneidet die MITTE heraus, also genau das Wort.
+     * Gemessen: Ein Knopf mit 208 Zeichen barrierefreiem Namen, in dessen
+     * Mitte „kaufen" steht, ergibt am Klassifizierer ungekürzt
+     * `hart=zahlung`, über den Produktivweg aber `fragen=0` und
+     * `erfolg=true` im Modus `auto`. Dasselbe gemessen für „loeschen",
+     * „Kamera", „captcha" und ein Feld namens „Passwort". Lange `aria-label`
+     * sind auf Verkaufsseiten alltäglich und von der Seite frei wählbar.
+     *
+     * Ab jetzt gehen ALLE vier Messeingänge ungekürzt hinein — Name, Rolle,
+     * Marke und Feldtyp. Rolle, Marke und Feldtyp standen mit 40, 20 und 20
+     * Zeichen zwar bequem über jedem gültigen Wert, aber die Zusage ist keine
+     * über Längen: Wo die besuchte Seite den Wert liefert, darf sie nicht
+     * mitbestimmen, ob die Wache ihn ganz zu sehen bekommt.
+     *
+     * Ein Deckel steht hier nicht mehr, auch kein grosser. Er wäre wieder
+     * genau das, was der Befund beschreibt — nur mit einer anderen Zahl. Der
+     * Aufwand ist ein Durchlauf über die Zeichenkette; die Wahrnehmung selbst
+     * ist um Grössenordnungen teurer und hat ihre Deckel dort, wo sie
+     * hingehören: an der ANZEIGE.
+     */
     ziel = {
       ref,
-      name: saeubern(nachschlag.antwort.name, GRENZEN.nameZeichen),
-      rolle: saeubern(nachschlag.antwort.rolle, 40),
-      rect: nachschlag.antwort.rect,
-      mitte: nachschlag.antwort.mitte,
+      /* Messeingänge: ungekürzt. */
+      name: messeingang(nachschlag.antwort.name),
+      rolle: messeingang(nachschlag.antwort.rolle),
       /* Die drei Angaben, aus denen der Klassifizierer die Bauform des Ziels
          liest (§3.1): das HTML-Element, sein `type` und ob sein Formular ein
          Geheimfeld enthält. Sie sind alle freiwillig — antwortet eine ältere
          Fassung des Inhaltsskripts ohne sie, fällt der Befund milder aus und
          nie strenger. Deshalb stehen sie hier und nicht als Bedingung. */
-      marke: saeubern(nachschlag.antwort.marke, 20),
-      typ: saeubern(nachschlag.antwort.feldtyp, 20),
+      marke: messeingang(nachschlag.antwort.marke),
+      typ: messeingang(nachschlag.antwort.feldtyp),
       formularGeheim: nachschlag.antwort.formularGeheim === true,
+      /* ANZEIGE: Das ist der Name, der in `quelle` neben die Freigabefrage
+         geht und ins Protokoll. Er ist gekürzt und von Steuerzeichen befreit,
+         weil er auf einen Bildschirm geht — und er ist ein EIGENES Feld,
+         damit an jeder Aufrufstelle zu sehen ist, welches der beiden gerade
+         benutzt wird. */
+      anzeigename: saeubern(nachschlag.antwort.name, GRENZEN.nameZeichen),
+      rect: nachschlag.antwort.rect,
+      mitte: nachschlag.antwort.mitte,
     };
     /* Der Zeiger wird hier BEWUSST noch nicht gesetzt. Ein abgelehnter Schritt
        darf nichts auf der Seite bewegen, auch nicht den Agentenzeiger — das
@@ -3109,7 +3822,7 @@ async function einzeln(rahmen, sitzung, { id, cmd, begonnen, meineGeneration, no
    * wird. Eine erfundene Zieladresse wäre schlechter als keine.
    */
   const kopfJetzt = { url: adresse, titel: "", ziel: cmd === "navigate" ? plan.url : null };
-  const befund = klassenBestimmen(cmd, plan, ziel, kopfJetzt);
+  const befund = ablaufBefund(cmd, klassenBestimmen(cmd, plan, ziel, kopfJetzt), plan, adresse);
   buch.klassen = befund.klassen;
 
   /*
@@ -3143,11 +3856,36 @@ async function einzeln(rahmen, sitzung, { id, cmd, begonnen, meineGeneration, no
 
          Gefragt wird für JEDE Klasse des Schrittes, nicht für die erste: Ein
          Agent, der lesen darf, darf damit nicht auch bezahlen. Voreinstellung
-         ist überall `false` — eine Matrix, die im Zweifel erlaubt, ist keine. */
+         ist überall `false` — eine Matrix, die im Zweifel erlaubt, ist keine.
+
+         ============================================================
+         Befund AUTOMODUS-5 vom 14.08.2026: gemessen wurde nur die HERKUNFT.
+         ============================================================
+
+         Hier stand `agentDarf(agent, adresse, klasse)` — also ausschliesslich
+         die Adresse, auf der der Tab GERADE steht. Zwölf Zeilen darüber wurde
+         genau dieser Fehler für die Sperrliste bereits behoben
+         (`regelnZusammen`), hier blieb er stehen. Gemessen: Matrix enthält nur
+         `{SMarTrTrader: {"geizhals.de": ["lesen", "navigieren"]}}`,
+         Sitzungsbereich umfasst `geizhals.de` UND `fremd.de`.
+         `agentDarf("SMarTrTrader", "https://fremd.de/seite", "navigieren")`
+         ist false — trotzdem lief `navigate` von `geizhals.de` nach
+         `fremd.de` im Modus `auto` mit `fragen=0` und `erfolg=true` durch,
+         und die Antwort enthielt eine vollständige Wahrnehmung von
+         `fremd.de`. Der Agent las in einem Befehl eine Seite, für die die
+         Matrix ihm nichts erlaubt.
+
+         Ab jetzt gilt dieselbe Zusammenlegung wie bei der Sperrliste:
+         erlaubt nur, was auf BEIDEN Wirten erlaubt ist. Eine Freischaltung,
+         die der Mensch für den einen Wirt erteilt hat, ist keine für den
+         anderen. `back` trägt kein Ziel und kann keines tragen — wohin der
+         Verlauf führt, weiss vorher niemand; dort bleibt es bei der Herkunft,
+         und `nachDemWechsel` sieht danach noch einmal hin. */
   if (agent) {
     const noetig = cmd === "run_workflow" ? ["workflow", ...befund.klassen] : befund.klassen;
+    const zieladresse = cmd === "navigate" ? plan.url : null;
     for (const klasse of noetig) {
-      if (await agentDarf(agent, adresse, klasse)) continue;
+      if (await agentDarfBeides(agent, adresse, zieladresse, klasse)) continue;
       return misslungen(id, cmd, "agent_not_permitted",
         `Für ${saeubern(agent, 40)} ist auf dieser Seite nicht freigeschaltet, was dieser Schritt tut.`,
         {
@@ -3213,7 +3951,11 @@ async function einzeln(rahmen, sitzung, { id, cmd, begonnen, meineGeneration, no
     const gefragtUm = Date.now();
     const antwort = await freigabeFragen({
       frage: `${eintrag.tut.charAt(0).toUpperCase()}${eintrag.tut.slice(1)}? Der Agent sagt: „${grund}"${zusatz}${warum ? ` ${warum}` : ""}`,
-      quelle: ziel ? ziel.name : "",
+      /* ANZEIGE und nichts sonst: `quelle` steht abgesetzt neben der Frage und
+         wird NICHT vorgelesen. Deshalb der gekürzte, von Steuerzeichen
+         befreite Name — der ungekürzte ist der Messeingang und war schon in
+         Schritt 9b beim Klassifizierer (AUTOMODUS-2). */
+      quelle: ziel ? ziel.anzeigename : "",
       cmd,
       id,
       frist: bedenkzeit,
@@ -3268,9 +4010,16 @@ async function einzeln(rahmen, sitzung, { id, cmd, begonnen, meineGeneration, no
         keine_stelle: "Es war kein Fenster offen, in dem der Nutzer hätte zustimmen können.",
         besetzt: "Der Nutzer beantwortet gerade eine andere Frage.",
         frist: "Der Nutzer hat in der Zeit nicht geantwortet.",
+        /* Eigene Lage, eigener Satz (BRUECKE-2): Es war nicht nur niemand da,
+           es wurde auch gerufen. Der Agent soll den Unterschied hören, denn
+           beim zweiten Versuch stehen die Chancen anders. */
+        unerreichbar: "Es sieht gerade niemand zu. Ich habe den Nutzer über eine Systemmeldung gerufen, und in der Zeit hat niemand geantwortet.",
       };
-      return misslungen(id, cmd, "grant_required", saetze[antwort] || saetze.frist,
-        { retryable: true, hint: "Erneut fragen oder den Auftrag zusammenfassen.", m: m() });
+      const hinweise = {
+        unerreichbar: "Der Nutzer wurde benachrichtigt. Den Schritt in einem Augenblick noch einmal senden, oder den Auftrag zusammenfassen und auf ihn warten.",
+      };
+      return misslungen(id, cmd, "grant_required", eigen(saetze, antwort) || saetze.frist,
+        { retryable: true, hint: eigen(hinweise, antwort) || "Erneut fragen oder den Auftrag zusammenfassen.", m: m() });
     }
   }
 
@@ -3357,6 +4106,11 @@ async function einzeln(rahmen, sitzung, { id, cmd, begonnen, meineGeneration, no
     abbruch: riegel.signal,
     /* Die Wirte, über die der Mensch für diesen Schritt entschieden hat (B2). */
     wirte,
+    /* Die Klassen, über die in DIESEM Schritt entschieden wurde. Sie reisen
+       bis in `nachDemWechsel`: Eine harte Klasse, über die gefragt wurde, ist
+       nach einer Weiterleitung keine Überraschung mehr; eine, die erst dort
+       entsteht, sehr wohl (AUTOMODUS-6). */
+    klassen: befund.klassen,
     einschleusung: null,
     restfrist: () => Math.max(1000, frist(eintrag, uhrBeginn)),
     /* Für jeden Aufruf an die Seite: dieselbe Restfrist, aber mit Abstand zum

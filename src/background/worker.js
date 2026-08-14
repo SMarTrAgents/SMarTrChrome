@@ -432,7 +432,12 @@ async function notbremseAusloesen(quelle, ausTab = null) {
         Dienstarbeiters weiter ab. */
   const cloud = chat.chatAbbrechen().catch(() => ({ ok: false }));
 
-  /* 3. Das Zeichen im Tab, von hier aus und nicht aus der Seitenleiste. Sie
+  /* 3. Die Aufzeichnung (Befund NOTAUS-5 vom 14.08.2026). Sie ist die dritte
+        Sache, die nach dem Not-Aus weiterlief — und die einzige, die dabei
+        BILDER fremder Seiten in die Ablage geschrieben hat. */
+  const aufnahme = aufzeichnungKappen(ziele).catch(() => ({ ok: false }));
+
+  /* 4. Das Zeichen im Tab, von hier aus und nicht aus der Seitenleiste. Sie
         darf es zusätzlich tun, sie ist aber nicht mehr der einzige Weg — ein
         Not-Aus, den man nur bei offener Seitenleiste sieht, ist für jemanden
         mit geschlossener Leiste unsichtbar. */
@@ -440,7 +445,7 @@ async function notbremseAusloesen(quelle, ausTab = null) {
     [...ziele].map((tabId) => anSeite(tabId, { typ: "overlay:gestoppt" }, 2000))
   );
 
-  /* 4. Und die Seitenleiste, falls eine offen ist. Ist sie zu, geht die
+  /* 5. Und die Seitenleiste, falls eine offen ist. Ist sie zu, geht die
         Nachricht ins Leere; das ist kein Fehler. */
   chrome.runtime
     .sendMessage({
@@ -450,8 +455,76 @@ async function notbremseAusloesen(quelle, ausTab = null) {
     })
     .catch(() => {});
 
-  const [, zeichen] = await Promise.all([cloud, imTab]);
-  return { ok: true, tabs: [...ziele], gestoppt: zeichen.filter((z) => z.ok).length };
+  const [, mitschnitt, zeichen] = await Promise.all([cloud, aufnahme, imTab]);
+  return {
+    ok: true,
+    tabs: [...ziele],
+    gestoppt: zeichen.filter((z) => z.ok).length,
+    /* Ob wirklich eine Aufzeichnung lief. Der Wert geht in die Antwort, damit
+       die Seitenleiste dem Menschen sagen kann, dass auch das Mitschreiben
+       aufgehört hat — und damit eine Prüfung es messen kann. */
+    aufzeichnung: mitschnitt && mitschnitt.lief === true,
+  };
+}
+
+/*
+ * Die Aufzeichnung kappen — der dritte Arm des Not-Aus (Befund NOTAUS-5).
+ *
+ * Gemessen am echten Nachrichtenhörer und am echten `tabs.onUpdated`-Hörer:
+ * Nach dem Not-Aus blieb `sa_rekorder {laeuft:true}` in `storage.local` und
+ * `sa_rekorder_tab` in `storage.session` stehen. Beim nächsten Seitenwechsel
+ * spielte der Dienstarbeiter `geheim.js`, `selektor.js` und `rekorder.js`
+ * wieder in die Seite ein — die Erweiterung führte also NACH dem Abbruch Code
+ * in eine fremde Seite ein. Und `rekorder:bild` lief weiter bis
+ * `chrome.tabs.captureVisibleTab` durch: eine Aufnahme des ganzen sichtbaren
+ * Tabs, abgelegt unter `sa_rekorder_bilder`. `storage.local` überlebt jeden
+ * Neustart des Dienstarbeiters; geräumt wurde erst bei `onStartup`.
+ *
+ * Ein Mensch, der Esc Esc drückt, weil er nicht mehr will, dass mitgeschrieben
+ * wird, bekam danach weiter Bilder seiner Seiten in die Ablage. Das ist
+ * dieselbe Klasse wie der Arbeitszeiger, der nach dem Not-Aus weiterwandert,
+ * nur teurer: Dort log eine Anzeige, hier entstanden Daten.
+ *
+ * Die REIHENFOLGE ist die Zusage:
+ *
+ *   1. Zuerst die Ablage. Sie ist die Wahrheit, an der `rekorderNachziehen`,
+ *      `rekorder:bild` und `content/rekorder.js` beim nächsten Dokument
+ *      ablesen, ob noch aufgezeichnet wird. Antwortet die Seite gar nicht mehr
+ *      — Tab zu, Seite mitten im Wechsel —, ist die Aufzeichnung trotzdem
+ *      beendet. Ein Not-Aus, der auf eine Antwort der Seite wartet, ist keiner.
+ *   2. Danach dem Mitschreiber selbst Bescheid sagen, damit er im laufenden
+ *      Dokument aufhört und nicht erst beim nächsten Seitenwechsel.
+ *
+ * Ausdrücklich über `anSeite` und NICHT über `rekorderSenden`: Letzteres
+ * spielt den Aufzeichner ein, wenn niemand antwortet. Beim Not-Aus wäre das
+ * das genaue Gegenteil dessen, was gerade verlangt wurde.
+ *
+ * Wirft nie.
+ */
+async function aufzeichnungKappen(ziele) {
+  if (!(await aufzeichnungLaeuft())) return { ok: true, lief: false };
+  const tab = await aufnahmeTab();
+
+  /* Ablage, Tabnotiz und Bildvorrat in einem. Der Bildvorrat gehört dazu und
+     nicht daneben: Es sind Aufnahmen ganzer Seiten des Menschen, und sie
+     gehören zu einer Aufzeichnung, die er gerade abgebrochen hat. */
+  await aufzeichnungAufraeumen();
+
+  const wohin = new Set(ziele instanceof Set ? ziele : []);
+  if (Number.isInteger(tab)) wohin.add(tab);
+  const gesagt = await Promise.all(
+    [...wohin].map((tabId) =>
+      anSeite(tabId, { typ: "rekorder:stop" }, 2000).catch(() => ({ ok: false }))
+    )
+  );
+
+  /* Und die Seitenleiste bekommt denselben Stand wie beim normalen Beenden,
+     damit ihr Zähler nicht bei der letzten Zahl stehen bleibt. */
+  chrome.runtime
+    .sendMessage({ typ: "rekorder:stand", anzahl: 0, laeuft: false, tabId: Number.isInteger(tab) ? tab : null })
+    .catch(() => {});
+
+  return { ok: true, lief: true, tab, erreicht: gesagt.filter((g) => g.ok).length };
 }
 
 /*
@@ -886,16 +959,48 @@ chrome.runtime.onMessage.addListener((n, absender, antwort) => {
       antwort(ABSAGE_ABSENDER);
       return false;
     }
-    ausfuehrer
-      .rekorderBild(ausTab, { name: n.name, nr: n.nr, anlass: n.anlass, rect: n.rect })
-      .then(antwort)
-      .catch(() =>
+    /*
+     * Kein Bild ohne laufende Aufzeichnung (Befund NOTAUS-5, zweite Hälfte).
+     *
+     * Bis zum 14.08.2026 fragte diese Stelle nur, WOHER die Nachricht kam, und
+     * nie, OB gerade aufgezeichnet wird. Gemessen: Nach dem Not-Aus lief
+     * `rekorder:bild` glatt bis `chrome.tabs.captureVisibleTab` durch, und die
+     * Aufnahme lag danach in `sa_rekorder_bilder`.
+     *
+     * Das Kappen der Aufzeichnung (`aufzeichnungKappen`) räumt die Ablage weg
+     * und sagt dem Mitschreiber Bescheid. Erreicht ihn die Nachricht nicht —
+     * Tab hängt, Seite mitten im Wechsel —, schickt er weiter Bilder. Diese
+     * Zeile ist der Riegel dafür, und sie steht hier und nicht im Ausführer,
+     * weil hier die Grenze zur fremden Seite verläuft.
+     *
+     * Streng und nicht mild: Ohne Eintrag in `sa_rekorder` hat niemand eine
+     * Aufzeichnung gestartet, und ein Bild einer fremden Seite ohne Auftrag
+     * ist genau das, was hier nie entstehen darf.
+     */
+    (async () => {
+      if (!(await aufzeichnungLaeuft())) {
         antwort({
           ok: false,
-          kennung: "unerwartet",
-          klartext: "Das Bild ist nicht entstanden, das liegt an uns.",
+          kennung: "keine_aufnahme",
+          klartext: "Es läuft keine Aufzeichnung, deshalb entsteht auch kein Bild.",
+        });
+        return;
+      }
+      antwort(
+        await ausfuehrer.rekorderBild(ausTab, {
+          name: n.name,
+          nr: n.nr,
+          anlass: n.anlass,
+          rect: n.rect,
         })
       );
+    })().catch(() =>
+      antwort({
+        ok: false,
+        kennung: "unerwartet",
+        klartext: "Das Bild ist nicht entstanden, das liegt an uns.",
+      })
+    );
     return true;
   }
 
