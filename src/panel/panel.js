@@ -123,6 +123,18 @@ const zustand = {
   ursprung: null,
   ursprungMuster: null,
   sitzung: null, // { stufe, bereich, modus, endetUm, ticker, code, vorfuehrung }
+  /*
+   * Die Marke des Verbindungsaufbaus, der GERADE unterwegs ist, sonst null.
+   *
+   * Befund Abnahme 14.08.2026 (ZZ13): Bis dahin gab es diesen Zustand nicht.
+   * Der Riegel gegen einen zweiten Anlauf fragte allein nach `zustand.sitzung`,
+   * und die entsteht erst ganz am Ende von sitzungAnzeigen(). Zwischen Klick
+   * und Sitzung lag damit ein Fenster von mehreren hundert Millisekunden, in
+   * dem die Seitenleiste sichtbar nichts tat und jeder weitere Klick einen
+   * zweiten Lauf startete. Wer arbeitet, steht ab jetzt hier drin, und zwar
+   * noch vor dem ersten await.
+   */
+  aufbau: null,
   freigabeLaeuft: null,
   abgebrochen: false,
   grosseSicht: true,
@@ -321,10 +333,19 @@ function setzeZustand(name) {
      hält. Bei laufender Sitzung führt der Weg über Stopp, nicht über einen
      zweiten Antrag. */
   $("verbindungsleiste").hidden = name !== "bereit" || !!zustand.sitzung;
-  /* Die Tab-Liste ist der Weg zu einem ANDEREN Fenster. Sie steht neben dem
-     einen Klick und geht mit ihm: Läuft eine Sitzung, führt der Weg über
-     Stopp, nicht über einen zweiten Antrag (siehe dialogVorbereiten). */
-  $("startseite").hidden = name !== "bereit" || !!zustand.sitzung;
+  /*
+   * Die Startseite trägt zwei Dinge: die Statuskarte der laufenden Sitzung
+   * (samt „Am Werk:", Vertrag §8.4) und die Liste der übrigen Tabs.
+   *
+   * Befund Abnahme 14.08.2026 (M7): Hier stand `name !== "bereit" ||
+   * !!zustand.sitzung`, und damit war die Karte genau dann zugedeckt, wenn sie
+   * etwas zu sagen hatte. Der ganze Zweig `verbunden=true` in startseite.js war
+   * gemessen und nie zu sehen, also der Befund vom 11.08.2026 in neuer Gestalt.
+   * Sie bleibt jetzt auch bei laufender Sitzung stehen; die Tabliste darin
+   * räumt startseite.js selbst weg, weil der Weg dann über Stopp führt und
+   * nicht über einen zweiten Antrag.
+   */
+  $("startseite").hidden = !(name === "bereit" || name === "aktiv");
   /* Der Beispielauftrag wohnte bis 0.4.0 in #leer und war damit nie zu sehen:
      sitzungAnzeigen() blendet ihn ein und schaltet unmittelbar danach auf
      `aktiv`, wo #leer verschwindet. Jetzt steht er neben der Sitzungsleiste
@@ -356,6 +377,24 @@ function zustandChipSetzen() {
   }
   if (app.dataset.state === "kennwort") {
     $("zustand-text").textContent = t("kopf_zustand_warte", "Warte auf deine Freigabe");
+    return;
+  }
+  /*
+   * Zwischen Klick und Sitzung steht hier, dass gearbeitet wird.
+   *
+   * Befund Abnahme 14.08.2026 (H3, ZZ11): Mit einem Dienstarbeiter, der 300 ms
+   * braucht, also dem MV3-Regelfall Kaltstart, waren 50 ms nach dem Klick Chip,
+   * Knopf, Karten und Störungszeile unverändert. Die einzige Meldung ging nach
+   * `#ansage`, und das ist per panel.css auf ein Pixel geklippt, also
+   * ausschließlich für den Bildschirmleser da. Wer sieht, sah nichts, drückte
+   * noch einmal, und genau daraus wurde B8.
+   *
+   * Derselbe Satz wie die Ansage in verbinden(): Es ist dieselbe Aussage über
+   * denselben Augenblick, und zwei Schlüssel dafür liefen beim ersten
+   * Redigieren auseinander.
+   */
+  if (zustand.aufbau !== null) {
+    $("zustand-text").textContent = t("dialog_verbinde", "Ich stelle die Verbindung her …");
     return;
   }
   /* Befund Inhaber 29.07.: „Nicht verbunden" stand auch dann da, wenn Konto
@@ -749,6 +788,18 @@ async function einstellungenLaden() {
   }
   menueSpiegeln();
   chatModusSpiegeln();
+  /*
+   * Die gemerkte Wahl steht ab jetzt schon VOR dem Dialog in den Feldern.
+   *
+   * Befund Abnahme 14.08.2026 (M8): Der eine Klick beantragt die gemerkte
+   * Stufe, bis hin zu Vollzugriff, und die Startseite sagte nirgends welche.
+   * Sie zu nennen, ohne sie herzustellen, hieße sie zweimal zu lesen — und
+   * zwei Lesarten derselben Ablage sind zwei Wahrheiten, von denen der Mensch
+   * die eine liest und die andere bekommt. Also gilt: EINE Herstellung
+   * (auswahlHerstellen), und Anzeige wie Antrag lesen danach dieselben Felder.
+   */
+  auswahlHerstellen();
+  verbindenStufeZeigen();
 }
 
 /* ------------------------------------------------------------------ *
@@ -881,14 +932,21 @@ function waehlbareTabs() {
   return zustand.tabs.filter((t) => t && typeof t.url === "string" && !rechte.sperrgrund(t.url));
 }
 
-/* Der Verbindungsweg oben: Hinweiszeile, Statuskarte, Tab-Liste. */
+/* Der Verbindungsweg oben: Hinweiszeile, beantragte Stufe, Statuskarte,
+   Tab-Liste. */
 function verbindungswegZeichnen() {
   verbindenHinweisSetzen();
+  verbindenStufeZeigen();
+  verbindenKnoepfeSpiegeln();
   tabkarteZeichnen();
   startseiteZeichnen();
 }
 
 function verbindenHinweisSetzen() {
+  /* Läuft gerade ein Aufbau, gehört diese Zeile ihm: Sie sagt dann, dass
+     verbunden wird (aufbauSpiegeln). Ein Tabwechsel während des Aufbaus darf
+     diese Auskunft nicht überschreiben. */
+  if (zustand.aufbau !== null) return;
   const t = zustand.aktuellerTab;
   const name = t ? tabWort(t) : "";
   /* Ohne lesbaren Tab bleibt der allgemeine Satz aus panel.html stehen. Ein
@@ -1174,6 +1232,26 @@ const gewaehlteDauer = () => {
 const stufeText = () => STUFENTEXT[gewaehlteStufe()] || STUFENTEXT.read;
 
 /*
+ * Welche Stufe der eine Klick beantragen WÜRDE — sichtbar, bevor er gedrückt
+ * wird.
+ *
+ * Befund Abnahme 14.08.2026 (M8): „Mit diesem Tab verbinden" beantragte die
+ * zuletzt gemerkte Stufe, bis hin zu Vollzugriff, und vor dem Klick stand
+ * nirgends, welche das ist. Wer einmal Vollzugriff gewählt hatte, bekam ihn
+ * danach mit einem Klick wieder, ohne es zu lesen.
+ *
+ * Der Satz wird aus STUFENTEXT gebaut und nicht neu getextet: Etikett und
+ * Vorbehalt sind dieselben Worte wie im Dialog. Damit gilt hier dieselbe Regel
+ * wie dort (Prüfsatz S4): Das Etikett verspricht nichts, was nicht gilt — der
+ * Halbsatz „Anmelden machst du selbst" reist mit, weil er zur Stufe gehört und
+ * nicht zum Dialog.
+ */
+function verbindenStufeZeigen() {
+  const st = STUFENTEXT[gewaehlteStufe()] || STUFENTEXT.read;
+  $("verbinden-stufe").textContent = `${st.etikett}. ${st.ansage}`;
+}
+
+/*
  * Was der Dialog zusammenfasst, ist ein ANTRAG und keine Zusage.
  *
  * Bis 0.4.1 stand hier „Der Agent darf 30 Minuten lang …". Das ist ein
@@ -1230,11 +1308,8 @@ async function dialogVorbereiten() {
    * Stopp. Eine Sackgasse ist das nicht: beenden() räumt zustand.sitzung noch
    * vor dem ersten await, danach steht der Dialog sofort wieder offen.
    */
-  if (zustand.sitzung) {
-    ansagen(
-      t("kopf_schon_verbunden", "Es läuft schon eine Verbindung. Beende sie mit Stopp, dann kannst du eine neue aufbauen."),
-      true
-    );
+  if (verbindungLaeuftSchon()) {
+    schonUnterwegsSagen();
     return;
   }
   stoerung(null);
@@ -1276,6 +1351,96 @@ async function dialogVorbereiten() {
   );
 }
 
+/* ------------------------------------------------------------------ *
+ * Der Riegel gegen den zweiten Anlauf
+ *
+ * Befund Abnahme 14.08.2026 (B8, ZZ13), gemessen: Klick auf „Mit diesem Tab
+ * verbinden", nach 0,3 s noch einmal geklickt, weil sichtbar nichts passierte.
+ * Lauf A bekam die Sitzung, Lauf B bekam `schon_verbunden` und lief in
+ * aufbauAbbrechen — `overlay:aus` an den Tab UND `seitenrechteZurueckgeben`
+ * für genau den Ursprung, auf dem A gerade arbeitete. Endstand: Der Mensch las
+ * „Aktiv", der Agent hatte sein Recht auf die Seite verloren, der grüne Rahmen
+ * war weg, und die Sitzung lief am Dienst weiter.
+ *
+ * Die Ursache war nicht der Klick, sondern die Frage: `zustand.sitzung` steht
+ * erst am ENDE des Aufbaus. Gefragt wird ab jetzt danach, ob überhaupt etwas
+ * unterwegs ist — und diese Marke wird noch vor dem ersten await gesetzt.
+ * ------------------------------------------------------------------ */
+
+function verbindungLaeuftSchon() {
+  return !!zustand.sitzung || zustand.aufbau !== null;
+}
+
+/* Der Satz zum zweiten Anlauf: bei laufender Sitzung der Weg über Stopp, beim
+   laufenden Aufbau die Auskunft, dass gerade verbunden wird. */
+function schonUnterwegsSagen() {
+  ansagen(
+    zustand.sitzung
+      ? t("kopf_schon_verbunden", "Es läuft schon eine Verbindung. Beende sie mit Stopp, dann kannst du eine neue aufbauen.")
+      : t("dialog_verbinde", "Ich stelle die Verbindung her …"),
+    true,
+  );
+}
+
+let aufbauZaehler = 0;
+
+/*
+ * Wann der eine Klick überhaupt etwas auslösen kann.
+ *
+ * Befund Abnahme 14.08.2026 (N1): `setzeZustand("bereit")` stand am Dateiende
+ * VOR `tabsAuffrischen()`. Dazwischen war `zustand.aktuellerTab` noch null, der
+ * Knopf aber schon da — und ein Klick in dieser Lücke landete in
+ * `erklaerkarteZeigen(SPERRE.browser)`, also bei der Auskunft „das ist eine
+ * Browserseite". Das ist eine Falschaussage über einen Tab, den niemand
+ * angesehen hat. Solange kein Ziel feststeht, gibt es nichts zu verbinden, und
+ * genau das steht am Knopf.
+ */
+function verbindenKnoepfeSpiegeln() {
+  const laeuft = zustand.aufbau !== null;
+  /* Der Weg über den Dialog holt sich seinen Tab selbst (aktiverTab) und
+     braucht den Bestand deshalb nicht. */
+  $("verbinden-start").disabled = laeuft;
+  $("verbinden").disabled = laeuft;
+  $("verbinden-tab").disabled = laeuft || !zustand.aktuellerTab;
+}
+
+/*
+ * Was der Mensch zwischen Klick und Sitzung SIEHT (H3).
+ *
+ * Drei sichtbare Stellen, nicht eine: der Chip oben, die Zeile neben dem Knopf
+ * und der Knopf selbst. Abgeschaltet wird er, weil er in diesem Augenblick
+ * wirklich nichts mehr auslöst — das ist keine Ausgrauung eines Angebots,
+ * sondern die Anzeige einer laufenden Arbeit, dieselbe Entscheidung wie beim
+ * Beispielauftrag (demoAuftrag).
+ */
+function aufbauSpiegeln() {
+  const laeuft = zustand.aufbau !== null;
+  app.dataset.aufbau = laeuft ? "laeuft" : "";
+  verbindenKnoepfeSpiegeln();
+  if (laeuft) {
+    $("verbinden-hinweis").textContent = t("dialog_verbinde", "Ich stelle die Verbindung her …");
+  } else {
+    verbindenHinweisSetzen();
+  }
+  zustandChipSetzen();
+}
+
+function aufbauBeginnen() {
+  aufbauZaehler += 1;
+  zustand.aufbau = aufbauZaehler;
+  aufbauSpiegeln();
+  return aufbauZaehler;
+}
+
+/* Nur der Lauf, dem die Marke gehört, räumt sie weg. Ein später eintreffender
+   Nachzügler soll nicht den Aufbau abmelden, der inzwischen begonnen hat. */
+function aufbauBeenden(marke) {
+  if (zustand.aufbau !== marke) return false;
+  zustand.aufbau = null;
+  aufbauSpiegeln();
+  return true;
+}
+
 /*
  * Der eine Klick.
  *
@@ -1296,14 +1461,14 @@ async function dialogVorbereiten() {
  * Ein Klick weniger heißt ein Klick weniger, nicht eine Prüfung weniger.
  */
 function tabVerbindenMit(tab) {
-  /* Läuft schon eine Sitzung, gibt es hier nichts zu beantragen — derselbe
-     Riegel wie in dialogVorbereiten, aus demselben Grund (Befund 06.08.2026:
-     ein zweiter Anlauf nahm dem laufenden Agenten das Seitenrecht weg). */
-  if (zustand.sitzung) {
-    ansagen(
-      t("kopf_schon_verbunden", "Es läuft schon eine Verbindung. Beende sie mit Stopp, dann kannst du eine neue aufbauen."),
-      true
-    );
+  /* Läuft schon etwas, gibt es hier nichts zu beantragen — derselbe Riegel wie
+     in dialogVorbereiten, aus demselben Grund (Befund 06.08.2026: ein zweiter
+     Anlauf nahm dem laufenden Agenten das Seitenrecht weg; Befund 14.08.2026:
+     über den neuen Ein-Klick-Weg war genau das wieder erreichbar). Er steht
+     VOR den Zuweisungen darunter: Ein zweiter Lauf hätte sonst Tab, Ursprung
+     und Muster des ersten überschrieben, noch bevor er abgewiesen wird. */
+  if (verbindungLaeuftSchon()) {
+    schonUnterwegsSagen();
     return Promise.resolve();
   }
   if (!tab || typeof tab.url !== "string") {
@@ -1389,8 +1554,23 @@ async function anWorker(nachricht) {
 async function aufbauAbbrechen(text, ziel = zustand.sitzung ? "aktiv" : "bereit") {
   zustand.abbruch = null;
   zustand.freigabeAdresse = null;
-  await anTab({ typ: "overlay:aus" });
-  await seitenrechteZurueckgeben();
+  /*
+   * Zurückgenommen wird nur, was kein anderer mehr braucht.
+   *
+   * Befund Abnahme 14.08.2026 (B8, ZZ13): Diese beiden Zeilen liefen bis dahin
+   * bedingungslos. Ein gescheiterter Anlauf nahm damit einer LAUFENDEN Sitzung
+   * den grünen Rahmen und das Seitenrecht für ihren Ursprung weg — gemessen
+   * wurde `rechteZurueckgegeben=1` und `anTab=[overlay:an, overlay:aus]`,
+   * während die Sitzung am Dienst weiterlief. Der Riegel in
+   * verbindungLaeuftSchon() verhindert diesen Weg schon davor; die Bedingung
+   * hier ist der zweite Riegel, denn das Seitenrecht ist das, was der Agent
+   * wirklich in der Hand hat, und ein Aufbau darf niemals mehr abräumen, als
+   * er selbst aufgebaut hat.
+   */
+  if (!zustand.sitzung) {
+    await anTab({ typ: "overlay:aus" });
+    await seitenrechteZurueckgeben();
+  }
   setzeZustand(ziel);
   if (text) {
     stoerung(text);
@@ -1403,8 +1583,33 @@ async function aufbauAbbrechen(text, ziel = zustand.sitzung ? "aktiv" : "bereit"
  * Seitenrechte → Rahmen → Ausweis → Kennwort → Freigabe im Web-Tab → Ticket
  * → Verbindung. Bricht einer der Schritte ab, wird alles Vorherige
  * zurückgenommen. Es gibt keinen halb aufgebauten Zustand.
+ *
+ * Seit dem 14.08.2026 ist der Weg zweigeteilt: `verbinden()` ist der Riegel und
+ * die Buchführung darüber, DASS gerade aufgebaut wird, `verbindungAufbauen()`
+ * ist der Weg selbst. Der Grund für die Teilung ist das `finally`: Die Marke
+ * muss auf jedem Ausgang fallen, auch auf dem, an den beim nächsten Umbau
+ * niemand denkt (B8).
  */
 async function verbinden() {
+  /* Derselbe Riegel wie in tabVerbindenMit, weil hierher auch der Dialogknopf
+     führt (Befund 14.08.2026, B8). Er steht vor dem ersten await; die
+     Nutzergeste für chrome.permissions.request bleibt damit heil, denn geprüft
+     wird ausschließlich der eigene Zustand. */
+  if (verbindungLaeuftSchon()) {
+    schonUnterwegsSagen();
+    return;
+  }
+  const marke = aufbauBeginnen();
+  try {
+    await verbindungAufbauen();
+  } finally {
+    /* Auf JEDEM Ausgang, auch dem, an den beim nächsten Umbau niemand denkt:
+       Eine Marke, die stehen bleibt, wäre ein Knopf, der nie wiederkommt. */
+    aufbauBeenden(marke);
+  }
+}
+
+async function verbindungAufbauen() {
   stoerung(null);
   $("vorfuehrung").hidden = true;
 
@@ -1765,10 +1970,12 @@ async function sitzungAnzeigen(serverSitzung, { verlaengern = false } = {}) {
      Zwei Schreiber auf dasselbe `hidden` waren die Ursache dafür, dass der
      Knopf jahrelang unsichtbar blieb, ohne dass es jemandem auffiel. */
   stoerung(null);
-  /* Erst die Karte füllen, dann zeigen: setzeZustand hebt ihr `hidden` auf,
+  /* Erst die Karten füllen, dann zeigen: setzeZustand hebt ihr `hidden` auf,
      und eine leere Karte, die eine Sekunde lang „verbunden mit nichts" sagt,
-     wäre schlimmer als gar keine. */
-  tabkarteZeichnen();
+     wäre schlimmer als gar keine. Seit dem 14.08.2026 steht die Startseite
+     während der Sitzung ebenfalls da (M7), also wird der ganze Verbindungsweg
+     nachgezogen und nicht nur die Tabkarte. */
+  verbindungswegZeichnen();
   setzeZustand("aktiv");
   /* Der Platzhalter wird hier selbst nachgezogen und nicht der Startreihenfolge
      überlassen (Befund Gegenlesung 29.07.): Zwischen dieser Anzeige und der
@@ -2007,6 +2214,28 @@ async function beenden(grund, klartext = null) {
   const liefBrowserAuftrag = zustand.chatLaeuft && zustand.chatLaeuftFuer === "browser";
   chatWartenZeigen(false);
 
+  /*
+   * Und die Anzeige geht mit, und zwar SOFORT.
+   *
+   * Befund Abnahme 14.08.2026 (H4, ZZ9/ZZ10), gemessen für Stopp, „abgelaufen"
+   * und „verloren": Hier stand am Ende ein `setTimeout(…, 1200)`. Noch bei
+   * +608 ms zeigte die Leiste „Aktiv, Nur zusehen", grüne Sitzungsleiste mit
+   * Stopp-Knopf und Tabkarte mit grünem Punkt — obwohl `zustand.sitzung` schon
+   * null war und das Seitenrecht gleich darauf zurückging. Erst bei +1509 ms
+   * wurde daraus „Angemeldet, bereit". In demselben Fenster war der Weg zurück
+   * nicht begehbar: Die Verbindungsleiste hängt am Ruhezustand.
+   *
+   * Die Begründung für die Verzögerung war, die Schlussansage nicht von einem
+   * Bildwechsel überholen zu lassen. Das ist der falsche Tausch: Die Ansage
+   * steht danach immer noch als Blase und in der Ansagezone, die Anzeige
+   * dagegen behauptete 1200 ms lang eine Steuerung, die es nicht mehr gab.
+   * Angesagt wird deshalb unverändert, nur eben hinter dem Wechsel.
+   */
+  setzeZustand("bereit");
+  /* Und die Karten sagen dasselbe: Die Statuskarte der Startseite gehört der
+     Sitzung, sie darf sie nicht überleben (M7). */
+  verbindungswegZeichnen();
+
   /* Erst die Verbindung kappen, dann die Anzeige abbauen: Solange die
      Leitung steht, könnte noch ein Befehl eintreffen. Bei der Vorführung
      gibt es nichts zu kappen — sie hatte nie eine Leitung. */
@@ -2039,7 +2268,6 @@ async function beenden(grund, klartext = null) {
   const text = klartext || texte[grund] || texte.nutzer;
   sagen("niemand", text);
   merkenUndSprechen(text, true);
-  setTimeout(() => setzeZustand("bereit"), 1200);
 }
 
 /* ------------------------------------------------------------------ *
@@ -2520,12 +2748,17 @@ function cloudSitzungZeigen(an, agent) {
     zustand.cloudAgent = null;
     $("cloud-agent").textContent = "";
     zeile.hidden = true;
-    return;
+  } else {
+    const name = zitat(agent, 40);
+    zustand.cloudAgent = name || null;
+    $("cloud-agent").textContent = name;
+    zeile.hidden = false;
   }
-  const name = zitat(agent, 40);
-  zustand.cloudAgent = name || null;
-  $("cloud-agent").textContent = name;
-  zeile.hidden = false;
+  /* „Am Werk: …" auf der Startseite ist dieselbe Auskunft an einer zweiten
+     Stelle, und sie wird hier nachgezogen statt vom Aufrufer erwartet: Zwei
+     Anzeigen mit zwei Wahrheiten waren schon einmal der Grund für einen
+     Fehlbefund (siehe modusSpiegeln). */
+  startseiteZeichnen();
 }
 
 /* ------------------------------------------------------------------ *
@@ -2727,6 +2960,9 @@ $("dialog-abbrechen").addEventListener("click", () => {
 $("dialog").addEventListener("change", (e) => {
   if (e.target && (e.target.name === "dauer" || e.target.name === "stufe")) {
     zusammenfassen();
+    /* Und die Zeile am einen Klick zieht mit: Sie beantragt dieselbe Stufe,
+       und sie darf keinen Augenblick lang eine andere nennen (M8). */
+    verbindenStufeZeigen();
     /* Gemerkt wird beim Wählen, nicht erst beim Verbinden: Wer den Dialog
        abbricht, hat trotzdem gewählt — und findet seine Wahl beim nächsten
        Mal wieder vor. */
@@ -3293,6 +3529,26 @@ async function zustandNachfragen() {
   await sitzungAnzeigen(laufend);
 
   /*
+   * Und die Cloud-Sitzung bekommt ihre Dauerzeile zurück (Vertrag §8.4).
+   *
+   * Befund Abnahme 14.08.2026 (H5): Hier fehlte dieser Aufruf. Einziger
+   * Aufrufer von cloudSitzungZeigen war der Nachrichtenhörer, und `link.js`
+   * sendet `link:cloud-sitzung` nur beim START der Sitzung. Wer die
+   * Seitenleiste schloss und wieder öffnete, bekam Sitzung, Tab und Ursprung
+   * zurück — die drei Zeichen aus §8.4 aber nicht: `#cloud-zeile` blieb
+   * versteckt, `#cloud-agent` leer, und „Am Werk:" auf der Startseite ebenso.
+   * §8.4 verlangt sie, solange die Sitzung LÄUFT, nicht nur im Augenblick
+   * ihres Starts.
+   *
+   * Der Name kommt aus der Antwort des Hintergrunddienstes und wird wie jeder
+   * Fremdtext entschärft (cloudSitzungZeigen). Fehlt er, bleibt die Zeile weg:
+   * Eine Dauerzeile ohne Agentennamen behauptete eine Fernsitzung, von der
+   * niemand weiß, wem sie gehört.
+   */
+  const agent = typeof laufend.agent === "string" ? laufend.agent.trim() : "";
+  cloudSitzungZeigen(!!agent, agent);
+
+  /*
    * Und die Sitzung bekommt ihre Hände zurück.
    *
    * Befund Gegenlesung 29.07.: Hier war die Wiederherstellung bisher zu Ende.
@@ -3463,12 +3719,30 @@ for (const anschluss of [
   }
 }
 
+/*
+ * Der Tabbestand wird als ERSTES angestoßen, nicht als letztes.
+ *
+ * Befund Abnahme 14.08.2026 (N1): `setzeZustand("bereit")` stand hier vor
+ * `tabsAuffrischen()`, und dazwischen war `zustand.aktuellerTab` noch null. Der
+ * eine Klick war in dieser Lücke sichtbar und wirkungslos, und er antwortete
+ * mit der falschen Erklärung. Die Abfrage läuft weiterhin nebenher, sie beginnt
+ * jetzt nur eher; solange sie nicht durch ist, sagt der Knopf selbst, dass es
+ * noch kein Ziel gibt (verbindenKnoepfeSpiegeln).
+ */
+tabsAuffrischen();
+
 setzeZustand("bereit");
 eingabePlatzhalterSetzen();
 /* Der Umschalter steht mit seiner Voreinstellung da, bevor der Dienst
    antwortet. Ein leerer Umschalter wäre für einen Sekundenbruchteil eine
    Oberfläche ohne Aussage, und wer sich vorlesen lässt, träfe genau darauf. */
 modusSpiegeln();
+/* Aus demselben Grund: Der eine Klick steht mit seinem ehrlichen Zustand und
+   mit der Stufe da, die er beantragen würde, bevor die erste Antwort eintrifft
+   (N1 und M8). `einstellungenLaden` zieht die gemerkte Wahl gleich nach; bis
+   dahin steht dort die schwächste Stufe und keine Lücke. */
+verbindenKnoepfeSpiegeln();
+verbindenStufeZeigen();
 einstellungenLaden();
 /* Die Leiste ist offen, es sieht also wieder jemand zu. Gegenstück zum
    pagehide weiter unten. */
@@ -3481,7 +3755,3 @@ zustandNachfragen()
   .catch(() => {})
   .then(() => guthabenLaden());
 chatZustandHolen();
-/* Zum Schluss, weil es den Bildschirm füllt und nichts entscheidet: der eine
-   Klick bekommt seinen Tab, die Liste ihre Zeilen, der Umschalter den Modus
-   dieses Tabs. */
-tabsAuffrischen();

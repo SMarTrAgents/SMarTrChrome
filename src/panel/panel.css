@@ -151,15 +151,27 @@ body {
   border-bottom: 1px solid var(--rand);
 }
 .verbindungsleiste .haupt { flex: 0 0 auto; min-height: 32px; padding: 4px 14px; }
-.verbinden-hinweis { color: var(--leise); font-size: 14px; min-width: 0; overflow-wrap: anywhere; }
-.verbindungsleiste .einstellungen-aendern { justify-self: end; min-height: 36px; margin: 0; }
+/* Die drei Zeilen stehen ausdrücklich im Raster und nicht in der Reihenfolge,
+   in der das HTML sie liefert: Seit die Stufenzeile dazwischen wohnt (M8),
+   schöbe die selbsttätige Verteilung „Dauer und Geltung ändern" in eine eigene
+   vierte Zeile, weil eine Zeile über die volle Breite keinen Platz daneben
+   lässt. Die Lesereihenfolge im HTML bleibt davon unberührt: Knopf, Tab,
+   Stufe. */
+.verbinden-hinweis {
+  grid-column: 1; grid-row: 2;
+  color: var(--leise); font-size: 14px; min-width: 0; overflow-wrap: anywhere;
+}
+.verbindungsleiste .einstellungen-aendern {
+  grid-column: 2; grid-row: 2;
+  justify-self: end; min-height: 36px; margin: 0;
+}
 
 /* Der eine Klick. Der Markenverlauf ist hier nicht Zierde, sondern die
    Rangfolge: Dieser Knopf ist der Regelweg, „Dauer und Geltung ändern"
    daneben ist die Ausnahme und trägt deshalb keine Fläche. Mindestens 48 px
    hoch, weil er der am häufigsten getroffene Knopf der ganzen Leiste ist. */
 .verbinden-tab {
-  grid-column: 1 / -1;
+  grid-column: 1 / -1; grid-row: 1;
   min-height: 48px; padding: 10px 16px;
   border: 0; border-radius: 12px;
   background: linear-gradient(90deg, #4CC2F1 0%, #5B8DEF 50%, #8D7CF6 100%);
@@ -168,6 +180,40 @@ body {
 }
 .verbinden-tab:hover { filter: brightness(1.06); }
 .verbinden-tab:focus-visible { outline: 3px solid var(--text); outline-offset: 2px; }
+
+/* Welche Stufe der eine Klick beantragt (Befund Abnahme 14.08.2026, M8). Sie
+   steht in voller Breite unter dem Knopf, weil sie ein ganzer Satz ist: Etikett
+   und Vorbehalt, dieselben Worte wie im Dialog. */
+.verbinden-stufe {
+  grid-column: 1 / -1; grid-row: 3;
+  color: var(--leise); font-size: 14px; line-height: 1.35;
+  min-width: 0; overflow-wrap: anywhere;
+}
+
+/*
+ * Der Aufbau ist sichtbar, nicht nur hörbar (Befund Abnahme 14.08.2026, H3).
+ *
+ * Gemessen wurde: 50 ms nach dem Klick waren Chip, Knopf, Karten und
+ * Störungszeile unverändert, und die einzige Meldung lag in der auf ein Pixel
+ * geklippten Ansagezone. Wer sieht, sah nichts und drückte noch einmal.
+ * Bewegung ist hier deshalb keine Zierde, sondern die Auskunft „ich arbeite".
+ * Wer Bewegung abbestellt hat, bekommt sie nicht — der Knopf bleibt trotzdem
+ * erkennbar anders, und Chip und Zeile daneben sagen es in Worten.
+ */
+.verbinden-tab:disabled { cursor: default; filter: saturate(.35) brightness(.85); }
+#app[data-aufbau="laeuft"] .verbinden-tab {
+  background: linear-gradient(90deg, #4CC2F1 0%, #5B8DEF 25%, #8D7CF6 50%, #5B8DEF 75%, #4CC2F1 100%);
+  background-size: 300% 100%;
+  filter: none;
+  animation: sa-aufbau 1.4s linear infinite;
+}
+@keyframes sa-aufbau {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #app[data-aufbau="laeuft"] .verbinden-tab { animation: none; }
+}
 
 /* Die Karte des verbundenen Tabs: Favicon, Titel, grüner Punkt, Trennen.
    Sie sagt WELCHER Tab gemeint ist — „aktiv" allein beantwortet das nicht. */

@@ -168,20 +168,29 @@ Die Zusicherungen oben sind nicht nur beschrieben, sie sind geprüft:
 cd src && node --test "pruefung/*.test.mjs"
 ```
 
-733 Prüfsätze, 733 grün, Stand 14.08.2026. Jeder so gebaut, dass er gegen die
+809 Prüfsätze, 809 grün, Stand 14.08.2026. Jeder so gebaut, dass er gegen die
 *halbe* Verschlechterung rot wird, nicht nur gegen das Löschen. Sicherheit, die
 man nachmessen kann.
+
+Eine Zahl grüner Prüfsätze ist dabei kein Beleg für sich. Am Vormittag des
+14.08.2026 standen hier 733, und eine Gegenlesung fand danach 31 Befunde, davon
+neun schwer. Keiner war rot geworden, weil jedes Gebiet sich selbst gegen eine
+Attrappe seines Nachbarn geprüft hat und die Naht dazwischen nirgends. Dafür
+gibt es `src/pruefung/verzahnung.test.mjs`: Dort laufen die echten
+Inhaltsskripte, der echte Nachrichtenhörer des Hintergrunddienstes und die
+echte Ablage miteinander.
 
 ## Aufbau
 
 ```
 manifest.json           Manifest V3
-_locales/               Deutsch und Englisch, je 329 Schlüssel
+_locales/               Deutsch und Englisch, je 334 Schlüssel
 src/panel/              Die Seitenleiste (Chat, Freigaben, Modus)
   startseite.js         Tabliste und Verbindungskarte
   werkbank.js           Abläufe, Domainregeln, Agentenmatrix, Protokollbuch
   sprache.js            data-i18n einsetzen
 src/content/            In der fremden Seite, klassische Skripte
+  geheim.js             Die eine Quelle: Was ist ein Geheimfeld
   overlay.js            Rahmen, Agentenzeiger, Wahrnehmung
   klickwache.js         Verdeckungswache vor jedem Klick
   selektor.js           Selektor-Kaskade
@@ -195,6 +204,7 @@ src/net/                Ohne Browser prüfbar, wo es geht
   link.js               Leitung zum Relay
 src/background/         Service Worker
 src/pruefung/           node:test-Prüfsätze
+  verzahnung.test.mjs   Die Nähte zwischen den Gebieten, echte Skripte
 docs/                   Vertrag, Drahtformat, Schemata, Migration, Offene Punkte
 ```
 

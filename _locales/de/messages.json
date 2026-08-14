@@ -341,11 +341,26 @@
   "ext_beschreibung": {
     "message": "SMarTrAgents im Browser. Der Agent liest, zeigt, klickt, tippt und wählt aus, jeden Schritt gibst du frei. Passwörter nie."
   },
+  "ext_meldung_text": {
+    "message": "Ein Agent steuert jetzt diesen Browser. Zum Beenden drückst du Alt, Umschalt und S."
+  },
+  "ext_meldung_text_agent": {
+    "message": "$1 steuert jetzt diesen Browser. Zum Beenden drückst du Alt, Umschalt und S."
+  },
+  "ext_meldung_titel": {
+    "message": "Cloud-Sitzung aktiv"
+  },
   "ext_name": {
     "message": "SMarTrChrome Beta"
   },
   "ext_notbremse": {
     "message": "Notbremse, Agentensitzung sofort beenden"
+  },
+  "ext_symbol_sitzung": {
+    "message": "SMarTrChrome, Cloud-Sitzung aktiv"
+  },
+  "ext_symbol_sitzung_agent": {
+    "message": "SMarTrChrome, Cloud-Sitzung aktiv, $1 steuert diesen Browser"
   },
   "ext_symbol_titel": {
     "message": "SMarTrChrome, Niemand öffnen"

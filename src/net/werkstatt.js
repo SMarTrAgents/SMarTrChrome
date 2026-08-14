@@ -62,6 +62,24 @@ export const WORKFLOW_VERSION = 1;
 export const REKORDER_ABLAGE = "sa_rekorder";
 
 /*
+ * In WELCHEM Tab die laufende Aufzeichnung begonnen hat, `chrome.storage.session`.
+ *
+ * Befund H6 vom 14.08.2026: `sa_rekorder` trägt Schritte und Bildnummer, aber
+ * keinen Tab, und `content/rekorder.js` nimmt eine gemerkte Aufzeichnung in
+ * JEDEM Dokument wieder auf, in das es eingespielt wird. Ohne diese Bindung
+ * wäre die Neueinspielung nach einem Seitenwechsel ein Mitschnitt jedes Tabs,
+ * in dem gerade etwas lädt.
+ *
+ * `session` und nicht `local`: Eine Tabnummer bedeutet nur etwas, solange
+ * dieser Browser läuft. Nach einem Neustart sind die Nummern neu vergeben.
+ *
+ * Der Schlüssel stand bis zum 14.08.2026 als Literal in
+ * `background/worker.js`. Er steht jetzt hier, neben `REKORDER_ABLAGE`: Zwei
+ * Ablagen einer Sache, an zwei Stellen benannt, laufen auseinander.
+ */
+export const REKORDER_TAB_ABLAGE = "sa_rekorder_tab";
+
+/*
  * Die Schritttypen. Mehr nicht.
  *
  * Sie sind die Spiegelung dessen, was der Rekorder aufzeichnet (§7.2) und was

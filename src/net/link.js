@@ -50,6 +50,23 @@ import { tabAdresse } from "./seite.js";
 import { saeubern } from "./befehle.js";
 import * as protokollbuch from "./protokollbuch.js";
 /*
+ * Der Sprachkatalog (Vertrag v3.5 §12).
+ *
+ * Warum eine Netzdatei aus `panel/` importiert, Befund M10 vom 14.08.2026:
+ * Diese Datei setzt die einzigen zwei Texte, die ein Mensch ausserhalb der
+ * Seitenleiste zu sehen bekommt, den Titel am Symbol und die Systemmeldung.
+ * Beide standen hier als deutsche Literale und liefen an `_locales` vorbei.
+ * Gemessen mit `--lang=en-US` kamen beide deutsch. Einem englischsprachigen
+ * Menschen mit geschlossener Seitenleiste blieb damit kein lesbares Zeichen
+ * ausser dem Abzeichen.
+ *
+ * `sprache.js` ist die EINE Quelle dafuer und nicht eine zweite daneben; sie
+ * fasst kein Dokument an, solange niemand `textEinsetzen` ruft, und laeuft
+ * deshalb auch im Dienstarbeiter. Der zweite Parameter von `t` ist die
+ * deutsche Fassung, wortgleich mit `_locales/de/messages.json`.
+ */
+import { t } from "../panel/sprache.js";
+/*
  * Der Ausführer kommt als ganzes Modul herein und nicht mit benannten Feldern.
  *
  * Grund, Befund vom 14.08.2026: `laufAbbrechen()` (Vertrag v3.5 §5) entsteht in
@@ -179,15 +196,31 @@ export function agentAnzeige(roh) {
     .slice(0, 32);
 }
 
+/*
+ * Der Titel am Symbol, das zweite der drei Zeichen aus §8.4.
+ *
+ * Befund M10 vom 14.08.2026, zwei Fehler in derselben Funktion:
+ *
+ *   1. Beide Saetze waren deutsche Literale. Ab jetzt kommen sie aus dem
+ *      Katalog, mit der deutschen Fassung als Notfalltext.
+ *   2. Der AUS-Fall schrieb „SMarTrChrome, Niemand oeffnen" fest und
+ *      ueberschrieb damit dauerhaft den Titel aus dem Manifest — der steht
+ *      dort als `__MSG_ext_symbol_titel__` und ist laengst uebersetzt. Die
+ *      leere Zeichenkette gibt ihn zurueck, statt eine zweite, unuebersetzte
+ *      Fassung daneben stehen zu lassen.
+ */
 function titelSetzen(agent, an) {
   try {
-    chrome.action.setTitle({
-      title: an
-        ? agent
-          ? `SMarTrChrome, Cloud-Sitzung aktiv, ${agent} steuert diesen Browser`
-          : "SMarTrChrome, Cloud-Sitzung aktiv"
-        : "SMarTrChrome, Niemand öffnen",
-    });
+    const titel = !an
+      ? ""
+      : agent
+        ? t(
+            "ext_symbol_sitzung_agent",
+            "SMarTrChrome, Cloud-Sitzung aktiv, $1 steuert diesen Browser",
+            agent
+          )
+        : t("ext_symbol_sitzung", "SMarTrChrome, Cloud-Sitzung aktiv");
+    chrome.action.setTitle({ title: titel });
   } catch (_) {
     /* Ältere Fassung ohne action-API: Abzeichen und Rahmen bleiben. */
   }
@@ -197,10 +230,14 @@ function titelSetzen(agent, an) {
  * Die Systemmeldung. Sie ist das einzige der drei Zeichen, das den Menschen
  * auch dann erreicht, wenn er in einem anderen Fenster arbeitet.
  *
- * ⚠️ Die Berechtigung `notifications` steht am 14.08.2026 NICHT im Manifest
- * (gemeldet an A-SPRACHE). Ohne sie ist `chrome.notifications` schlicht nicht
- * da. Deshalb bricht hier nichts ab: Eine fehlende Berechtigung darf den Start
- * einer Sitzung nicht verhindern, sie kostet nur eines von drei Zeichen.
+ * Die Berechtigung `notifications` steht im Manifest. Trotzdem bricht hier
+ * nichts ab, wenn `chrome.notifications` fehlt: Eine Fassung ohne diese API
+ * darf den Start einer Sitzung nicht verhindern, sie kostet nur eines von drei
+ * Zeichen.
+ *
+ * Der Text kommt seit dem 14.08.2026 aus dem Katalog (Befund M10). Er ist der
+ * einzige Satz, der einen Menschen auch dann erreicht, wenn er in einem
+ * anderen Fenster arbeitet — und genau der war fest deutsch.
  */
 function systemmeldung(agent) {
   try {
@@ -209,10 +246,17 @@ function systemmeldung(agent) {
     const lauf = meldungen.create(MELDUNG_ID, {
       type: "basic",
       iconUrl: "icons/icon-128.png",
-      title: "Cloud-Sitzung aktiv",
+      title: t("ext_meldung_titel", "Cloud-Sitzung aktiv"),
       message: agent
-        ? `${agent} steuert jetzt diesen Browser. Zum Beenden drückst du Alt, Umschalt und S.`
-        : "Ein Agent steuert jetzt diesen Browser. Zum Beenden drückst du Alt, Umschalt und S.",
+        ? t(
+            "ext_meldung_text_agent",
+            "$1 steuert jetzt diesen Browser. Zum Beenden drückst du Alt, Umschalt und S.",
+            agent
+          )
+        : t(
+            "ext_meldung_text",
+            "Ein Agent steuert jetzt diesen Browser. Zum Beenden drückst du Alt, Umschalt und S."
+          ),
       priority: 2,
     });
     if (lauf && typeof lauf.catch === "function") lauf.catch(() => {});
@@ -512,6 +556,26 @@ export async function zustand() {
   return { ...sitzungMitFrist(gespeichert), verbunden: offen, unbeaufsichtigt };
 }
 
+/**
+ * Der Tab, für den die laufende Sitzung freigegeben ist — ohne `await`.
+ *
+ * @returns {number|null}
+ *
+ * Warum ohne Ablage und damit ohne Warten, Festlegung F2 vom 14.08.2026: Der
+ * Not-Aus im Dienstarbeiter muss WISSEN, welchem Tab er `overlay:gestoppt`
+ * schickt, und er muss es wissen, BEVOR er kappt — `trennen()` räumt die
+ * Sitzung ja gerade weg. Ein `await` davor wäre die erste Runde, die zwischen
+ * dem Ereignis und dem Kappen liegt, und §5 sagt: erst kappen, dann melden.
+ *
+ * Kennt dieser Dienstprozess keine Sitzung, gibt es auch keinen Tab zu
+ * verdunkeln: Eine Sitzung aus einem fremden Leben hat `anlaufPruefen` beim
+ * Start bereits beendet.
+ */
+export function sitzungTabId() {
+  const s = sitzung;
+  return s && Number.isInteger(s.tabId) ? s.tabId : null;
+}
+
 /*
  * Sieht gerade jemand zu?
  *
@@ -641,6 +705,15 @@ async function serverWiderruf(code, ausweis) {
  * kein Luxus: Nach einem Neustart des Service Workers ist der Modulspeicher
  * leer, und ohne diese Quelle wäre der Widerruf ausgerechnet in dem Fall
  * wirkungslos, in dem er am nötigsten ist.
+ *
+ * Und hier, an genau dieser Stelle, steht seit dem 14.08.2026 der Eintrag ins
+ * Protokollbuch (Befund N3). Vorher stand er in `trennen()`, also auf EINEM von
+ * sechs Wegen: Der `disconnect`-Rahmen des Relays, das `onclose` der Leitung,
+ * die gescheiterte Verlängerung, die abgelaufene Frist ohne Leitung und die
+ * verwaiste Sitzung aus einem fremden Leben gingen alle ohne Zeile durch. Ein
+ * Buch mit Lücken ist als Nachweis wertlos, und es sind gerade die Enden, die
+ * der Mensch nicht selbst ausgelöst hat, nach denen er später sucht. Hier
+ * kommen alle sechs vorbei, und einen siebten Weg gibt es nicht.
  */
 async function sitzungBeenden(grund, text, { ausweis = null, widerrufen = true } = {}) {
   /* 1. Hinsehen, ohne anzufassen: Gibt es überhaupt etwas zu widerrufen? */
@@ -664,7 +737,22 @@ async function sitzungBeenden(grund, text, { ausweis = null, widerrufen = true }
   /* 4. Und erst jetzt der Widerruf beim Server, mit dem gesicherten Ausweis. */
   if (brauchtWiderruf) await serverWiderruf(vorher.code, nachweis);
 
-  /* 5. Zum Schluss der Modulspeicher. Nicht früher. */
+  /* 5. Die Zeile im Buch — genau dann, wenn hier wirklich eine Sitzung zu Ende
+        gegangen ist. `aufraeumen` gibt sie zurück oder gibt `null`; ohne
+        Sitzung gibt es auch kein Ende zu buchen, und ein Aufruf ins Leere darf
+        keine Zeile erfinden. Das trifft auch den zweiten Anlauf: Schliesst
+        `aufraeumen` die Leitung, ruft Chrome danach `onclose`, und das kommt
+        noch einmal hier vorbei — dann steht in der Ablage aber nichts mehr. */
+  if (alt) {
+    await buchFuehren(
+      { cmd: "disconnect", agent: alt.agent },
+      alt,
+      { cmd: "disconnect", success: false, error: { code: grund } },
+      ""
+    );
+  }
+
+  /* 6. Zum Schluss der Modulspeicher. Nicht früher. */
   ausweisImSpeicher = null;
   return alt;
 }
@@ -1227,7 +1315,6 @@ export async function trennen(grund = "nutzer", ausweis = null) {
    * vorzieht, baut eine Notbremse, deren Wirkung von der Gegenstelle abhängt.
    */
   laufKappen();
-  const laufende = await sitzungLesen();
 
   senden({ type: "disconnect", reason: grund === "notbremse" ? "user_revoked" : grund });
 
@@ -1237,19 +1324,11 @@ export async function trennen(grund = "nutzer", ausweis = null) {
     nutzer: "Die Verbindung ist beendet.",
     verloren: "Die Verbindung ist abgerissen. Der Agent kann diesen Browser nicht mehr steuern.",
   };
+  /* Das Buch führt `sitzungBeenden` selbst (Befund N3 vom 14.08.2026). Hier
+     stand die Zeile bis dahin — und damit auf genau einem von sechs Wegen, auf
+     denen eine Sitzung endet. Zwei Zeilen für ein Ende wären derselbe Fehler
+     wie keine, deshalb steht sie jetzt dort und nur dort. */
   await sitzungBeenden(grund, texte[grund] || texte.nutzer, { ausweis, widerrufen: true });
-
-  /* Und zuletzt das Buch. Auch das Ende einer Sitzung ist eine Fernaktion, die
-     ein Mensch später nachlesen können muss — vor allem die, die er selbst
-     ausgelöst hat. */
-  if (laufende) {
-    await buchFuehren(
-      { cmd: "disconnect", agent: laufende.agent },
-      laufende,
-      { cmd: "disconnect", success: false, error: { code: grund } },
-      ""
-    );
-  }
 }
 
 /*

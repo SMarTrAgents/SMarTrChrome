@@ -363,6 +363,46 @@ export function saeubern(roh, grenze = GRENZEN.nameZeichen) {
 }
 
 /**
+ * Nachschlagen mit einem Schlüssel, der von aussen kommt.
+ *
+ * Befund vom 14.08.2026 (H2), und er ist ein Muster und kein Einzelfall: In
+ * `ausfuehrer.js` stand `SERVER_MODUS[schrittmodus] || "manual"` über einem
+ * gewöhnlichen Objektliteral. Jedes solche Literal erbt von
+ * `Object.prototype`, also liefern `constructor`, `toString`, `valueOf`,
+ * `hasOwnProperty` und `__proto__` eine Funktion — und eine Funktion ist wahr.
+ * Damit griff das `|| "manual"` nicht, und die Zusage „der Serverwert
+ * schränkt ein, er erweitert nie" war für jeden unbekannten Wert falsch:
+ * Gemessen wurde `schrittmodus=constructor` mit lokalem `auto` und NULL
+ * Rückfragen beim Klick.
+ *
+ * Diese Funktion ist die Antwort darauf, und zwar an jeder Stelle im Gebiet,
+ * an der ein Schlüssel aus einem Rahmen, einer Sitzung, einer Ablage oder
+ * einer besuchten Seite stammt. Sie fragt nach dem EIGENEN Eintrag, nie nach
+ * irgendeiner Eigenschaft, und gibt sonst `undefined` — damit jedes `||`
+ * dahinter wieder das tut, wonach es aussieht.
+ *
+ * @param {object} tabelle
+ * @param {*} schluessel
+ */
+export function eigen(tabelle, schluessel) {
+  if (!tabelle || typeof schluessel !== "string") return undefined;
+  return Object.prototype.hasOwnProperty.call(tabelle, schluessel) ? tabelle[schluessel] : undefined;
+}
+
+/**
+ * Zwei Texte vergleichbar machen (Festlegung F3, Ausführerseite).
+ *
+ * Dieselbe flache Form, in der auch die Wortlisten messen: kleingeschrieben,
+ * ohne Umlaute, ohne Satzzeichen, mit je einem Leerzeichen am Rand. Die
+ * Randleerzeichen machen aus einem `includes` einen Wortvergleich, und genau
+ * den braucht der Ausführer, wenn er den Namen des gefundenen Elements gegen
+ * die Beschreibung des Ablaufschrittes hält.
+ */
+export function vergleichsform(roh) {
+  return flachmachen(roh);
+}
+
+/**
  * Die Befehlskennung aus dem Rahmen. DRAHTFORMAT §6: nichtleere Zeichenkette,
  * höchstens 64 Zeichen. Der Relay setzt sie selbst, wenn der Agent keine
  * mitgibt — eine unbrauchbare Kennung kann es hier also gar nicht geben,
@@ -383,9 +423,18 @@ export function kennungPruefen(roh) {
  * Stufe, also auch keine erfüllbare), und eine unbekannte Stufe hat Rang 0.
  */
 export function stufeReicht(stufe, cmd) {
-  const eintrag = BEFEHLE[cmd];
+  /* Beide Schlüssel kommen von aussen: `cmd` aus dem Befehlsrahmen, `stufe`
+     aus der Sitzung des Relays. Über einem Objektliteral fänden sie sonst
+     `constructor` und Verwandte (Befund H2 vom 14.08.2026). Hier war es
+     bislang nur zufällig ungefährlich — eine geerbte Funktion überlebte den
+     Zahlenvergleich nicht. Zufall ist keine Prüfung. */
+  const eintrag = eigen(BEFEHLE, cmd);
   if (!eintrag) return false;
-  return (RANG[stufe] || 0) >= RANG[eintrag.stufe];
+  /* Ein Befehl, dessen eigene Stufe niemand lesen kann, reicht nie — sonst
+     wäre eine unbekannte Stufe die niedrigste statt der höchsten. */
+  const noetig = eigen(RANG, eintrag.stufe);
+  if (!Number.isFinite(noetig)) return false;
+  return (eigen(RANG, stufe) || 0) >= noetig;
 }
 
 /* --------------------------------------------------------------------- *
@@ -1255,8 +1304,11 @@ export function frageZusatz(cmd, plan) {
     return `${s}.`;
   }
   if (cmd === "waitFor") {
-    const satz = WARTE_FRAGE[plan.bedingung];
-    return satz ? ` Er wartet darauf, ${satz(plan.wert)}.` : "";
+    /* `eigen` und nicht der nackte Zugriff (H2 vom 14.08.2026): Die Bedingung
+       ist hier zwar schon geprüft, aber diese Zeile RUFT, was sie findet —
+       und `WARTE_FRAGE["constructor"]` fände eine Funktion. */
+    const satz = eigen(WARTE_FRAGE, plan.bedingung);
+    return typeof satz === "function" ? ` Er wartet darauf, ${satz(plan.wert)}.` : "";
   }
   if (cmd === "run_workflow") {
     /* WELCHER Ablauf gleich läuft, gehört in die Frage. „Einen gespeicherten
@@ -1401,12 +1453,35 @@ export const WORTE_BERECHTIGUNG = Object.freeze([
   "clipboard", "geolocation",
 ]);
 
-/* Der zweite Halbsatz, ohne den eine Berechtigung keine ist. „Kamera" allein
-   steht auf jeder Produktseite eines Elektronikhändlers; erst „Kamera
-   zulassen" ist die Frage des Browsers. Getrennte Liste, weil beide Hälften
-   getroffen sein müssen und ein Prüfsatz das messen soll. */
+/*
+ * Der zweite Halbsatz einer Berechtigungsfrage — und ausdrücklich KEINE
+ * Bedingung mehr.
+ *
+ * Befund vom 14.08.2026 (M1). Bis dahin galt: `berechtigung` entsteht nur,
+ * wenn ein Wort aus `WORTE_BERECHTIGUNG` UND eines aus dieser Liste dasteht.
+ * Diese Liste kannte „zulassen, erlauben, gestatten, zustimmen, allow, grant,
+ * enable" und nicht „aktivieren, einschalten, freigeben, an". „Kamera
+ * aktivieren" ergab damit `klassen=[bedienen]` und `fragen=false`.
+ *
+ * Die Reparatur ist nicht das fehlende Wort, sondern die Bauform. Die Frage
+ * war: Darf eine HARTE Klasse überhaupt eine zweite Liste als Bedingung
+ * haben? Nein. `HART` heisst „nie abschaltbar, auch in der Automatik" —
+ * und eine Bedingung, die aus einer Wortliste kommt, ist ein Schalter: Wer
+ * sein Wort nicht in der Liste findet, hat die Wache aus. Ein UND zwischen
+ * zwei Listen ist zudem doppelt so leicht zu verfehlen wie eine, denn schon
+ * eine Lücke in einer der beiden genügt.
+ *
+ * Ab jetzt löst `WORTE_BERECHTIGUNG` allein aus. Diese Liste bleibt und wird
+ * gepflegt, aber sie entscheidet nichts mehr — sie schärft nur noch den
+ * Grund, den der Mensch vorgelesen bekommt. Der Preis ist eine Rückfrage bei
+ * einem Elektronikhändler, der eine Kamera verkauft, und das ist genau die
+ * erlaubte Richtung: Ein Fehlalarm kostet eine Frage, ein übersehener Treffer
+ * kostet die Kamera.
+ */
 export const WORTE_ZULASSEN = Object.freeze([
-  "zulassen", "erlauben", "gestatten", "zustimmen", "allow", "grant", "enable",
+  "zulassen", "erlauben", "gestatten", "zustimmen", "freigeben", "freigabe",
+  "aktivieren", "einschalten", "anschalten", "bestaetigen",
+  "allow", "grant", "enable", "activate", "turn on", "accept",
 ]);
 
 export const WORTE_CAPTCHA = Object.freeze([
@@ -1450,9 +1525,28 @@ const UMLAUT_ERSATZ = Object.freeze([
  * Die Randleerzeichen sind kein Schönheitsfehler: Sie machen aus der Suche
  * nach `" pin "` eine Suche nach dem ganzen Wort, auch am Anfang und am Ende
  * der Zeichenkette.
+ *
+ * **Ohne Längengrenze, und das ist der Befund vom 14.08.2026 (H1).** Bis
+ * dahin stand hier `grenze = 400`, und `saeubern` kürzt in der MITTE: Kopf
+ * und Fuss bleiben, die Mitte fällt weg. Gemessen wurde ein Klick auf
+ * „Weiter" unter `https://shop.de/kasse/bezahlen` mit einer Rückfrage — und
+ * derselbe Klick unter `https://shop.de/<250 Zeichen>/kasse/<250 Zeichen>`
+ * mit KEINER: Das Wort „kasse" stand in der weggeschnittenen Mitte.
+ *
+ * Damit bestimmte die besuchte Seite selbst, ob eine als nie abschaltbar
+ * zugesagte Wache greift; es genügte eine lange Adresse. Die Lehre ist keine
+ * über Zahlen, sondern über die Bauform:
+ *
+ *   **Eine Sicherheitsprüfung kürzt ihren Eingang nicht.**
+ *
+ * Gekürzt wird ausschliesslich dort, wo Text ANGEZEIGT oder gespeichert wird
+ * (`saeubern` mit seinen Deckeln). Was gemessen wird, wird ganz gemessen.
+ * Teuer ist das nicht: Gesucht werden ein paar Dutzend kurze Wörter in einer
+ * Adresse oder einem Elementnamen, und `einschleusungVerdacht` liest aus
+ * demselben Grund seit jeher den ganzen Textbaum.
  */
-function flachmachen(roh, grenze = 400) {
-  let s = saeubern(roh, grenze).toLowerCase();
+function flachmachen(roh) {
+  let s = saeubern(roh, Number.MAX_SAFE_INTEGER).toLowerCase();
   for (const [muster, ersatz] of UMLAUT_ERSATZ) s = s.replace(muster, ersatz);
   s = s.replace(/[^a-z0-9]+/g, " ").trim();
   return s ? ` ${s} ` : "";
@@ -1494,15 +1588,47 @@ const GRUNDKLASSE = Object.freeze({
    Lesebefehl keine Zahlung, ein Pfad `/checkout/zahlung` sehr wohl. Lässt sich
    die Adresse nicht zerlegen, wird sie ganz genommen — mehr Text heisst hier
    mehr Rückfrage, und das ist die erlaubte Richtung. */
-function adressText(kopf) {
-  const roh = String((kopf && kopf.url) || "");
-  if (!roh) return "";
+function wegVon(roh) {
+  const s = String(roh || "");
+  if (!s) return "";
   try {
-    const u = new URL(roh);
+    const u = new URL(s);
     return `${u.pathname} ${u.search}`;
   } catch (_) {
-    return roh;
+    return s;
   }
+}
+
+/*
+ * Der Adresstext, den der Klassifizierer misst: wo der Tab steht UND wohin
+ * dieser Schritt ihn bringt.
+ *
+ * Befund vom 14.08.2026 (B1). Bis dahin las diese Funktion ausschliesslich
+ * `kopf.url`, und der Ausführer stellte dort die Adresse hinein, auf der der
+ * Tab GERADE steht. Bei `navigate` wurde damit die Seite gemessen, die
+ * verlassen wird, und nie das Ziel: Ein Tab auf `https://shop.de/artikel/12345`
+ * durfte in der Automatik ohne eine einzige Rückfrage
+ * `https://shop.de/order/confirm?buy=1` aufrufen. Ein Ein-Klick-Kauf per GET
+ * war damit stumm auslösbar, ebenso `/kasse/bezahlen`,
+ * `/konto/loeschen?bestaetigen=1` und `/download/rechnung.exe`.
+ *
+ * Gemessen werden jetzt BEIDE, und die Herkunft bleibt ausdrücklich drin: Die
+ * Reparatur einer fehlenden Messung darf nicht darin bestehen, eine andere
+ * wegzunehmen. Ein Ortswechsel weg von der Kassenseite fragt damit weiterhin
+ * — eine Rückfrage zu viel ist die erlaubte Richtung, eine zu wenig nicht.
+ *
+ * `back` trägt hier nichts ein, denn es HAT kein Ziel: Wohin der Verlauf
+ * führt, weiss vor dem Sprung niemand, auch der Browser sagt es nicht. Etwas
+ * zu erfinden wäre schlimmer als nichts, deshalb misst `back` die Herkunft und
+ * die zweite Wache greift nach dem Sprung (ausfuehrer.js, `nachDemWechsel`):
+ * Dort steht die neue Adresse wirklich fest, und dort wird sie gegen Bereich
+ * und Sperrliste gehalten, bevor irgendetwas gelesen wird.
+ */
+function adressText(kopf) {
+  const hier = wegVon(kopf && kopf.url);
+  const hin = wegVon(kopf && kopf.ziel);
+  if (!hin) return hier;
+  return hier ? `${hier} ${hin}` : hin;
 }
 
 /**
@@ -1511,7 +1637,8 @@ function adressText(kopf) {
  * @param {string} cmd    Befehlsname aus BEFEHLE
  * @param {object} plan   geprüftes Ergebnis aus parameterPruefen
  * @param {object|null} ziel  {ref, name, rolle, rect, mitte} oder null
- * @param {object} kopf   {url, titel}
+ * @param {object} kopf   {url, titel, ziel} — `url` ist, wo der Tab steht,
+ *                        `ziel` ist, wohin dieser Schritt ihn bringt (B1)
  * @returns {{klassen: string[], hart: string|null, weich: string[], grund: string}}
  *
  * Aus dem Ziel werden zusätzlich drei Angaben gelesen, wenn sie da sind. Sie
@@ -1536,7 +1663,8 @@ export function klassenBestimmen(cmd, plan, ziel, kopf) {
   const p = plan && typeof plan === "object" ? plan : {};
   const z = ziel && typeof ziel === "object" ? ziel : null;
 
-  const grundklasse = GRUNDKLASSE[befehl];
+  /* `befehl` kommt aus dem Rahmen des Relays, also mit `eigen` (H2). */
+  const grundklasse = eigen(GRUNDKLASSE, befehl);
   if (grundklasse) merken(grundklasse, "am Befehl selbst");
 
   const rolle = z ? String(z.rolle || "").toLowerCase() : "";
@@ -1545,6 +1673,10 @@ export function klassenBestimmen(cmd, plan, ziel, kopf) {
   const zielText = z ? `${z.name || ""} ${z.rolle || ""}` : "";
   const wegText = adressText(kopf);
   const beides = `${zielText} ${wegText}`;
+  /* Die Adresse, auf die dieser Schritt zusteuert — bei `navigate` das Ziel,
+     sonst leer. Sie steht getrennt, weil bei einem Ortswechsel die Adresse
+     selbst die HANDLUNG ist und nicht bloss der Ort, an dem gelesen wird. */
+  const hinText = wegVon(kopf && kopf.ziel);
 
   /* geheim — Tippen in ein Geheimfeld, und der Klick, der ein Anmeldeformular
      absendet. Der zweite Fall ist der, den man vergisst: Das Passwort steht
@@ -1563,10 +1695,15 @@ export function klassenBestimmen(cmd, plan, ziel, kopf) {
   const zahlung = wortTreffer(beides, WORTE_ZAHLUNG);
   if (zahlung) merken("zahlung", `am Wort „${zahlung}"`);
 
-  /* unwiderruflich — am Ziel, nicht an der Adresse. Eine Kontoübersicht unter
-     `/konto/verwalten` ist keine Kündigung; der Knopf „Konto kündigen" ist
-     eine. */
-  const weg = wortTreffer(zielText, WORTE_UNWIDERRUFLICH);
+  /* unwiderruflich — am Ziel und an der ZIELadresse, nie an der Herkunft.
+     Eine Kontoübersicht unter `/konto/verwalten` ist keine Kündigung, und
+     deshalb zählt die Adresse, auf der man ohnehin schon steht, hier nicht.
+     Ein Aufruf von `/konto/loeschen?bestaetigen=1` ist die Kündigung selbst:
+     Bei einem Ortswechsel ist die Adresse die Handlung, und sie wird vom
+     Agenten gewählt, nicht vom Menschen. Befund vom 14.08.2026 (B1), zweiter
+     Teil — der erste Anlauf mass nur `zahlung`, `datei` und `captcha` neu und
+     liess genau diesen Fall stehen. */
+  const weg = wortTreffer(hinText ? `${zielText} ${hinText}` : zielText, WORTE_UNWIDERRUFLICH);
   if (weg) merken("unwiderruflich", `am Wort „${weg}"`);
 
   /* datei — die Bauform des Elements zählt zuerst. `input[type=file]` öffnet
@@ -1576,10 +1713,13 @@ export function klassenBestimmen(cmd, plan, ziel, kopf) {
   const datei = wortTreffer(beides, WORTE_DATEI);
   if (datei) merken("datei", `am Wort „${datei}"`);
 
-  /* berechtigung — nur, wenn beide Hälften dastehen. */
+  /* berechtigung — am Berechtigungswort allein (Befund M1 vom 14.08.2026,
+     Begründung bei `WORTE_ZULASSEN`). Der zweite Halbsatz macht den Grund
+     genauer, er macht die Klasse nicht mehr möglich oder unmöglich. */
   const recht = wortTreffer(zielText, WORTE_BERECHTIGUNG);
-  if (recht && wortTreffer(zielText, WORTE_ZULASSEN)) {
-    merken("berechtigung", `am Wort „${recht}"`);
+  if (recht) {
+    const halbsatz = wortTreffer(zielText, WORTE_ZULASSEN);
+    merken("berechtigung", halbsatz ? `an den Worten „${recht}" und „${halbsatz}"` : `am Wort „${recht}"`);
   }
 
   /* captcha — Ziel oder Adresse. Ein Treffer heisst nie „automatisch lösen",
@@ -1871,10 +2011,11 @@ export function paramsPruefen(roh) {
  * @returns {{verdacht: boolean, muster: string|null}}
  */
 export function einschleusungVerdacht(text) {
-  /* Ohne Längengrenze, anders als überall sonst: Gesucht wird im ganzen
-     Textbaum, und ein Satz, der bei Zeichen 400 abgeschnitten wird, ist genau
-     der Satz, den ein Angreifer ans Ende schreibt. */
-  const flach = flachmachen(text, Number.MAX_SAFE_INTEGER);
+  /* Ohne Längengrenze: Gesucht wird im ganzen Textbaum, und ein Satz, der bei
+     Zeichen 400 abgeschnitten wird, ist genau der Satz, den ein Angreifer ans
+     Ende schreibt. Seit dem Befund H1 vom 14.08.2026 gilt das für JEDE Messung
+     an Fremdtext, und `flachmachen` kürzt deshalb gar nicht mehr. */
+  const flach = flachmachen(text);
   if (!flach) return { verdacht: false, muster: null };
   /* Verglichen wird mit Leerzeichen an beiden Rändern, nicht als blosses
      Wortstück. Sonst steckt „act as" in „contract as agreed", und ein
@@ -2157,8 +2298,14 @@ function zeileBauen(k) {
     return `${einzug}text "${k.name}"`;
   }
   const sichtbar = k.zustand.filter((z) => !ZUSTAND_STILL.has(z));
+  /* Die Zustandsnamen kommen aus der besuchten Seite. Ohne `eigen` fände
+     `ZUSTAND_TEXT["constructor"]` eine Funktion, und deren Quelltext stünde
+     im Textbaum, den der Agent liest (H2 vom 14.08.2026). */
   const anhang = sichtbar.length
-    ? ` [${sichtbar.map((z) => ZUSTAND_TEXT[z] || z).join(", ")}]`
+    ? ` [${sichtbar.map((z) => {
+        const t = eigen(ZUSTAND_TEXT, z);
+        return typeof t === "string" ? t : z;
+      }).join(", ")}]`
     : "";
   const wert = k.wert !== null ? ` = "${k.wert}"` : "";
   return `${einzug}${k.ref}  ${k.rolle}${k.name ? ` "${k.name}"` : ""}${wert}${anhang}`;

@@ -147,11 +147,33 @@ englisch**. Die Listen stehen als benannte Konstanten (`WORTE_ZAHLUNG`,
 | `zahlung` | Name oder Adresspfad trifft `WORTE_ZAHLUNG` (kasse, checkout, bezahlen, kaufen, bestellen, ueberweisen, pay, order, purchase, iban) |
 | `unwiderruflich` | `WORTE_UNWIDERRUFLICH` (loeschen, entfernen, kuendigen, schliessen, deaktivieren, widerrufen, delete, remove, cancel, deactivate, terminate) |
 | `datei` | Ziel ist `input[type=file]`, oder Name/Adresse trifft `WORTE_DATEI` (download, herunterladen, hochladen, upload, datei waehlen) |
-| `berechtigung` | `WORTE_BERECHTIGUNG` (kamera, mikrofon, standort, benachrichtigung, camera, microphone, location, notification) in Verbindung mit `zulassen`/`erlauben`/`allow` |
+| `berechtigung` | `WORTE_BERECHTIGUNG` (kamera, mikrofon, standort, benachrichtigung, camera, microphone, location, notification) — das Wort allein genügt, siehe Nachtrag M1 |
 | `captcha` | Ziel oder Adresse trifft `WORTE_CAPTCHA` (captcha, recaptcha, hcaptcha, turnstile, „ich bin kein roboter", „i am not a robot") |
 | `senden` | `click` auf `WORTE_SENDEN` (senden, absenden, abschicken, veroeffentlichen, posten, kommentieren, antworten, send, submit, post, publish, reply, tweet) |
 | `formular` | `type` mit `absenden: true`; `click` auf ein Element mit Rolle `button` und `type=submit` |
 | `tab_neu` | reserviert; heute traegt kein Befehl diese Klasse. Sie steht im Vertrag, weil die Einstellungsmatrix sie zeigt und eine Matrix mit einem toten Schalter luegt. Ein Pruefsatz haelt fest, dass sie heute nie ausgeloest wird. |
+
+**Nachtrag 14.08.2026 (Befund M1), `berechtigung` braucht keinen zweiten
+Halbsatz mehr.** Bis dahin galt: Die Klasse entsteht nur, wenn ein Wort aus
+`WORTE_BERECHTIGUNG` UND eines aus `WORTE_ZULASSEN` dasteht. Diese zweite Liste
+kannte „zulassen, erlauben, gestatten, zustimmen, allow, grant, enable" und
+nicht „aktivieren, einschalten, freigeben, an". „Kamera aktivieren" ergab damit
+`klassen=[bedienen]` und `fragen=false`, in jedem Modus. Die Reparatur ist nicht
+das fehlende Wort, sondern die Bauform: Eine HARTE Klasse heisst „nie
+abschaltbar, auch in der Automatik", und eine Bedingung, die aus einer Wortliste
+kommt, ist ein Schalter — wer sein Wort nicht in der Liste findet, hat die Wache
+aus. Ab jetzt löst `WORTE_BERECHTIGUNG` allein aus. `WORTE_ZULASSEN` bleibt und
+wird gepflegt, entscheidet aber nichts mehr: Sie schärft nur noch den Grund, den
+der Mensch vorgelesen bekommt.
+
+**Nachtrag 14.08.2026 (Befund B1), `unwiderruflich` wird bei `navigate` auch an
+der ZIELadresse gemessen.** Der Satz „am Ziel, nicht an der Adresse" gilt
+weiterhin für die Herkunft: Eine Kontoübersicht unter `/konto/verwalten` ist
+keine Kündigung, und die Adresse, auf der ein Mensch ohnehin schon steht, zählt
+nicht. Beim Ortswechsel ist die Adresse aber die Handlung selbst, und sie wird
+vom Agenten gewählt, nicht vom Menschen: `/konto/loeschen?bestaetigen=1` per GET
+löscht wirklich. Gemessen wird deshalb Zieltext UND Zieladresse, die Herkunft
+weiterhin nicht.
 
 `captcha` ist ein Sonderfall und wird als solcher behandelt: Ein Treffer heisst
 **nie** „automatisch loesen", sondern immer „an den Menschen uebergeben". Der
@@ -261,6 +283,34 @@ dazu:
 Zustand „nichts laeuft mehr" liegt weniger als eine Sekunde, und zwar ohne auf
 eine Antwort des Relays zu warten. Erst kappen, dann melden.
 
+**Nachtrag 14.08.2026 (Festlegung F2 und Befund B9), der Not-Aus beendet zwei
+Dinge und erreicht den Tab selbst.** Gemessen am echten Nachrichtenhoerer war
+nur die lokale Haelfte gebaut: Nach `{typ:"notbremse", quelle:"schild"}` lief
+der Cloud-Auftrag weiter, `/chat/cancel` wurde null Mal gerufen, und der Wecker
+`smartrchat-wache` nahm das Abholen nach dem naechsten Start des
+Dienstarbeiters wieder auf. Ein Not-Aus, den ein Wecker zuruecknimmt, ist
+keiner. Ab jetzt gilt fuer alle drei Eingaenge, Schild und Esc Esc aus dem Tab,
+Stoppknopf der Seitenleiste, Tastenkuerzel:
+
+1. `background/worker.js` ruft `link.trennen("notbremse")` und
+   `chat.chatAbbrechen()`, beides synchron gekappt, ohne auf den Relay zu
+   warten.
+2. `background/worker.js` sendet **selbst** `overlay:gestoppt` an den
+   betroffenen Tab. Die Seitenleiste darf das zusaetzlich tun, sie ist nicht
+   mehr der einzige Weg — ein Not-Aus, den man nur bei offener Seitenleiste
+   sieht, ist fuer jemanden mit geschlossener Leiste unsichtbar.
+
+**Nachtrag 14.08.2026 (Festlegung F1 und Befund B3), das Abbruchsignal reicht
+bis in die Seite.** `src/net/seite.js` nimmt in jeder Funktion ein
+`AbortSignal`: `anSeite(tabId, nachricht, frist, { signal } = {})`. Bricht es,
+endet der Aufruf sofort mit `{ok:false, fehler:"abgebrochen"}`, ohne auf die
+Seite zu warten, und **vor** dem Absenden wird gefragt, nicht nur danach.
+Gemessen wurde vorher ein `overlay:klicken`, das 16996 ms NACH dem Kappen an
+die Seite ging, waehrend der Agent laengst `session_beendet` gelesen hatte. Ein
+Abbruch, der die Antwort abbricht, aber nicht die Handlung, ist kein Abbruch,
+sondern eine Vertuschung. Besitzer der Datei ist A-KLICKWACHE, alle anderen
+rufen sie nur.
+
 ---
 
 ## 6. Nachrichten zwischen den Teilen
@@ -290,6 +340,23 @@ Neue Namen, alle mit Praefix, damit sie nicht mit dem Bestand kollidieren.
 Alle neuen Nachrichten an den Worker durchlaufen `ausEigenerOberflaeche()`.
 Ohne Ausnahme. `notbremse`, `rekorder:stand` und `rekorder:bild` sind die
 einzigen, die aus einem Tab kommen duerfen.
+
+**Nachtrag 14.08.2026 (Verzahnung), `werkbank:schreiben` und
+`werkbank:loeschen` sind ein ZWEITER Weg und nicht der einzige.** Der
+Dienstarbeiter beantwortet sie, `src/panel/werkbank.js` benutzt sie aber nicht:
+Es ruft `workflowSchreiben` und `workflowLoeschen` aus `src/net/werkstatt.js`
+direkt. Das ist ausdruecklich erlaubt und keine zweite Tuer, denn beide Wege
+gehen durch dieselbe Pruefung `workflowPruefen` in derselben Datei — zwei
+Aufrufer einer Regel, nicht zwei Regeln. Der Weg ueber den Dienstarbeiter
+bleibt bestehen, weil er der einzige ist, auf dem ein anderer Teil der
+Erweiterung einen Ablauf schreiben kann.
+
+**Nachtrag 14.08.2026 (Verzahnung), das Praefix `overlay:` sagt nicht immer,
+wohin es geht.** `overlay:einspielen` geht an den Dienstarbeiter und nicht in
+die Seite: Es ist die Bitte, das Overlay einzuspielen. Umbenannt wird es nicht,
+das kostete eine Aenderung an drei Stellen ohne Gewinn. `verzahnung.test.mjs`
+V-k haelt dafuer jeden `overlay:`-Namen des Auslieferungsstandes gegen BEIDE
+echten Hoerer und verlangt nur, dass EINER ihn kennt.
 
 **Nachtrag 14.08.2026 (Verzahnung):** `rekorder:bild` kam bis dahin in dieser
 Tabelle nicht vor, obwohl `content/rekorder.js` sie sendet. Sie darf aus einem
@@ -357,10 +424,34 @@ Klassisches Skript. Zeichnet auf: `click`, `dblclick`, `input`, `change` auf
 `select`, `scroll` (gedrosselt, 250 ms), `keydown` nur fuer Enter und Tab,
 Navigation, sowie automatisch erkannte Wartezeiten (DOM 500 ms ruhig).
 
-**Verbot ohne Ausnahme:** In ein Feld, das `geheim()` erfuellt (dieselbe Liste
-wie `overlay.js`), wird **kein Wert** aufgezeichnet. An seiner Stelle entsteht
+**Verbot ohne Ausnahme:** In ein Feld, das `geheim()` erfuellt, wird **kein
+Wert** aufgezeichnet. An seiner Stelle entsteht
 `{ "type": "user_input_required", "reason": "Login/2FA" }`. Der Rekorder liest
 den Wert gar nicht erst aus, er ueberschreibt ihn nicht nachtraeglich.
+
+**Nachtrag 14.08.2026 (Festlegung F4 und Befunde B5/B6), EINE Quelle fuer
+Geheimfelder.** „Dieselbe Liste wie `overlay.js`" war die Bruchstelle: Die
+Erkennung stand zweimal im Bestand, Wort fuer Wort abgeschrieben, mit dem
+Kommentar „wer eine der Listen aendert, aendert beide". Genau das ist nicht
+geschehen, und `selektor.js` hatte gar keine. Fuenf Lecks wurden gemessen,
+darunter die sechs Kaestchen eines Einmalcodes, eine Kartennummer im
+Branchenfeld `name="pan"` und ein Passwortfeld nach dem Klick aufs Auge.
+
+Ab jetzt gilt:
+
+- `src/content/geheim.js` ist ein **klassisches Skript**, schreibt nach
+  `globalThis.SMARTR_GEHEIM` und wird als **erste** Datei eingespielt, in
+  `src/net/seite.js` (Overlay-Weg, auch im Pflichtteil) UND in
+  `src/background/worker.js` (Rekorder-Weg).
+- Die Richtung ist umgedreht: Was nicht nachweislich harmlos ist, wird nicht
+  gespeichert. `GEHEIM_*` kann ausschliesslich verweigern, `HARMLOS_*`
+  ausschliesslich freigeben, und erst nachdem Bauform, Umfeld und Wertgestalt
+  den Wert schon durchgelassen haben. Eine Wortliste steht damit nicht mehr
+  ueber einer Sicherheitszusage.
+- Fehlt die Datei, wird **nicht gearbeitet**: `rekorder.js` sagt beim Start mit
+  `geheim_fehlt` ab, und `overlay.js` haelt jedes Feld fuer geheim. Lieber gar
+  nicht arbeiten als ohne diese Zusage arbeiten. Gemessen in
+  `verzahnung.test.mjs` V-i2, `rekorder.test.mjs` R35 und `overlay.test.mjs`.
 
 ### 7.3 Workflow-Format — `src/net/werkstatt.js`
 
@@ -406,6 +497,28 @@ Ausfuehrer meldet dem Agenten `workflow_step_failed` **mit** der Beschreibung de
 gesuchten Elements und dem gekuerzten Textbaum, damit der Agent selbst ein Ziel
 benennen kann. Findet er eines, wird die neue Kaskade in den Workflow
 zurueckgeschrieben — sichtbar, mit Zeitstempel im Protokollbuch.
+
+**Nachtrag 14.08.2026 (Festlegung F3), zweiter innerer Code.** Neben
+`kaskade_gebrochen` gibt es jetzt `kaskade_falsches_ziel`. Beide reisen als
+`stepError.code` innerhalb von `workflow_step_failed`; der äussere Code bleibt
+`workflow_step_failed`, damit die Werkzeugtabelle des Agenten unverändert
+bleibt.
+
+Der Unterschied ist für den Agenten wichtig genug, um zwei Namen zu tragen:
+
+- `kaskade_gebrochen` heisst, kein Anker trifft mehr. Hier hilft eine neue
+  Referenz, und genau darum bittet die Absage.
+- `kaskade_falsches_ziel` heisst, ein Anker trifft, aber etwas anderes: Der
+  Name des gefundenen Elements weicht von `schritt.beschreibung` ab. Hier ist
+  die fremde Seite umgebaut, und eine neue Referenz allein löst das nicht.
+
+Warum das ein eigener Fall sein muss: Ein Ablauf, der zuverlässig das Falsche
+trifft, ist gefährlicher als einer, der abbricht. Der Vergleich ist bewusst
+tolerant, weil `beschreibung` bei HANDGESCHRIEBENEN Abläufen aus der Werkbank
+stammt und nicht von einem Element: Eine leere Beschreibung geht durch, und
+verglichen wird in beide Richtungen mit `includes`. Ein Identitätsvergleich, der
+handgeschriebene Abläufe abbricht, wäre schlimmer als der Fund, den er
+verhindert.
 
 ---
 

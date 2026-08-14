@@ -1734,6 +1734,21 @@ Elements, die Anker und den aktuellen Textbaum, damit der Agent selbst ein Ziel
 benennen kann. Eine Absage, die nur „Schritt 4 ist gescheitert" sagt, macht aus
 einem verschobenen Knopf einen verlorenen Ablauf.
 
+**Nachtrag 14.08.2026 (Festlegung F3), `data.stepError.code`.** Der äussere Code
+bleibt in jedem Fall `workflow_step_failed`. Woran ein Schritt gescheitert ist,
+steht in `data.stepError.code`, und dort gibt es seit v3.5 zwei Kennungen für
+die Ankersuche:
+
+| `stepError.code` | Bedeutung | was dem Agenten hilft |
+|---|---|---|
+| `kaskade_gebrochen` | Kein Anker des Schrittes trifft noch ein Element | Eine neue Referenz aus dem mitgelieferten Textbaum benennen |
+| `kaskade_falsches_ziel` | Ein Anker trifft, aber ein ANDERES Element als das aufgezeichnete | Die fremde Seite ist umgebaut, der Schritt gehört neu aufgezeichnet |
+
+Warum zwei Namen und nicht einer: Bei der einen Lage hilft eine neue Referenz,
+bei der anderen nicht. Beides unter einem Namen zu melden hiesse, dem Agenten
+zwei sehr verschiedene Lagen als dieselbe zu verkaufen — und ein Ablauf, der
+zuverlässig das Falsche trifft, ist gefährlicher als einer, der abbricht.
+
 Zusätzlich kann `meta` die Warnung `injection_suspected` tragen. Sie steht
 absichtlich **nicht** im Fehler: Der Schritt hat stattgefunden, das Gelesene ist
 echt, und nur seine Herkunft ist verdächtig. Der Modus `auto` fällt dabei auf

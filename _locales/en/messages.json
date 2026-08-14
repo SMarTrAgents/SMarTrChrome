@@ -341,11 +341,26 @@
   "ext_beschreibung": {
     "message": "SMarTrAgents in your browser. The agent reads, points, clicks, types and selects, you approve every step. Never passwords."
   },
+  "ext_meldung_text": {
+    "message": "An agent is now controlling this browser. To stop it, press Alt, Shift and S."
+  },
+  "ext_meldung_text_agent": {
+    "message": "$1 is now controlling this browser. To stop it, press Alt, Shift and S."
+  },
+  "ext_meldung_titel": {
+    "message": "Cloud session active"
+  },
   "ext_name": {
     "message": "SMarTrChrome Beta"
   },
   "ext_notbremse": {
     "message": "Emergency stop, end the agent session at once"
+  },
+  "ext_symbol_sitzung": {
+    "message": "SMarTrChrome, cloud session active"
+  },
+  "ext_symbol_sitzung_agent": {
+    "message": "SMarTrChrome, cloud session active, $1 is controlling this browser"
   },
   "ext_symbol_titel": {
     "message": "SMarTrChrome, open Nobody"

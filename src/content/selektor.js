@@ -65,6 +65,19 @@
      weil sie von Menschen für genau diesen Zweck vergeben werden. */
   const DATEN_ZUERST = ["data-testid", "data-test", "data-cy"];
 
+  /* Merkmale, die die BEDEUTUNG eines Elements tragen und deshalb einen Umbau
+     des Layouts überleben.
+
+     Befund B7 vom 14.08.2026: `name` stand in keiner Kaskade. Bei
+     `<input id="input-4f3a2b9c" name="artikelnummer" class="css-9k2j1h">`
+     fielen Kennung und Klasse zu Recht als Zufall heraus, und übrig blieben
+     `input:nth-of-type(1)` und der XPath — zwei Anker, die beide nur die
+     STELLE zählen. Ein Feld davor eingeschoben, und der Ablauf tippte die
+     Artikelnummer ins Titelfeld und meldete Erfolg. Der `name` eines Feldes
+     wechselt dagegen nicht, wenn die Seite neu gebaut wird: Er steht im
+     Formular, das abgeschickt wird. */
+  const STABILE_MERKMALE = ["name", "alt"];
+
   /* Datenmerkmale, die zwar `data-` heissen, aber vom Rahmenwerk stammen und
      bei jedem Build neu gewürfelt werden. Sie sehen wie ein Anker aus und sind
      das Gegenteil davon. */
@@ -176,18 +189,48 @@
   }
 
   /**
+   * Darf dieser Text überhaupt in einen Anker?
+   *
+   * Befund B6 vom 14.08.2026: Auf einer 2FA-Seite wurde
+   * `<span class="otp-anzeige">849271</span>` zum Anker `text=849271` und
+   * `<button data-code="849271">` zum Anker `[data-code="849271"]`. Der
+   * Textanker kannte KEINERLEI Geheimprüfung, und `klasseZufaellig`
+   * überspringt reine Ziffernabschnitte ausdrücklich als Ordnungszahlen — zu
+   * Recht für `col-md-6`, verheerend für einen Einmalcode. Die Zufallsfrage
+   * und die Geheimfrage sind eben zwei Fragen; die eine schützt den Anker vor
+   * dem nächsten Build, die andere den Menschen vor seiner eigenen Ablage.
+   *
+   * Entschieden wird das in `content/geheim.js`, der einen Quelle (F4).
+   * Fehlt sie, wird nicht geraten: Dann kommt kein Text mit einer Ziffer mehr
+   * in einen Anker. Das kostet Anker, und Anker kosten weniger als ein Code
+   * in `sa_workflows`.
+   */
+  function textOffen(text) {
+    const G = globalThis.SMARTR_GEHEIM;
+    if (!G || typeof G.textHarmlos !== "function") {
+      return !/[0-9]/.test(String(text == null ? "" : text));
+    }
+    try {
+      return G.textHarmlos(text) === true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /**
    * Taugt dieser Merkmalswert als Inhalt eines Attributselektors?
    *
    * Anführungszeichen und Rückstriche fallen heraus, weil der Anker sie
    * maskieren müsste; Zeilenumbrüche, weil sie im Selektor nichts zu suchen
    * haben. Ein zufällig aussehender Wert fällt aus demselben Grund heraus wie
-   * eine Zufallsklasse.
+   * eine Zufallsklasse, ein codeförmiger aus dem Grund von Befund B6.
    */
   function wertTaugt(wert) {
     if (typeof wert !== "string") return false;
     const s = wert.trim();
     if (!s || s.length > WERT_ZEICHEN) return false;
     if (/["'\\\n\r\t]/.test(s)) return false;
+    if (!textOffen(s)) return false;
     return !klasseZufaellig(s).zufall;
   }
 
@@ -291,16 +334,20 @@
    * Anker 3 — stabiler CSS-Pfad
    * ------------------------------------------------------------------ */
 
+  /* Auch Klasse und Kennung gehen durch die Geheimprüfung. Eine Seite, die
+     ihren Einmalcode als `id="849271"` an das Feld schreibt, ist keine
+     Erfindung, sondern die naheliegende Bauart einer Kästchenreihe (Befund
+     B6, 14.08.2026). */
   function klassenVon(el) {
     return merkmal(el, "class")
       .split(/\s+/)
       .filter(Boolean)
-      .filter((k) => nameTaugt(k) && !klasseZufaellig(k).zufall);
+      .filter((k) => nameTaugt(k) && textOffen(k) && !klasseZufaellig(k).zufall);
   }
 
   function kennungTaugt(el) {
     const id = merkmal(el, "id");
-    return nameTaugt(id) && !klasseZufaellig(id).zufall ? id : "";
+    return nameTaugt(id) && textOffen(id) && !klasseZufaellig(id).zufall ? id : "";
   }
 
   /** Die Stelle unter den Geschwistern desselben Elementnamens, ab 1. */
@@ -350,11 +397,32 @@
   }
 
   /**
+   * Nennt dieser Pfad irgendein Merkmal, oder zählt er nur Stellen?
+   *
+   * Befund B7 vom 14.08.2026: `pfadBauen` durfte einen Anker aus nichts als
+   * Elementname und Stellenangabe bauen, `input:nth-of-type(1)`. Nach einer
+   * Layout-Änderung trifft der weiter GENAU EIN Element, nur ein anderes, und
+   * `kaskadeAufloesen` prüfte ausschliesslich Eindeutigkeit. Gemessen wurde:
+   * ein Feld `titel` davor eingeschoben, Antwort `ok:true`, getroffen wurde
+   * `name=titel`, und die Artikelnummer landete im Titelfeld. Der Ablauf
+   * brach nicht ab, er tippte ins falsche Feld und meldete Erfolg.
+   *
+   * Ein Anker, der nur aus Elementname und Stellenangabe besteht, ist kein
+   * Anker, sondern eine Wette. Für den XPath ist das ausdrücklich in Kauf
+   * genommen — er steht als letzter Ausweg ganz unten, und die Identität hält
+   * ab Festlegung F3 der Ausführer dagegen. Ein CSS-Pfad, der dasselbe kann,
+   * stünde dagegen WEIT OBEN in der Kaskade und verdrängte den Textanker.
+   */
+  const pfadTraegtMerkmal = (pfad) => /[#.\[]/.test(String(pfad || ""));
+
+  /**
    * Der kürzeste eindeutige Pfad, höchstens vier Ebenen tief.
    *
    * Gebaut wird von unten nach oben und nach jeder Ebene gemessen: Sobald der
-   * Pfad eindeutig ist, hört er auf. Ein kürzerer Pfad überlebt mehr Umbauten,
-   * weil er weniger fremdes Gerüst nennt.
+   * Pfad eindeutig ist UND ein Merkmal nennt, hört er auf. Ein kürzerer Pfad
+   * überlebt mehr Umbauten, weil er weniger fremdes Gerüst nennt. Ist er
+   * eindeutig, nennt aber nur Stellen, wird weiter nach oben gesucht: Eine
+   * Ebene höher steht vielleicht eine Klasse, die den Pfad trägt.
    */
   function pfadBauen(el, wurzel) {
     const eigene = kennungTaugt(el);
@@ -373,7 +441,7 @@
       }
       teile.unshift(pfadGlied(knoten));
       const jetzt = teile.join(" > ");
-      if (eindeutig(jetzt, el, wurzel)) return jetzt;
+      if (eindeutig(jetzt, el, wurzel) && pfadTraegtMerkmal(jetzt)) return jetzt;
       knoten = knoten.parentElement;
     }
     return null;
@@ -454,15 +522,39 @@
         merkenWennEindeutig(`[aria-label="${label}"]`);
       }
 
+      /* 2b. Stabile Merkmale, allen voran `name` (Befund B7, 14.08.2026).
+             Sie stehen vor dem CSS-Pfad, weil sie die Bedeutung des Elements
+             nennen und nicht seinen Platz im Gerüst: Ein `name` wandert nicht,
+             wenn die Seite neu gebaut wird, eine Stellenangabe schon. */
+      for (const name of STABILE_MERKMALE) {
+        const wert = merkmal(el, name);
+        if (!wertTaugt(wert)) continue;
+        const nackt = `[${name}="${wert}"]`;
+        /* Mit Elementname zuerst: Ein Optionsfeld und sein verstecktes
+           Gegenstück tragen denselben `name`, und der nackte Selektor träfe
+           beide. */
+        if (merkenWennEindeutig(`${tagVon(el)}${nackt}`)) continue;
+        merkenWennEindeutig(nackt);
+      }
+
       /* 3. Stabiler CSS-Pfad. */
       if (wurzel) merkenWennEindeutig(pfadBauen(el, wurzel));
 
       /* 4. Textanker. Ohne Eindeutigkeitsprüfung über `querySelectorAll` —
             er ist kein CSS. Geprüft wird mit demselben Weg, der ihn später
-            auflöst, damit Bauen und Auflösen nicht auseinanderlaufen. */
+            auflöst, damit Bauen und Auflösen nicht auseinanderlaufen.
+            Befund B6 vom 14.08.2026: Genau hier stand der Einmalcode einer
+            2FA-Seite als `text=849271`. Ein sichtbarer Text ist eben nicht
+            deshalb harmlos, weil er sichtbar ist. */
       if (!traegtInhalt(el)) {
         const text = normText(el.textContent);
-        if (text && text.length <= TEXT_ZEICHEN && wurzel && textAufloesen(text, wurzel) === el) {
+        if (
+          text &&
+          text.length <= TEXT_ZEICHEN &&
+          textOffen(text) &&
+          wurzel &&
+          textAufloesen(text, wurzel) === el
+        ) {
           merken(`text=${text}`);
         }
       }
@@ -591,7 +683,10 @@
     klasseZufaellig,
     nameTaugt,
     wertTaugt,
+    textOffen,
+    pfadTraegtMerkmal,
     traegtInhalt,
+    STABILE_MERKMALE,
     ZUFALL_REGELN,
     KASKADE_HOECHSTENS,
     TEXT_ZEICHEN,

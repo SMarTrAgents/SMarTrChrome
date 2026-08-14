@@ -30,6 +30,7 @@ import vm from "node:vm";
 import { attrappeSetzen } from "./chrome-attrappe.mjs";
 import { workflowPruefen } from "../net/werkstatt.js";
 
+const GEHEIM_QUELLE = new URL("../content/geheim.js", import.meta.url);
 const SELEKTOR_QUELLE = new URL("../content/selektor.js", import.meta.url);
 const REKORDER_QUELLE = new URL("../content/rekorder.js", import.meta.url);
 
@@ -488,6 +489,7 @@ let quellen = null;
 async function quellenLesen() {
   if (!quellen) {
     quellen = {
+      geheim: await readFile(GEHEIM_QUELLE, "utf8"),
       selektor: await readFile(SELEKTOR_QUELLE, "utf8"),
       rekorder: await readFile(REKORDER_QUELLE, "utf8"),
     };
@@ -500,12 +502,14 @@ async function quellenLesen() {
  *
  * @param {object} angaben
  * @param {boolean} angaben.ohneSelektor `selektor.js` NICHT einspielen
+ * @param {boolean} angaben.ohneGeheim `geheim.js` NICHT einspielen (F4)
  * @param {object} angaben.ablageLocal Startinhalt von chrome.storage.local
  * @param {boolean} angaben.panelHoert ob die Seitenleiste offen ist
  */
 async function starten(bauplan, angaben = {}) {
   const {
     ohneSelektor = false,
+    ohneGeheim = false,
     ablageLocal = {},
     panelHoert = true,
     url = "https://www.ebay.de/verkaufen",
@@ -563,6 +567,12 @@ async function starten(bauplan, angaben = {}) {
 
   const quelle = await quellenLesen();
   vm.createContext(sandkasten);
+  /* Die Reihenfolge des Manifests: `geheim.js` als ERSTE Datei (Festlegung F4
+     vom 14.08.2026), danach `selektor.js`, danach `rekorder.js`. */
+  if (!ohneGeheim) {
+    vm.runInContext(quelle.geheim, sandkasten, { filename: "geheim.js" });
+    assert.ok(sandkasten.SMARTR_GEHEIM, "geheim.js muss globalThis.SMARTR_GEHEIM setzen");
+  }
   if (!ohneSelektor) vm.runInContext(quelle.selektor, sandkasten, { filename: "selektor.js" });
   vm.runInContext(quelle.rekorder, sandkasten, { filename: "rekorder.js" });
 
@@ -1278,4 +1288,314 @@ test("R27: findet gar kein Anker zurück, entsteht trotzdem ein Schritt", async 
   assert.equal(schritt.selector_cascade.length, 1);
   assert.ok(schritt.selector_cascade[0].startsWith("/"), alsText(schritt.selector_cascade));
   assert.ok(schritt.beschreibung, "und die Beschreibung, an der die Selbstheilung ansetzt");
+});
+
+/* ================================================================== *
+ * R28 bis R35 — Befund B5 vom 14.08.2026: die drei gemessenen Lecks
+ *
+ * Die Erkennung war ausser `type=password` und der `cc`-Familie im
+ * `autocomplete` eine reine Wortliste. Was sie nicht kannte, las `aufEingabe`
+ * als `el.value` aus und schrieb es wörtlich in den Ablauf. Alle drei Fälle
+ * hier bestanden `workflowPruefen` und lagen danach unverschlüsselt in
+ * `sa_workflows`.
+ *
+ * Gemessen wird jedes Mal doppelt, wie in R4: einmal als Textsuche über den
+ * ganzen Ablauf, und einmal als Tatsache über den Zugriff. Ein Rekorder, der
+ * liest und danach verwirft, bliebe bei der Textsuche grün.
+ * ================================================================== */
+
+/* Leck 1: sechs Kästchen für den Einmalcode, in einem Formular, das ein
+   echtes Passwortfeld enthält. `geheimUmfeld` deckte dort nur die
+   Absendeknöpfe, also gingen die Kästchen glatt durch. */
+function kaestchen(nr) {
+  return k("input", { name: `d${nr}`, "aria-label": `Ziffer ${nr}`, maxlength: "1" }, [], `d${nr}`);
+}
+
+function einmalcodeImFormular() {
+  return k("html", {}, [
+    k("body", {}, [
+      k("form", { id: "anmeldung" }, [
+        k("input", { id: "benutzer", name: "benutzername" }, [], "benutzer"),
+        k("input", { id: "pw", name: "passwort", type: "password" }, [], "pw"),
+        k("div", { class: "kaesten" }, [1, 2, 3, 4, 5, 6].map(kaestchen)),
+        k("button", { id: "absenden", type: "submit" }, "Bestätigen", "absenden"),
+      ]),
+    ]),
+  ]);
+}
+
+/* Dieselben Kästchen auf einer reinen 2FA-Seite, ohne jedes Passwortfeld.
+   Hier trägt kein Umfeld, sondern allein die Bauform der Reihe. */
+function einmalcodeOhneFormular() {
+  return k("html", {}, [
+    k("body", {}, [
+      k("div", { class: "karte" }, [
+        k("h2", {}, "Code aus der App"),
+        k("div", { class: "kaesten" }, [1, 2, 3, 4, 5, 6].map(kaestchen)),
+        k("button", { class: "weiter" }, "Weiter", "weiter"),
+      ]),
+    ]),
+  ]);
+}
+
+const EINMALCODE = ["8", "4", "9", "2", "7", "1"];
+
+function codeTippen(u) {
+  for (let nr = 1; nr <= 6; nr++) {
+    const feld = u.finden(`d${nr}`);
+    feld.value = EINMALCODE[nr - 1];
+    u.feuern("input", { target: feld });
+  }
+}
+
+test("R28: die sechs Kästchen des Einmalcodes kommen nicht in den Ablauf", async () => {
+  const u = await starten(einmalcodeImFormular(), { url: "https://www.ebay.de/anmelden" });
+  u.fragen({ typ: "rekorder:start" });
+  codeTippen(u);
+
+  const erg = u.fragen({ typ: "rekorder:stop" });
+  const text = alsText(erg.schritte);
+
+  const eingaben = Array.from(erg.schritte).filter((s) => s.type === "input");
+  assert.deepEqual(eingaben, [], `aus den Kästchen darf kein Eingabeschritt werden: ${text}`);
+  for (let nr = 1; nr <= 6; nr++) {
+    assert.equal(u.finden(`d${nr}`).__wertGelesen, 0, `der Wert von d${nr} wurde gelesen`);
+  }
+  /* Zusammengesetzt stünde hier der ganze Code. Also auch die Ziffern einzeln
+     suchen, und zwar dort, wo sie stehen könnten. */
+  assert.ok(!text.includes('"value"'), `irgendein Wert steht im Ablauf: ${text}`);
+
+  const uebergaben = Array.from(erg.schritte).filter((s) => s.type === "user_input_required");
+  assert.equal(uebergaben.length, 1, `aus sechs Kästchen wird eine Übergabe: ${text}`);
+  assert.equal(uebergaben[0].reason, "Login/2FA");
+});
+
+test("R29: dieselben Kästchen ohne Formular und ohne Passwort auch nicht", async () => {
+  const u = await starten(einmalcodeOhneFormular(), { url: "https://www.ebay.de/2fa" });
+  u.fragen({ typ: "rekorder:start" });
+  codeTippen(u);
+
+  const erg = u.fragen({ typ: "rekorder:stop" });
+  assert.deepEqual(
+    Array.from(erg.schritte).filter((s) => s.type === "input"),
+    [],
+    `hier trägt allein die Bauform der Reihe: ${alsText(erg.schritte)}`
+  );
+
+  /* Und die Bauform ist die gemessene Regel, nicht das Ergebnis: sechs
+     Kästchen mit demselben winzigen Fassungsvermögen im selben Abschnitt. */
+  const G = u.sandkasten.SMARTR_GEHEIM;
+  assert.equal(G.zifferngruppe(u.finden("d1")), true, "eine Reihe gleichartiger Kästchen");
+  assert.equal(G.zifferngruppe(u.finden("weiter")), false, "ein Knopf ist keine Reihe");
+});
+
+test("R30: die Kartennummer im Branchenfeld `pan` kommt nicht in den Ablauf", async () => {
+  /* `pan` ist der Branchenname (Primary Account Number); Adyen und Worldpay
+     benutzen ihn. Keine Wortliste dieser Erweiterung kannte ihn, und genau
+     das ist der Punkt: Sie muss ihn auch nicht kennen. */
+  const u = await starten(
+    k("html", {}, [
+      k("body", {}, [
+        k("div", { class: "zahlung" }, [
+          k("input", { name: "pan", maxlength: "19", inputmode: "numeric" }, [], "pan"),
+          k("button", { class: "bezahlen" }, "Bezahlen", "bezahlen"),
+        ]),
+      ]),
+    ]),
+    { url: "https://www.ebay.de/kasse" }
+  );
+  u.fragen({ typ: "rekorder:start" });
+  const feld = u.finden("pan");
+  feld.value = "4111111111111111";
+  u.feuern("input", { target: feld });
+
+  const erg = u.fragen({ typ: "rekorder:stop" });
+  const text = alsText(erg.schritte);
+  assert.ok(!text.includes("4111111111111111"), `die Kartennummer steht im Ablauf: ${text}`);
+  assert.equal(feld.__wertGelesen, 0, "und sie wurde nicht einmal gelesen");
+  assert.ok(
+    Array.from(erg.schritte).some((s) => s.type === "user_input_required"),
+    text
+  );
+});
+
+test("R31: das Passwortfeld nach dem Klick aufs Auge bleibt geschützt", async () => {
+  /* Die Seite tauscht `type=password` gegen `type=text`, damit der Mensch
+     sein Passwort lesen kann. Danach war es für die alte Erkennung ein
+     gewöhnliches Textfeld, und „pw" stand in keiner Liste. */
+  const u = await starten(
+    k("html", {}, [
+      k("body", {}, [
+        k("div", { class: "anmeldemaske" }, [
+          k("input", { name: "benutzername" }, [], "benutzer"),
+          k("input", { name: "pw", type: "text" }, [], "pw"),
+          k("button", { class: "auge", "aria-label": "Anzeigen" }, "", "auge"),
+          k("button", { class: "anmelden" }, "Anmelden", "anmelden"),
+        ]),
+      ]),
+    ]),
+    { url: "https://www.ebay.de/anmelden" }
+  );
+  u.fragen({ typ: "rekorder:start" });
+  const pw = u.finden("pw");
+  pw.value = "hunter2";
+  u.feuern("input", { target: pw });
+
+  const erg = u.fragen({ typ: "rekorder:stop" });
+  const text = alsText(erg.schritte);
+  assert.ok(!text.includes("hunter2"), `das Passwort steht im Ablauf: ${text}`);
+  assert.equal(pw.__wertGelesen, 0, "und es wurde nicht einmal gelesen");
+  assert.ok(Array.from(erg.schritte).some((s) => s.type === "user_input_required"), text);
+});
+
+test("R32: was sich als gewöhnliches Feld ausweist, wird weiterhin aufgezeichnet", async () => {
+  /* Die Gegenprobe zu R28 bis R31, und sie ist die wichtigere Hälfte: Eine
+     Erkennung, die alles verschluckt, ist keine Erkennung, sondern ein
+     Ausschalter. Der Ablauf muss noch etwas taugen. */
+  const u = await starten(verkaufsseite());
+  u.fragen({ typ: "rekorder:start" });
+
+  const feld = u.finden("itemnr");
+  feld.value = "4711";
+  u.feuern("input", { target: feld });
+
+  const notiz = u.finden("notiz");
+  notiz.__inhalt.push("Zustand sehr gut");
+  u.feuern("input", { target: notiz });
+
+  const erg = u.fragen({ typ: "rekorder:stop" });
+  const eingaben = Array.from(erg.schritte).filter((s) => s.type === "input");
+  assert.equal(eingaben.length, 2, alsText(erg.schritte));
+  assert.equal(eingaben[0].value, "4711", "die Artikelnummer weist sich über ihren Namen aus");
+  assert.equal(eingaben[1].value, "Zustand sehr gut", "die Notiz über ihre Beschriftung");
+  assert.ok(feld.__wertGelesen > 0, "ein belegtes Feld wird gelesen");
+});
+
+test("R33: die Prüfziffer schlägt auch in einem belegten Feld zu", async () => {
+  /* Ein Shop, der seine Zahlungsmaske aus demselben Bauteil baut wie seine
+     Bestellmaske, nennt das Feld „bestellnummer". Der Name ist dann
+     belegt — die Luhn-Prüfziffer sagt trotzdem, was wirklich drinsteht. */
+  const u = await starten(
+    k("html", {}, [
+      k("body", {}, [
+        k("div", { class: "kasse" }, [
+          k("input", { name: "bestellnummer", "aria-label": "Bestellnummer" }, [], "feld"),
+        ]),
+      ]),
+    ])
+  );
+  u.fragen({ typ: "rekorder:start" });
+  const feld = u.finden("feld");
+  feld.value = "4111 1111 1111 1111";
+  u.feuern("input", { target: feld });
+
+  const erg = u.fragen({ typ: "rekorder:stop" });
+  const text = alsText(erg.schritte);
+  assert.ok(!text.includes("4111"), `die Kartennummer steht im Ablauf: ${text}`);
+  assert.ok(Array.from(erg.schritte).some((s) => s.type === "user_input_required"), text);
+
+  /* Und eine gewöhnliche Bestellnummer im selben Feld geht durch. */
+  u.fragen({ typ: "rekorder:start" });
+  feld.value = "17-44821";
+  u.feuern("input", { target: feld });
+  const zweiter = u.fragen({ typ: "rekorder:stop" });
+  assert.ok(alsText(zweiter.schritte).includes("17-44821"), alsText(zweiter.schritte));
+});
+
+test("R33b: ein kurzes Ziffernkästchen ist ein Code, auch mit harmlosem Namen", async () => {
+  /* Die zweite Hälfte von B5, die keine Wortliste je fangen könnte: Ein Shop,
+     der sein Bestätigungsfeld „bestellnummer" nennt, hat es trotzdem auf sechs
+     Ziffern begrenzt und `inputmode="numeric"` gesetzt. Die Bauform sagt, was
+     der Name verschweigt. */
+  const seite = (zusatz) =>
+    k("html", {}, [
+      k("body", {}, [
+        k("div", { class: "kasse" }, [
+          k("input", { name: "bestellnummer", ...zusatz }, [], "feld"),
+        ]),
+      ]),
+    ]);
+
+  const eng = await starten(seite({ maxlength: "6", inputmode: "numeric" }));
+  eng.fragen({ typ: "rekorder:start" });
+  const kasten = eng.finden("feld");
+  kasten.value = "849271";
+  eng.feuern("input", { target: kasten });
+  const erste = eng.fragen({ typ: "rekorder:stop" });
+  assert.ok(!alsText(erste.schritte).includes("849271"), alsText(erste.schritte));
+
+  /* Dasselbe Feld ohne Längenbegrenzung ist eine gewöhnliche Bestellnummer. */
+  const weit = await starten(seite({}));
+  weit.fragen({ typ: "rekorder:start" });
+  const frei = weit.finden("feld");
+  frei.value = "849271";
+  weit.feuern("input", { target: frei });
+  const zweite = weit.fragen({ typ: "rekorder:stop" });
+  assert.ok(alsText(zweite.schritte).includes("849271"), alsText(zweite.schritte));
+});
+
+test("R34: der Einmalcode wird auch nicht zur Beschreibung eines Schrittes", async () => {
+  /* Befund B6, die Hälfte, die in dieser Datei sitzt: Der Mensch klickt auf
+     die Anzeige des Codes, und die Beschreibung des Schrittes WAR der Code. */
+  const u = await starten(
+    k("html", {}, [
+      k("body", {}, [
+        k("div", { class: "karte" }, [
+          k("span", { class: "otp-anzeige" }, "849271", "anzeige"),
+          k("button", { class: "kopieren", "data-code": "849271" }, "Kopieren", "kopieren"),
+        ]),
+      ]),
+    ]),
+    { url: "https://www.ebay.de/2fa" }
+  );
+  u.fragen({ typ: "rekorder:start" });
+  u.feuern("click", { target: u.finden("anzeige") });
+  u.feuern("click", { target: u.finden("kopieren") });
+
+  const erg = u.fragen({ typ: "rekorder:stop" });
+  const text = alsText(erg.schritte);
+  assert.ok(!text.includes("849271"), `der Einmalcode steht im Ablauf: ${text}`);
+
+  /* Beide Klicks bleiben trotzdem Schritte, mit einem Anker, der trägt. */
+  const klicks = Array.from(erg.schritte).filter((s) => s.type === "click");
+  assert.equal(klicks.length, 2, text);
+  for (const klick of klicks) assert.ok(klick.selector_cascade.length >= 1, text);
+  /* Und der Knopf behält seine sprechende Beschreibung. */
+  assert.equal(klicks[1].beschreibung, "Kopieren");
+});
+
+test("R35: ohne die eine Quelle läuft gar keine Aufnahme", async () => {
+  /* Die Gegenprobe zu F4. Eine Aufnahme ohne Geheimerkennung schreibt alles
+     mit, was in einem Feld steht — lieber gar keine Aufnahme als eine, die
+     man erst hinterher liest. */
+  const u = await starten(anmeldeseite(), { ohneGeheim: true });
+  const antwort = u.fragen({ typ: "rekorder:start" });
+  assert.equal(antwort.ok, false);
+  assert.equal(antwort.fehler, "geheim_fehlt");
+  assert.ok(antwort.satz && antwort.hinweis, "eine Absage nennt Grund und Weg");
+  assert.ok(!antwort.satz.includes("—"), "Kommas statt Gedankenstrichen, der Text wird vorgelesen");
+  assert.equal(u.wirt(), null, "und es läuft auch nichts an");
+});
+
+test("R36: auch die neuen Absagen ergeben einen Ablauf, den die Werkstatt annimmt", async () => {
+  const u = await starten(einmalcodeImFormular(), { url: "https://www.ebay.de/anmelden" });
+  u.fragen({ typ: "rekorder:start" });
+  const benutzer = u.finden("benutzer");
+  benutzer.value = "julian";
+  u.feuern("input", { target: benutzer });
+  codeTippen(u);
+  u.feuern("click", { target: u.finden("absenden") });
+
+  const erg = u.fragen({ typ: "rekorder:stop" });
+  const schritte = JSON.parse(JSON.stringify(erg.schritte));
+  const geprueft = workflowPruefen({
+    id: "wf_2fa",
+    name: "Anmeldung mit Einmalcode",
+    version: 1,
+    params: [],
+    steps: schritte,
+  });
+  assert.equal(geprueft.ok, true, `${geprueft.code} — ${geprueft.satz}`);
+  assert.ok(alsText(schritte).includes("julian"), "der Benutzername gehört weiterhin hinein");
+  assert.ok(schritte.some((s) => s.type === "user_input_required"), alsText(schritte));
 });

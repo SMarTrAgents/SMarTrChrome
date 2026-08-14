@@ -53,6 +53,9 @@ const {
   laufAbbrechen,
   modusSetzen,
   modusStand,
+  rekorderBild,
+  REKORDER_BILD_ABLAGE,
+  REKORDER_BILDER_FRIST_MS,
 } = await import("../net/ausfuehrer.js");
 const { AGENTEN, MATRIX_ABLAGE } = await import("../net/matrix.js");
 const { BUCH_ABLAGE } = await import("../net/protokollbuch.js");
@@ -105,8 +108,24 @@ function seiteStandard(n) {
     case "overlay:scrollen":
       return { ok: true, scrolledBy: 810, atTop: false, atBottom: false };
     case "overlay:nachschlagen":
+      /*
+       * Befund M4 vom 14.08.2026: Diese Antwort trug die BAUFORM des Ziels
+       * nicht. `grep -rn feldtyp src/pruefung/` fand in allen 21 Prüfdateien
+       * NULL Treffer — und genau aus `marke`, `feldtyp` und `formularGeheim`
+       * liest der Klassifizierer die harten Klassen `geheim` und `datei`
+       * (§3.1). Ein Umbau von `bauformVon` in `overlay.js` wäre in keinem
+       * einzigen Prüfsatz aufgefallen: Der Weg war gebaut, geprüft war er
+       * nie. Das ist der Befund vom 11.08.2026 in seiner leisesten Gestalt —
+       * nicht eine Wache, die niemand ruft, sondern eine Wache, der niemand
+       * je etwas zu messen gibt.
+       *
+       * Deshalb tragen alle Attrappen dieser Datei die Bauform ab jetzt mit,
+       * und die harten Klassen werden durch den PRODUKTIVWEG gefahren
+       * (Abschnitt 11).
+       */
       return {
         ok: true, rolle: "button", name: "Zur Kasse",
+        marke: "button", feldtyp: "", formularGeheim: false,
         rect: { left: 10, top: 20, width: 100, height: 40 }, mitte: { x: 60, y: 40 },
       };
     case "overlay:zeiger":
@@ -142,10 +161,10 @@ const panelIstBesetzt = (n) =>
  * weiter unten. */
 const ABLAUF = {
   id: "wf_probe",
-  name: "Probe: zur Kasse",
+  name: "Probe: Angebote öffnen",
   version: 1,
   params: [],
-  steps: [{ type: "navigate", url: "https://geizhals.de/kasse", beschreibung: "zur Kasse gehen" }],
+  steps: [{ type: "navigate", url: "https://geizhals.de/angebote", beschreibung: "die Angebote öffnen" }],
 };
 
 async function laufen(rahmen, {
@@ -659,7 +678,14 @@ const VOLLSTAENDIG = {
   extract: { refs: ["e2"], snapshotEpoch: "s1.abcd" },
   waitFor: { textPresent: "Warenkorb", waitSeconds: 2 },
   screenshot: { screenshotReason: "canvas" },
-  navigate: { url: "https://geizhals.de/kasse" },
+  /* Eine HARMLOSE Zieladresse, und das ist seit dem 14.08.2026 (B1) eine
+     Bedingung und keine Geschmacksfrage: Seither wird bei `navigate` die
+     ZIELadresse klassifiziert. Stünde hier `/kasse`, trüge jeder Prüfsatz,
+     der `navigate` nur nebenbei mitlaufen lässt, plötzlich die harte Klasse
+     `zahlung` — und würde messen, dass ein Guardrail greift, statt dessen,
+     was er messen will. Die Zieladresse mit Wortlistentreffer hat ihren
+     eigenen Prüfsatz weiter unten. */
+  navigate: { url: "https://geizhals.de/angebote" },
   back: {},
   /* `workflowId` und nicht `id`: Der Befehlsrahmen trägt `id` schon als
      Kennung des Auftrags, unter der der Relay auf die Antwort wartet. Wer den
@@ -2595,10 +2621,26 @@ test("Modus: die Seite erfährt jede Änderung, aber nicht jeden Befehl", async 
 /** Eine Matrix, wie sie in `chrome.storage.local` liegt. */
 const matrixAblage = (matrix) => ({ [MATRIX_ABLAGE]: { version: 1, domains: {}, gesperrt: [], agenten: {}, ...matrix } });
 
-/** Eine Seite, deren Ziel anders heisst als „Zur Kasse". */
-function seiteMitZiel(name, rolle = "button") {
+/**
+ * Eine Seite, deren Ziel anders heisst als „Zur Kasse".
+ *
+ * `bauform` trägt die drei Angaben nach, aus denen der Klassifizierer die
+ * Bauform liest (Befund M4 vom 14.08.2026): das HTML-Element, sein
+ * `type`-Merkmal und ob sein Formular ein Geheimfeld enthält. Ohne Angabe
+ * steht dort ein gewöhnlicher Knopf.
+ */
+function seiteMitZiel(name, rolle = "button", bauform = {}) {
   return (n) => (n.typ === "overlay:nachschlagen"
-    ? { ok: true, rolle, name, rect: { left: 10, top: 20, width: 100, height: 40 }, mitte: { x: 60, y: 40 } }
+    ? {
+        ok: true,
+        rolle,
+        name,
+        marke: bauform.marke !== undefined ? bauform.marke : "button",
+        feldtyp: bauform.feldtyp !== undefined ? bauform.feldtyp : "",
+        formularGeheim: bauform.formularGeheim === true,
+        rect: { left: 10, top: 20, width: 100, height: 40 },
+        mitte: { x: 60, y: 40 },
+      }
     : seiteBedient(n));
 }
 
@@ -2989,7 +3031,7 @@ const laufRahmen = (nr, params) => ({
 test("Ablauf: der Name steht in der Frage, und der Schritt läuft wirklich", async () => {
   const { ergebnis, spur } = await laufen(laufRahmen(1), { sitzung: { ...SITZUNG, stufe: "write" } });
   const frage = freigabefrage(spur);
-  assert.ok(frage.frage.includes("Probe: zur Kasse"),
+  assert.ok(frage.frage.includes("Probe: Angebote öffnen"),
     `der Mensch muss hören, WELCHER Ablauf läuft: ${frage.frage}`);
   assert.ok(frage.frage.includes("1 Schritte") || frage.frage.includes("Schritt"), frage.frage);
 
@@ -3325,6 +3367,7 @@ const seiteEingeschleust = (n) => {
   if (n.typ === "overlay:nachschlagen") {
     return {
       ok: true, rolle: "button", name: "Absenden",
+      marke: "button", feldtyp: "", formularGeheim: false,
       rect: { left: 10, top: 20, width: 100, height: 40 }, mitte: { x: 60, y: 40 },
     };
   }
@@ -3416,4 +3459,624 @@ test("Protokollzeile: sie trägt Befehl, Zeit und Ergebnis, und der Satz bleibt 
   }
   assert.ok(zeilen.some((z) => z.ergebnis === "guardrail_blocked" && z.cmd === "click"),
     "die Ablehnung steht mit ihrem Grund in der Zeile");
+});
+
+/* ------------------------------------------------------------------ *
+ * 11. Die Abnahme vom 14.08.2026
+ *
+ * Diese Prüfsätze gehören zu neun Funden einer adversarischen Abnahme, die
+ * über einem Bestand mit 733 grünen Sätzen gemacht wurde. Kein einziger der
+ * 733 hat einen davon bemerkt, und das ist die eigentliche Lehre: Ein
+ * Prüfsatz, der auch ohne die Reparatur grün bleibt, misst nichts.
+ *
+ * Jeder hier trägt deshalb seine Gegenprobe im selben Satz, und die Gegenprobe
+ * ist nicht „es wurde gefragt", sondern „die Tat hat NICHT stattgefunden" —
+ * gemessen an der Spur, also an dem, was den Browser wirklich verlassen hat.
+ * ------------------------------------------------------------------ */
+
+/** Eine Seite, die auf eine Nachricht erst nach einer Weile antwortet. */
+function seiteZoegert(typ, ms, grund = seiteBedient) {
+  return (n) => {
+    if (n.typ === typ) return new Promise((fertig) => setTimeout(() => fertig({ ok: true }), ms));
+    return grund(n);
+  };
+}
+
+/* ---- B1: Die Zieladresse eines Ortswechsels wird klassifiziert ---- */
+
+test("B1 — navigate misst die Zieladresse, nicht die Seite, die verlassen wird", async () => {
+  /* Der Fund: `kopfJetzt = { url: adresse }` trug die Adresse, auf der der Tab
+     JETZT steht. Damit massen alle adressgestützten harten Klassen beim
+     Ortswechsel die falsche Seite. Gemessen wurde ein Ein-Klick-Kauf per GET,
+     der in der Automatik stumm auslöste: `success=true`, null Rückfragen,
+     `tabs.update` wirklich ausgeführt. */
+  const ziele = [
+    "https://geizhals.de/order/confirm?buy=1",
+    "https://geizhals.de/kasse/bezahlen",
+    "https://geizhals.de/konto/loeschen?bestaetigen=1",
+    "https://geizhals.de/download/rechnung.exe",
+  ];
+  for (const url of ziele) {
+    const { ergebnis, spur } = await laufen(
+      { id: "b1-nein", cmd: "navigate", url, reason: "Ich gehe dorthin." },
+      {
+        sitzung: AUTO,
+        tab: { ...TAB, url: "https://geizhals.de/artikel/12345" },
+        ablageSession: modusAblage(7, "auto"),
+        panel: panelSagtNein,
+      }
+    );
+    const frage = freigabefrage(spur);
+    assert.ok(frage, `in der Automatik wurde für ${url} nicht gefragt`);
+    assert.ok(frage.frage.includes("nie abschaltbar"),
+      `der Grund muss die harte Klasse nennen: ${frage.frage}`);
+    assert.equal(ergebnis.error.code, "guardrail_blocked", url);
+    assert.ok(!anDenBrowser(spur).includes("tabs.update"),
+      `${url}: der Tab wurde trotz Ablehnung bewegt`);
+  }
+
+  /* Die Gegenprobe, und sie ist hier die wichtigere: Ein harmloses Ziel läuft
+     in der Automatik weiterhin ohne Frage durch. Ohne sie wäre dieser Satz
+     auch über einer Fassung grün, die bei jedem Ortswechsel fragt — und die
+     wäre keine Automatik mehr. */
+  const harmlos = await laufen(
+    { id: "b1-ja", cmd: "navigate", url: "https://geizhals.de/angebote", reason: "Ich gehe dorthin." },
+    {
+      sitzung: AUTO,
+      tab: { ...TAB, url: "https://geizhals.de/artikel/12345" },
+      ablageSession: modusAblage(7, "auto"),
+      panel: panelSagtNein,
+    }
+  );
+  assert.ok(!freigabefrage(harmlos.spur), "ein harmloser Ortswechsel fragt in der Automatik nicht");
+  assert.equal(harmlos.ergebnis.success, true);
+  assert.ok(anDenBrowser(harmlos.spur).includes("tabs.update"), "und er findet statt");
+});
+
+test("B1 — die Herkunft wird weiter gemessen, die Reparatur nimmt keine Messung weg", async () => {
+  /* Eine fehlende Messung repariert man nicht, indem man eine andere
+     wegnimmt. Steht der Tab AUF der Kassenseite, fragt auch ein Wechsel von
+     dort weg — eine Rückfrage zu viel ist die erlaubte Richtung. */
+  const { spur } = await laufen(
+    { id: "b1-weg", cmd: "navigate", url: "https://geizhals.de/angebote", reason: "Ich gehe dorthin." },
+    {
+      sitzung: AUTO,
+      tab: { ...TAB, url: "https://geizhals.de/kasse/bezahlen" },
+      ablageSession: modusAblage(7, "auto"),
+      panel: panelSagtNein,
+    }
+  );
+  assert.ok(freigabefrage(spur), "die Herkunft wird nicht mehr gemessen");
+});
+
+test("B1 — back hat keine Zieladresse, und die zweite Wache greift nach dem Sprung", async () => {
+  /* `back` kann sein Ziel nicht kennen, und eine erfundene Zieladresse wäre
+     schlechter als keine. Geprüft wird deshalb nach dem Sprung: Landet der
+     Tab ausserhalb der Freigabe, wird dort nichts gelesen. */
+  const { ergebnis, spur } = await laufen(
+    { id: "b1-back", cmd: "back", reason: "Ich gehe zurück." },
+    {
+      sitzung: AUTO,
+      ablageSession: modusAblage(7, "auto"),
+      umleitungNach: "https://bank.example/konto",
+      panel: panelSagtJa,
+    }
+  );
+  assert.equal(ergebnis.success, false);
+  assert.equal(ergebnis.error.code, "scope_violation_local");
+  assert.ok(!anDieSeite(spur).includes("overlay:baum"),
+    "nach dem Sprung auf eine fremde Seite wurde trotzdem gelesen");
+});
+
+/* ---- B2: Die Sperrliste gilt vor UND nach dem Wechsel ---- */
+
+const GESPERRT = (...wirte) => ({ sa_workflows: [ABLAUF], ...matrixAblage({ gesperrt: wirte }) });
+
+test("B2 — ein gesperrter Wirt wird nicht betreten, auch nicht in der Automatik", async () => {
+  /* Der Fund: `regelnFuer(adresse)` mass die Adresse VOR dem Wechsel. Mit
+     `gesperrt=[bank.example]`, Tab auf geizhals.de und Modus `auto` lief
+     `navigate` nach bank.example mit `success=true` und null Rückfragen
+     durch. Vertrag §3.2, erste Zeile, verlangt für einen gesperrten Wirt in
+     JEDEM Modus eine Frage.
+
+     Die Zieladresse ist bewusst harmlos (`/uebersicht` und nicht
+     `/ueberweisung`): Gemessen werden soll die Sperrliste, nicht ein
+     Zahlungswort im Pfad. Sonst wäre dieser Satz auch über einer Fassung
+     grün, die die Sperrliste weiterhin gar nicht liest. */
+  const { ergebnis, spur } = await laufen(
+    { id: "b2-1", cmd: "navigate", url: "https://bank.example/uebersicht", reason: "Ich gehe dorthin." },
+    {
+      sitzung: { ...AUTO, modus: "domains", bereich: ["geizhals.de", "bank.example"] },
+      ablageSession: modusAblage(7, "auto"),
+      ablageLocal: GESPERRT("bank.example"),
+      panel: panelSagtNein,
+    }
+  );
+  const frage = freigabefrage(spur);
+  assert.ok(frage, "der gesperrte Zielwirt löste keine Frage aus");
+  assert.ok(frage.frage.includes("Sperrliste"), `der Mensch erfährt den Grund: ${frage.frage}`);
+  assert.equal(ergebnis.error.code, "guardrail_blocked");
+  assert.ok(!anDenBrowser(spur).includes("tabs.update"), "und betreten wurde er auch nicht");
+
+  /* Die Gegenprobe: Ohne Sperrliste läuft derselbe Wechsel in der Automatik
+     ohne Frage durch. */
+  const frei = await laufen(
+    { id: "b2-2", cmd: "navigate", url: "https://bank.example/uebersicht", reason: "Ich gehe dorthin." },
+    {
+      sitzung: { ...AUTO, modus: "domains", bereich: ["geizhals.de", "bank.example"] },
+      ablageSession: modusAblage(7, "auto"),
+      panel: panelSagtNein,
+    }
+  );
+  assert.ok(!freigabefrage(frei.spur), "ohne Sperrliste wird bei einem Ortswechsel nicht gefragt");
+  assert.ok(anDenBrowser(frei.spur).includes("tabs.update"));
+});
+
+test("B2 — wandert der Tab von selbst auf einen gesperrten Wirt, wird dort nicht gearbeitet", async () => {
+  /* Der zweite Teil des Fundes: `nachDemWechsel` prüfte nach dem Sprung nur
+     `bereichPasst` und nie noch einmal die Sperrliste. Eine Weiterleitung
+     machte damit aus einem erlaubten Ziel einen gesperrten Wirt, und danach
+     wurde dort der Rahmen aufgebaut und die Seite wahrgenommen. Gefragt hatte
+     niemand: Vor dem Wechsel stand der Tab noch woanders. */
+  const { ergebnis, spur } = await laufen(
+    { id: "b2-3", cmd: "navigate", url: "https://geizhals.de/angebote", reason: "Ich gehe dorthin." },
+    {
+      sitzung: { ...AUTO, modus: "domains", bereich: ["geizhals.de", "bank.example"] },
+      ablageSession: modusAblage(7, "auto"),
+      ablageLocal: GESPERRT("bank.example"),
+      umleitungNach: "https://bank.example/konto",
+      panel: panelSagtJa,
+    }
+  );
+  assert.equal(ergebnis.success, false);
+  assert.equal(ergebnis.error.code, "guardrail_blocked");
+  assert.ok(!anDieSeite(spur).includes("overlay:baum"),
+    "auf dem gesperrten Wirt wurde die Seite trotzdem gelesen");
+  assert.ok(!ergebnis.error.message.includes("bank.example"),
+    "und die Absage verrät nicht, wo der Tab steht");
+});
+
+test("B2 — der gesperrte Wirt, über den gefragt wurde, bleibt erlaubt", async () => {
+  /* Die Gegenprobe zur Wache, und sie hält die Zusage aus §3.2 aufrecht: Es
+     bleibt seine Bank und nicht unsere. Sagt er ja, wird gearbeitet. Ohne
+     diesen Satz wäre die Reparatur eine Sperre, und der Vertrag kennt an
+     dieser Stelle keine. */
+  const { ergebnis, spur } = await laufen(
+    { id: "b2-4", cmd: "readPage", reason: "Ich lese." },
+    {
+      sitzung: { ...AUTO, bereich: ["geizhals.de"] },
+      ablageSession: modusAblage(7, "auto"),
+      ablageLocal: GESPERRT("geizhals.de"),
+      panel: panelSagtJa,
+    }
+  );
+  assert.equal(ergebnis.success, true, "nach dem Ja wurde auf dem gesperrten Wirt nicht gearbeitet");
+  assert.ok(anDieSeite(spur).includes("overlay:baum"));
+});
+
+/* ---- B3 und B4: Nach dem Not-Aus verlässt nichts mehr die Erweiterung ---- */
+
+test("B3 — nach dem Not-Aus geht kein Klick mehr an die Seite", async () => {
+  /* Der Fund: `Promise.race` beendet das Warten, nicht den Verlierer. Die
+     Seite antwortete auf `overlay:zeiger` nicht, der Not-Aus kam, der Agent
+     bekam nach 0 ms `session_beendet` — und 16996 ms später ging
+     `overlay:klicken` doch noch raus.
+
+     Die Attrappe lässt `overlay:zeiger` nach 300 ms antworten. Ohne die
+     Reparatur läuft `tuClick` danach weiter und klickt; mit ihr endet der
+     Aufruf sofort mit `abgebrochen`, und der Riegel dahinter hält den Rest
+     an. Gemessen wird deshalb NACH diesen 300 ms. */
+  const { spur } = attrappeSetzen({
+    tab: { ...TAB },
+    seiteAntwortet: seiteZoegert("overlay:zeiger", 300),
+    panelAntwortet: panelSagtJa,
+    ablageLocal: {},
+    ablageSession: {},
+  });
+  zaehlerNeu();
+
+  const laufend = befehlAusfuehren(
+    { id: "b3-1", cmd: "click", reason: "Ich klicke.", ...VOLLSTAENDIG.click },
+    { ...SITZUNG, stufe: "write" }
+  );
+  await new Promise((r) => setTimeout(r, 60));
+  const vorher = Date.now();
+  laufAbbrechen();
+  const ergebnis = await laufend;
+  assert.ok(Date.now() - vorher < 1000, "der Not-Aus hat auf die Seite gewartet");
+  assert.equal(ergebnis.error.code, "session_beendet");
+
+  /* Und jetzt lange genug warten, dass die zögernde Seite geantwortet hätte. */
+  await new Promise((r) => setTimeout(r, 500));
+  assert.ok(!anDieSeite(spur).includes("overlay:klicken"),
+    `nach dem Not-Aus ging noch ein Klick an die Seite: ${anDieSeite(spur).join(", ")}`);
+});
+
+test("B4 — der Arbeitszeiger steht im Rennen, der Ortswechsel läuft nach dem Not-Aus nicht", async () => {
+  /* Der Fund: `arbeitsZeigerFahren` wurde VOR dem Rennen und NACH dem letzten
+     Riegel abgewartet. In diesem Fenster wirkte der Not-Aus gar nicht —
+     gemessen erreichte `session_beendet` den Agenten erst nach 42034 ms, und
+     `tabs.update` lief danach. Das betraf jeden Befehl. */
+  const { spur } = attrappeSetzen({
+    tab: { ...TAB },
+    seiteAntwortet: seiteZoegert("overlay:arbeitszeiger", 300),
+    panelAntwortet: panelSagtJa,
+    ablageLocal: {},
+    ablageSession: {},
+  });
+  zaehlerNeu();
+
+  const laufend = befehlAusfuehren(
+    { id: "b4-1", cmd: "navigate", url: "https://geizhals.de/angebote", reason: "Ich gehe dorthin." },
+    SITZUNG
+  );
+  await new Promise((r) => setTimeout(r, 60));
+  const vorher = Date.now();
+  laufAbbrechen();
+  const ergebnis = await laufend;
+  const gebraucht = Date.now() - vorher;
+
+  assert.ok(gebraucht < 250, `bis „nichts läuft mehr" vergingen ${gebraucht} ms`);
+  assert.equal(ergebnis.error.code, "session_beendet");
+
+  await new Promise((r) => setTimeout(r, 500));
+  assert.ok(!anDenBrowser(spur).includes("tabs.update"),
+    "der Tab wurde nach dem Not-Aus doch noch bewegt");
+});
+
+/* ---- H2: Schlüssel von aussen ---- */
+
+test("H2 — ein unbekannter Schrittmodus schränkt ein, statt zu erweitern", async () => {
+  /* Der Fund: `SERVER_MODUS[schrittmodus] || "manual"` über einem
+     Objektliteral. `constructor` und Verwandte liefern eine Funktion, also
+     wahr — das `|| "manual"` griff nicht. Gemessen: `schrittmodus=constructor`
+     mit lokalem `auto` ergab NULL Rückfragen beim Klick. */
+  for (const boese of ["constructor", "toString", "valueOf", "__proto__", "hasOwnProperty"]) {
+    const { ergebnis, spur } = await laufen(
+      { id: `h2-${boese}`, cmd: "click", reason: "Ich klicke.", ...VOLLSTAENDIG.click },
+      {
+        sitzung: { ...SITZUNG, stufe: "write", schrittmodus: boese },
+        seite: seiteMitZiel("Weiter"),
+        ablageSession: modusAblage(7, "auto"),
+        panel: panelSagtNein,
+      }
+    );
+    assert.ok(freigabefrage(spur), `„${boese}" liess den Klick ohne Frage durch`);
+    assert.equal(ergebnis.error.code, "user_declined", boese);
+    assert.ok(!anDieSeite(spur).includes("overlay:klicken"), `„${boese}": geklickt wurde trotzdem`);
+  }
+
+  /* Die Gegenprobe: Der ECHTE Automatikwert läuft weiterhin durch. Ohne sie
+     wäre dieser Satz auch über einer Fassung grün, die immer fragt. */
+  const echt = await laufen(
+    { id: "h2-auto", cmd: "click", reason: "Ich klicke.", ...VOLLSTAENDIG.click },
+    {
+      sitzung: { ...SITZUNG, stufe: "write", schrittmodus: "auto" },
+      seite: seiteMitZiel("Weiter"),
+      ablageSession: modusAblage(7, "auto"),
+      panel: panelSagtNein,
+    }
+  );
+  assert.ok(!freigabefrage(echt.spur), "die Automatik fragt bei einem harmlosen Klick nicht");
+  assert.equal(echt.ergebnis.success, true);
+});
+
+test("H2 — ein Befehlsname aus Object.prototype ist kein Befehl", async () => {
+  /* Dasselbe Muster an der Positivliste selbst. Dass es heute an der
+     Stufenprüfung hängenblieb, war Zufall: Eine geerbte Funktion überlebt den
+     Zahlenvergleich nicht. Zufall ist keine Prüfung. */
+  for (const boese of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
+    const { ergebnis, spur } = await laufen(
+      { id: `h2b-${boese}`, cmd: boese, reason: "Ich mache das jetzt." },
+      { sitzung: { ...SITZUNG, stufe: "write" } }
+    );
+    istErgebnisrahmen(ergebnis, `h2b-${boese}`, boese);
+    assert.equal(ergebnis.success, false, boese);
+    assert.equal(ergebnis.error.code, "not_supported", `${boese}: ${ergebnis.error.code}`);
+    assert.deepEqual(anDieSeite(spur), [], `${boese}: die Seite wurde angefasst`);
+  }
+});
+
+/* ---- M2: Der Einschleusungsfund erreicht auch ohne Seitenleiste jemanden ---- */
+
+test("M2 — ein Einschleusungsfund steht im Protokollbuch, auch bei geschlossener Seitenleiste", async () => {
+  /* Der Fund: Er ging AUSSCHLIESSLICH als Protokollzeile an die Seitenleiste.
+     Im Hintergrundbetrieb ist die zu, und dann erfuhr es niemand — im Buch
+     stand er auch nicht. Ein Schutz, dessen Auslösen niemand je erfährt, ist
+     eine Zusage ohne Zeugen. */
+  const { spur } = await laufen(
+    { id: "m2-1", cmd: "readPage", reason: "Ich lese die Seite." },
+    {
+      sitzung: { ...SITZUNG, schrittmodus: "auto" },
+      seite: seiteEingeschleust,
+      ablageSession: modusAblage(7, "auto"),
+      /* Keine Seitenleiste: `panel: null` heisst in der Attrappe, dass
+         `runtime.sendMessage` ablehnt — genau wie in Chrome. */
+      panel: null,
+    }
+  );
+  const eintraege = buchAus(spur);
+  const fund = eintraege.filter((e) => e.ergebnis === "injection_suspected");
+  assert.equal(fund.length, 1, `der Fund steht nicht im Buch: ${JSON.stringify(eintraege)}`);
+  assert.equal(fund[0].cmd, "readPage");
+  assert.ok(fund[0].url.length > 0, "und mit der Adresse, auf der er stand");
+  /* Der Fremdtext, in dem das Muster stand, gehört nicht ins Buch. */
+  const roh = JSON.stringify(eintraege);
+  assert.equal(roh.includes("Hinweis an den Assistenten"), false, roh);
+
+  /* Und der Mensch bekommt eine Meldung, die keine Seitenleiste braucht. */
+  const meldungen = spur.filter((e) => e.wohin === "notifications.create");
+  assert.equal(meldungen.length, 1, "ohne Seitenleiste erfährt der Mensch nichts");
+
+  /* Die Gegenprobe: Ohne Einschleusung steht kein solcher Eintrag im Buch und
+     es meldet sich auch nichts. Ohne sie wäre dieser Satz auch über einer
+     Fassung grün, die jeden Schritt als Verdacht ins Buch schreibt. */
+  const sauber = await laufen(
+    { id: "m2-2", cmd: "readPage", reason: "Ich lese die Seite." },
+    { sitzung: { ...SITZUNG, schrittmodus: "auto" }, ablageSession: modusAblage(7, "auto"), panel: null }
+  );
+  assert.equal(buchAus(sauber.spur).filter((e) => e.ergebnis === "injection_suspected").length, 0);
+  assert.equal(sauber.spur.filter((e) => e.wohin === "notifications.create").length, 0);
+});
+
+/* ---- M3: Der Bildvorrat einer vergessenen Aufnahme ---- */
+
+test("M3 — Bilder einer längst vergessenen Aufzeichnung werden weggeräumt", async () => {
+  /* Der Fund: `sa_rekorder_bilder` wurde ausschliesslich beim BROWSERSTART
+     geleert. Zu jedem Klick- und Auswahlschritt liegt hier ein JPEG des
+     ganzen sichtbaren Tabs; wer den Browser wochenlang offen lässt, trägt die
+     Bilder jeder Aufzeichnung dieser Wochen mit sich herum. */
+  const uralt = Date.now() - REKORDER_BILDER_FRIST_MS - 1000;
+  const { spur } = attrappeSetzen({
+    tab: { ...TAB },
+    bildDatenUrl: "data:image/jpeg;base64,QUJD",
+    ablageLocal: {
+      [REKORDER_BILD_ABLAGE]: {
+        version: 1,
+        bilder: {
+          "alt.webp": { mime: "image/jpeg", dataB64: "QUJD", zeit: uralt, nr: 1, anlass: "user_request" },
+          "frisch.webp": { mime: "image/jpeg", dataB64: "QUJD", zeit: Date.now(), nr: 2, anlass: "user_request" },
+        },
+      },
+    },
+  });
+  const antwort = await rekorderBild(7, { name: "neu.webp", nr: 3, anlass: "user_request" });
+  assert.equal(antwort.ok, true, JSON.stringify(antwort));
+
+  const vorrat = zuletztGeschrieben(spur, "local", REKORDER_BILD_ABLAGE);
+  assert.ok(vorrat && vorrat.bilder, "es wurde gar nichts geschrieben");
+  assert.equal(vorrat.bilder["alt.webp"], undefined, "das alte Bild liegt immer noch da");
+  assert.ok(vorrat.bilder["frisch.webp"], "das frische Bild wurde mit weggeräumt");
+  assert.ok(vorrat.bilder["neu.webp"], "und das neue fehlt");
+});
+
+/* ---- F3: Die Kaskade prüft Identität, nicht nur Eindeutigkeit ---- */
+
+/** Eine Seite, die eine Kaskade auflöst und dabei sagt, WAS sie gefunden hat. */
+const seiteMitKaskadenNamen = (name) => (n) => {
+  if (n.typ === "overlay:kaskade") {
+    return { ok: true, ref: "e2", epoche: "s1.abcd", name, rolle: "button", anker: "[data-testid='kasse']" };
+  }
+  return seiteBedient(n);
+};
+
+test("F3 — trifft der Anker etwas anderes als aufgezeichnet, ist das kein Erfolg", async () => {
+  /* Festlegung F3. Dass ein Anker GENAU EIN Element trifft, sagt nichts
+     darüber, ob es dasselbe Element ist wie beim Aufzeichnen: Eine fremde
+     Seite baut um, ein `[data-testid]` wandert an einen anderen Knopf, und
+     der Ablauf klickt zuverlässig das Falsche. */
+  const { ergebnis, spur } = await laufen(
+    { id: "f3-1", cmd: "run_workflow", reason: "Ich spiele den Ablauf ab.", workflowId: "wf_kasse" },
+    {
+      sitzung: { ...SITZUNG, stufe: "write" },
+      seite: seiteMitKaskadenNamen("Konto endgültig löschen"),
+      ablageLocal: { sa_workflows: [ABLAUF_KLICK] },
+      panel: panelSagtJa,
+    }
+  );
+  assert.equal(ergebnis.success, false);
+  assert.equal(ergebnis.error.code, "workflow_step_failed");
+  assert.equal(ergebnis.data.stepError.code, "kaskade_falsches_ziel",
+    `gemeldet wurde: ${JSON.stringify(ergebnis.data.stepError)}`);
+  assert.ok(!anDieSeite(spur).includes("overlay:klicken"),
+    "das falsche Element wurde trotzdem angeklickt");
+  assert.ok(!ergebnis.error.message.includes("Konto endgültig löschen"),
+    "der Fremdtext der Seite gehört nicht in den Satz für den Menschen");
+
+  /* Die Gegenprobe: Derselbe Ablauf mit dem Namen, der zur Beschreibung
+     passt, läuft. Ohne sie wäre dieser Satz auch über einer Fassung grün, die
+     jede Kaskade ablehnt — und die spielte keinen einzigen Ablauf mehr ab. */
+  const passt = await laufen(
+    { id: "f3-2", cmd: "run_workflow", reason: "Ich spiele den Ablauf ab.", workflowId: "wf_kasse" },
+    {
+      sitzung: { ...SITZUNG, stufe: "write" },
+      seite: seiteMitKaskadenNamen("Zur Kasse"),
+      ablageLocal: { sa_workflows: [ABLAUF_KLICK] },
+      panel: panelSagtJa,
+    }
+  );
+  assert.equal(passt.ergebnis.success, true, JSON.stringify(passt.ergebnis.error || {}));
+  assert.ok(anDieSeite(passt.spur).includes("overlay:klicken"));
+});
+
+test("F3 — ein Textanker der Kaskade belegt das Ziel so gut wie die Beschreibung", async () => {
+  /* Gemessen am 14.08.2026 an einem echten Ablauf: Anker `text=Jetzt kaufen`,
+     Beschreibung „den Kauf abschliessen". Der Anker VERLANGT diesen Text,
+     trifft also nachweislich das aufgezeichnete Element — ein Vergleich
+     allein gegen die Prosa des Menschen hätte den Ablauf mit „falsches Ziel"
+     abgebrochen. Eine Wache, die bei jedem zweiten richtigen Ablauf Alarm
+     schlägt, wird abgeschaltet. */
+  const ablauf = {
+    id: "wf_kauf",
+    name: "Probe: Kauf",
+    version: 1,
+    params: [],
+    steps: [{
+      type: "click",
+      selector_cascade: ["text=Jetzt kaufen"],
+      beschreibung: "den Kauf abschliessen",
+    }],
+  };
+  const { ergebnis, spur } = await laufen(
+    { id: "f3-4", cmd: "run_workflow", reason: "Ich spiele den Ablauf ab.", workflowId: "wf_kauf" },
+    {
+      sitzung: { ...SITZUNG, stufe: "write" },
+      seite: seiteMitKaskadenNamen("Jetzt kaufen"),
+      ablageLocal: { sa_workflows: [ablauf] },
+      panel: panelSagtJa,
+    }
+  );
+  assert.equal(ergebnis.success, true, JSON.stringify(ergebnis.error || {}));
+  assert.ok(anDieSeite(spur).includes("overlay:klicken"));
+
+  /* Und die Gegenprobe dazu: Trifft der Anker etwas, das WEDER zur
+     Beschreibung noch zum Textanker passt, bleibt es bei der Absage. */
+  const falsch = await laufen(
+    { id: "f3-5", cmd: "run_workflow", reason: "Ich spiele den Ablauf ab.", workflowId: "wf_kauf" },
+    {
+      sitzung: { ...SITZUNG, stufe: "write" },
+      seite: seiteMitKaskadenNamen("Konto endgültig löschen"),
+      ablageLocal: { sa_workflows: [ablauf] },
+      panel: panelSagtJa,
+    }
+  );
+  assert.equal(falsch.ergebnis.data.stepError.code, "kaskade_falsches_ziel");
+  assert.ok(!anDieSeite(falsch.spur).includes("overlay:klicken"));
+});
+
+test("F3 — ohne Namen von der Seite wird nicht verglichen, statt alles anzuhalten", async () => {
+  /* Ein Inhaltsskript älterer Fassung antwortet ohne `name`. Das darf nicht
+     dazu führen, dass gar nichts mehr läuft: Der Schritt geht ohnehin durch
+     Klassifizierer, Modus und Freigabe wie jeder andere. Die milde Richtung
+     ist hier die richtige. */
+  const { ergebnis } = await laufen(
+    { id: "f3-3", cmd: "run_workflow", reason: "Ich spiele den Ablauf ab.", workflowId: "wf_kasse" },
+    {
+      sitzung: { ...SITZUNG, stufe: "write" },
+      seite: seiteMitKaskade,
+      ablageLocal: { sa_workflows: [ABLAUF_KLICK] },
+      panel: panelSagtJa,
+    }
+  );
+  assert.equal(ergebnis.success, true, JSON.stringify(ergebnis.error || {}));
+});
+
+/* ---- F4: Eine Quelle für Geheimfelder, und sie steht zuerst ---- */
+
+test("F4 — geheim.js wird als erste Datei eingespielt, in Kür UND Pflichtteil", async () => {
+  /* Festlegung F4. `overlay.js` und `rekorder.js` trugen je eine eigene
+     Abschrift derselben Geheimfeld-Erkennung; hier hinge an einer Abweichung,
+     ob ein Passwort mitgeschrieben wird. Gemessen wird die Reihenfolge am
+     wirklichen Aufruf an `chrome.scripting`, nicht am Quelltext. */
+  let gepingt = 0;
+  const seiteOhneOverlay = (n) => {
+    if (n.typ === "overlay:ping") {
+      gepingt += 1;
+      return gepingt === 1 ? { ok: false } : { ok: true };
+    }
+    return seiteBedient(n);
+  };
+  const { spur } = await laufen(
+    { id: "f4-1", cmd: "readPage", reason: "Ich lese." },
+    { seite: seiteOhneOverlay }
+  );
+  const eingespielt = spur.filter((e) => e.wohin === "executeScript").map((e) => e.auftrag.files);
+  assert.ok(eingespielt.length > 0, "es wurde gar nicht eingespielt");
+  for (const dateien of eingespielt) {
+    assert.equal(dateien[0], "src/content/geheim.js",
+      `zuerst eingespielt wurde ${dateien[0]} statt geheim.js`);
+  }
+});
+
+/* ---- M4: Die Bauform des Ziels, durch den Produktivweg gemessen ---- */
+
+/*
+ * Befund M4 vom 14.08.2026: `grep -rn feldtyp src/pruefung/` fand in allen 21
+ * Prüfdateien null Treffer. Die Attrappe für `overlay:nachschlagen` lieferte
+ * die Bauform gar nicht — und aus ihr liest der Klassifizierer die harten
+ * Klassen `geheim` und `datei`. Ein Umbau von `bauformVon` in `overlay.js`
+ * wäre in keinem einzigen Prüfsatz aufgefallen.
+ *
+ * Deshalb steht hier nicht ein Aufruf von `klassenBestimmen`, sondern der
+ * ganze Weg: Rahmen rein, Attrappe der Seite, Modus `auto` am Browser UND am
+ * Server, und gemessen wird an der Spur, ob gefragt wurde und ob die Tat
+ * stattgefunden hat.
+ */
+const BAUFORM_FAELLE = [
+  {
+    name: "ein Passwortfeld",
+    cmd: "type",
+    zusatz: { ref: "e2", snapshotEpoch: "s1.abcd", text: "geheim123" },
+    ziel: ["Weiter", "textbox", { marke: "input", feldtyp: "password" }],
+    tat: "overlay:tippen",
+    klasse: "geheim",
+  },
+  {
+    name: "ein Formular mit einem Geheimfeld",
+    cmd: "click",
+    zusatz: { ref: "e2", snapshotEpoch: "s1.abcd" },
+    ziel: ["Weiter", "button", { marke: "button", formularGeheim: true }],
+    tat: "overlay:klicken",
+    klasse: "geheim",
+  },
+  {
+    name: "ein Dateifeld",
+    cmd: "click",
+    zusatz: { ref: "e2", snapshotEpoch: "s1.abcd" },
+    ziel: ["Weiter", "button", { marke: "input", feldtyp: "file" }],
+    tat: "overlay:klicken",
+    klasse: "datei",
+  },
+];
+
+test("M4 — die Bauform des Ziels löst die harte Klasse aus, auch in der Automatik", async () => {
+  for (const fall of BAUFORM_FAELLE) {
+    const { ergebnis, spur } = await laufen(
+      { id: `m4-${fall.klasse}-${fall.cmd}`, cmd: fall.cmd, reason: "Ich mache das jetzt.", ...fall.zusatz },
+      {
+        sitzung: AUTO,
+        seite: seiteMitZiel(...fall.ziel),
+        ablageSession: modusAblage(7, "auto"),
+        panel: panelSagtNein,
+      }
+    );
+    const frage = freigabefrage(spur);
+    assert.ok(frage, `${fall.name}: in der Automatik wurde nicht gefragt`);
+    assert.ok(frage.frage.includes("nie abschaltbar"), `${fall.name}: ${frage.frage}`);
+    assert.equal(ergebnis.error.code, "guardrail_blocked", fall.name);
+    assert.ok(!anDieSeite(spur).includes(fall.tat), `${fall.name}: die Tat fand trotzdem statt`);
+  }
+
+  /* Die Gegenprobe im selben Satz: DASSELBE Ziel ohne die Bauform läuft in der
+     Automatik durch. Ohne sie wäre dieser Prüfsatz auch über einer Fassung
+     grün, die `bauformVon` gar nicht mehr liest und schlicht immer fragt. */
+  for (const fall of BAUFORM_FAELLE) {
+    const { ergebnis, spur } = await laufen(
+      { id: `m4-frei-${fall.klasse}-${fall.cmd}`, cmd: fall.cmd, reason: "Ich mache das jetzt.", ...fall.zusatz },
+      {
+        sitzung: AUTO,
+        seite: seiteMitZiel("Weiter", fall.ziel[1]),
+        ablageSession: modusAblage(7, "auto"),
+        panel: panelSagtNein,
+      }
+    );
+    assert.ok(!freigabefrage(spur), `${fall.name}: ohne Bauform wurde trotzdem gefragt`);
+    assert.equal(ergebnis.success, true, `${fall.name}: ohne Bauform lief der Schritt nicht`);
+    assert.ok(anDieSeite(spur).includes(fall.tat), `${fall.name}: und er fand nicht statt`);
+  }
+});
+
+test("M4 — eine Seite, die die Bauform gar nicht meldet, fällt milder aus und nicht strenger", async () => {
+  /* Die drei Angaben sind freiwillig: Ein Inhaltsskript älterer Fassung
+     antwortet ohne sie. Dann fehlt die Klasse — das ist die richtige
+     Richtung, denn eine erfundene Bauform wäre eine Behauptung über eine
+     Prüfung, die nie gelaufen ist. */
+  const ohneBauform = (n) => (n.typ === "overlay:nachschlagen"
+    ? { ok: true, rolle: "textbox", name: "Weiter", rect: { left: 1, top: 1, width: 9, height: 9 }, mitte: { x: 5, y: 5 } }
+    : seiteBedient(n));
+  const { ergebnis } = await laufen(
+    { id: "m4-alt", cmd: "type", reason: "Ich tippe.", ref: "e2", snapshotEpoch: "s1.abcd", text: "hallo" },
+    { sitzung: AUTO, seite: ohneBauform, ablageSession: modusAblage(7, "auto"), panel: panelSagtNein }
+  );
+  assert.equal(ergebnis.success, true, "eine alte Seite blockiert die Sitzung nicht");
 });

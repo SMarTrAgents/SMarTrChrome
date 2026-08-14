@@ -106,8 +106,9 @@ export const WERKBANK_STIL = `
 .sa-wb-feld { display: flex; flex-direction: column; gap: 2px; }
 .sa-wb-schritte { list-style: none; margin: 0; padding: 0;
   display: flex; flex-direction: column; gap: 4px; }
-.sa-wb-schritt { display: flex; align-items: baseline; gap: 6px; }
+.sa-wb-schritt { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
 .sa-wb-schritt-text { flex: 1 1 10ch; overflow: hidden; text-overflow: ellipsis; }
+.sa-wb-wert { flex: 1 1 12ch; min-width: 8ch; font-family: monospace; }
 .sa-wb-gitter { display: flex; flex-wrap: wrap; gap: 10px; }
 .sa-wb-schalter { display: inline-flex; align-items: center; gap: 4px; }
 .sa-buch { list-style: none; margin: 0; padding: 0;
@@ -348,6 +349,56 @@ export function platzhalterSetzen(wf, namen) {
       `Hoechstens ${GRENZEN.workflowParams} Platzhalter je Ablauf.`);
   }
   return workflowPruefen({ ...geprueft.workflow, params });
+}
+
+/**
+ * Welches Feld eines Schrittes ein Mensch parametrisieren darf, oder null.
+ *
+ * Befund Abnahme 14.08.2026 (M9): Der Mensch konnte Platzhalter-NAMEN anlegen
+ * und Schritte verschieben oder löschen, aber den aufgezeichneten Wert
+ * `1234567890` nirgends durch `{{artikelnummer}}` ersetzen. Damit war die
+ * Parametrisierung aus Feature 3 gebaut und für einen Menschen nicht
+ * erreichbar, also derselbe Befund wie am 11.08.2026 in neuer Gestalt.
+ *
+ * Eine Positivliste und keine Sperrliste: Was hier nicht steht, bekommt kein
+ * Eingabefeld. Ein Anker (`selector_cascade`) steht ausdrücklich NICHT darin,
+ * er ist die Kaskade aus §7.1, und sie von Hand zu tippen wäre kein
+ * Parametrisieren, sondern ein zweiter Weg, einen Ablauf auf ein Element zu
+ * richten, das niemand aufgezeichnet hat.
+ */
+export function wertFeld(schritt) {
+  if (!schritt || typeof schritt !== "object") return null;
+  if (schritt.type === "input") return "value";
+  /* `select` kennt drei Wege (value, label, index) und genau einer gilt je
+     Schritt. Angeboten wird nur der, der wirklich dasteht. */
+  if (schritt.type === "select" && typeof schritt.value === "string") return "value";
+  if (schritt.type === "navigate") return "url";
+  return null;
+}
+
+/**
+ * Den Wert eines Schrittes setzen, zum Beispiel auf `{{artikelnummer}}`.
+ *
+ * Geprüft wird hier nichts: Das Ergebnis geht durch `workflowPruefen`, und die
+ * lehnt einen Platzhalter, den `params` nicht kennt, mit `platzhalter_unbekannt`
+ * ab. Genau so soll es sein, der Ablauf tippte den Platzhalter sonst wörtlich
+ * in ein Formular, und das fällt erst beim zwanzigsten Abspielen auf.
+ */
+export function wertSetzen(wf, index, wert) {
+  const geprueft = workflowPruefen(wf);
+  if (!geprueft.ok) return geprueft;
+  const steps = [...geprueft.workflow.steps];
+  if (!Number.isInteger(index) || index < 0 || index >= steps.length) {
+    return absage("schritt_nicht_da", "Diesen Schritt gibt es in dem Ablauf nicht.",
+      "Die Liste ist inzwischen eine andere, sieh sie dir noch einmal an.");
+  }
+  const feld = wertFeld(steps[index]);
+  if (!feld) {
+    return absage("schritt_ohne_wert", "Dieser Schritt hat keinen Wert, den ich ersetzen kann.",
+      "Werte gibt es beim Eintippen, beim Auswählen und bei einer Adresse.");
+  }
+  steps[index] = { ...steps[index], [feld]: String(wert ?? "") };
+  return workflowPruefen({ ...geprueft.workflow, steps });
 }
 
 /**
@@ -726,6 +777,25 @@ export function aufbauen(wurzel, dienste = {}) {
       const zeile = neu("li", "sa-wb-schritt");
       zeile.appendChild(neu("span", "sa-wb-schritt-nr", `${i + 1}.`));
       zeile.appendChild(neu("span", "sa-wb-schritt-text", schrittSatz(schritt)));
+      /*
+       * Der aufgezeichnete Wert, und zwar aenderbar (Befund 14.08.2026, M9).
+       *
+       * Ohne dieses Feld gibt es keinen Weg vom Menschen zu `{{artikelnummer}}`:
+       * Der Rekorder schreibt `1234567890` auf, und danach war Schluss. Das
+       * Feld trägt keinen eigenen Sprachschlüssel, sondern den Satz des
+       * Schrittes als Namen, er sagt, WELCHER Schritt hier seinen Wert
+       * bekommt, und in einer Liste von zwanzig Zeilen ist das die einzige
+       * Auskunft, die zählt. `schrittSatz` trägt selbst keinen Schlüssel
+       * (Bestand), ein eigener hier wäre eine zweite Fassung derselben Zeile.
+       */
+      const feld = wertFeld(schritt);
+      if (feld) {
+        const wertEingabe = neu("input", "sa-wb-wert");
+        wertEingabe.value = String(schritt[feld] ?? "");
+        wertEingabe.setAttribute("aria-label", schrittSatz(schritt));
+        wertEingabe.addEventListener("change", () => wertGeaendert(wf.id, i, wertEingabe.value));
+        zeile.appendChild(wertEingabe);
+      }
       if (i > 0) {
         zeile.appendChild(
           knopfBauen(neu, "sa-wb-hoch", "werkbank_hoch", "Nach oben", () => verschieben(wf.id, i, "hoch"))
@@ -773,6 +843,28 @@ export function aufbauen(wurzel, dienste = {}) {
     if (!wf) return sagen("werkbank_weg", "Diesen Ablauf gibt es nicht mehr.", true);
     const gebaut = schrittVerschieben(wf, i, richtung);
     if (!gebaut.ok) return absageSagen(gebaut);
+    return sichern(gebaut.workflow);
+  }
+
+  /*
+   * Ein geaenderter Wert.
+   *
+   * Fällt er durch, etwa `{{gutschein}}`, während der Ablauf nur
+   * `artikelnummer` kennt, wird NICHTS gespeichert, und der Satz aus
+   * `werkstatt.js` steht wörtlich da. Er nennt beim Namen, was fehlt; ein
+   * allgemeiner Ersatzsatz wüsste das nicht. Die Ansicht wird danach neu
+   * gezeichnet, damit im Feld wieder der Wert steht, der WIRKLICH gespeichert
+   * ist, und nicht der abgelehnte.
+   */
+  async function wertGeaendert(id, i, wert) {
+    const wf = holen(id);
+    if (!wf) return sagen("werkbank_weg", "Diesen Ablauf gibt es nicht mehr.", true);
+    const gebaut = wertSetzen(wf, i, wert);
+    if (!gebaut.ok) {
+      absageSagen(gebaut);
+      werkstattZeichnen();
+      return gebaut;
+    }
     return sichern(gebaut.workflow);
   }
 

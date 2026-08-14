@@ -32,7 +32,8 @@ import { alteRechteAufraeumen } from "../net/rechte.js";
 import { overlaySicherstellen, anSeite } from "../net/seite.js";
 import { CLOUD_URSPRUNG } from "../net/dienste.js";
 import { MODI, MODUS_STANDARD, MODUS_ABLAGE, GRENZEN } from "../net/befehle.js";
-import { REKORDER_ABLAGE } from "../net/werkstatt.js";
+import { REKORDER_ABLAGE, REKORDER_TAB_ABLAGE } from "../net/werkstatt.js";
+import { AGENTEN } from "../net/matrix.js";
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.sidePanel
@@ -73,6 +74,9 @@ async function aufzeichnungAufraeumen() {
   } catch (_) {
     /* Ohne Ablage gibt es auch keinen Rest. */
   }
+  /* Und die Tabnummer dazu. Sie gehört zu genau dieser Aufzeichnung; nach einem
+     Browserstart zeigt sie auf einen Tab, den es so nicht mehr gibt. */
+  await aufnahmeTabVergessen();
   await ausfuehrer.rekorderBilderLeeren().catch(() => {});
 }
 
@@ -230,7 +234,17 @@ const ABSAGE_ABSENDER = Object.freeze({
  * `selektor.js` schreibt nach `globalThis.SMARTR_SELEKTOR` und muss vor
  * `rekorder.js` laufen.
  */
-const REKORDER_DATEIEN = ["src/content/selektor.js", "src/content/rekorder.js"];
+/* `geheim.js` steht ganz vorn (Festlegung F4 vom 14.08.2026). Ohne sie sagt
+   `rekorder.js` beim Start `geheim_fehlt` ab und der Teach-Modus läuft gar
+   nicht — das ist gewollt: Eine Aufnahme ohne Geheimerkennung schriebe
+   Passwörter mit. Befund vom 14.08.2026: Die Datei fehlte hier, während
+   `net/seite.js` sie schon führte, und der Teach-Modus war damit im Betrieb
+   tot. Gemessen in rekorder.test.mjs R35 und in bruecke.test.mjs. */
+const REKORDER_DATEIEN = [
+  "src/content/geheim.js",
+  "src/content/selektor.js",
+  "src/content/rekorder.js",
+];
 
 async function rekorderSenden(tabId, nachricht) {
   if (!Number.isInteger(tabId)) return { ok: false, fehler: "tab_unbekannt" };
@@ -252,6 +266,194 @@ async function rekorderSenden(tabId, nachricht) {
   return anSeite(tabId, nachricht, 4000);
 }
 
+/* ------------------------------------------------------------------ *
+ * Die Aufzeichnung überlebt den Seitenwechsel (Befund H6 vom 14.08.2026)
+ *
+ * Bis hierher war `rekorderSenden` an genau EINER Stelle gerufen, nämlich für
+ * `rekorder:start` und `rekorder:stop`. Damit hing die ganze Wiederaufnahme aus
+ * `sa_rekorder` an einer Funktion, die im Produktivweg nie an die Reihe kam.
+ *
+ * Was das gekostet hat: Ein Ablauf wie das Neueinstellen bei eBay führt über
+ * mehrere Seiten. Beim ersten Wechsel stirbt das Inhaltsskript — ab da wurde
+ * NICHTS mehr aufgezeichnet und auch kein `navigate`-Schritt gesetzt. Beim
+ * Druck auf Beenden kamen die alten Schritte zurück und dahinter EIN `navigate`
+ * auf die Endadresse; alles Dazwischenliegende fehlte lautlos. Der Prüfsatz R17
+ * war grün, weil er die Neueinspielung selbst vornahm. Das ist wörtlich der
+ * Befund vom 11.08.2026 in anderer Gestalt: eine gemessene Funktion, die im
+ * Auslieferungsstand niemand ruft.
+ *
+ * Deshalb hängt sie jetzt an `chrome.tabs.onUpdated`, dem Ereignis, das ein
+ * Seitenwechsel wirklich auslöst. Zwei Bedingungen, und sie sind beide Zusagen:
+ *
+ *   1. NUR solange eine Aufzeichnung läuft. `sa_rekorder` ist die Wahrheit
+ *      darüber, nicht ein Merker im Modul — den verliert MV3 im Leerlauf.
+ *      Eine Erweiterung, die nach jedem Seitenwechsel einen Mitschreiber
+ *      einspielt, wäre ein Mitschnitt, um den niemand gebeten hat.
+ *   2. Eingespielt wird in den Tab, den Chrome nennt. Der Aufzeichner nimmt
+ *      seine Schritte danach selbst aus der Ablage wieder auf und setzt den
+ *      `navigate`-Schritt im NEUEN Dokument; im alten war er beim Verlassen
+ *      schon nicht mehr da.
+ * ------------------------------------------------------------------ */
+
+/** Läuft gerade eine Aufzeichnung? Gemessen an der Ablage, nicht geraten. */
+async function aufzeichnungLaeuft() {
+  try {
+    const daten = await chrome.storage.local.get(REKORDER_ABLAGE);
+    const stand = daten && daten[REKORDER_ABLAGE];
+    return !!(stand && stand.laeuft === true);
+  } catch (_) {
+    /* Ohne lesbare Ablage gilt die vorsichtige Antwort: nichts einspielen. */
+    return false;
+  }
+}
+
+/*
+ * In WELCHEM Tab die laufende Aufzeichnung begonnen hat.
+ *
+ * Warum dafür ein eigener Schlüssel nötig ist: `sa_rekorder` trägt Schritte und
+ * Bildnummer, aber keinen Tab — und `content/rekorder.js` nimmt eine gemerkte
+ * Aufzeichnung in JEDEM Dokument wieder auf, in das es eingespielt wird. Ohne
+ * diese Zeile würde die Neueinspielung aus H6 in jedem Tab greifen, in dem
+ * gerade eine Seite lädt. Aus einer Reparatur würde ein Mitschnitt, und der
+ * Mensch hätte in seinem Ablauf Schritte von Seiten, die er nebenbei geöffnet
+ * hat.
+ *
+ * `session` und nicht `local`: Eine Tabnummer bedeutet nur etwas, solange
+ * dieser Browser läuft. Nach einem Neustart sind die Nummern neu vergeben, und
+ * die Aufzeichnung selbst räumt `onStartup` ohnehin weg.
+ */
+/* Der Schlüssel steht seit dem 14.08.2026 in `net/werkstatt.js` neben
+   `REKORDER_ABLAGE` und nicht mehr als Literal hier: Zwei Ablagen einer
+   Aufzeichnung an zwei Stellen benannt, das ist genau die Bauform, an der
+   `sa_modus` schon einmal zwei Bedeutungen bekommen hat. */
+
+async function aufnahmeTabMerken(tabId) {
+  try {
+    if (Number.isInteger(tabId)) await chrome.storage.session.set({ [REKORDER_TAB_ABLAGE]: tabId });
+  } catch (_) {
+    /* Ohne Ablage bleibt die Aufzeichnung auf das Dokument beschränkt, in dem
+       sie begonnen hat. Das ist der Zustand vor dem 14.08.2026, also weniger,
+       nie mehr. */
+  }
+}
+
+async function aufnahmeTabVergessen() {
+  try {
+    await chrome.storage.session.remove(REKORDER_TAB_ABLAGE);
+  } catch (_) {
+    /* Kein Eintrag, nichts zu vergessen. */
+  }
+}
+
+async function aufnahmeTab() {
+  try {
+    const daten = await chrome.storage.session.get(REKORDER_TAB_ABLAGE);
+    const tabId = daten && daten[REKORDER_TAB_ABLAGE];
+    return Number.isInteger(tabId) ? tabId : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Nach einem Seitenwechsel den Aufzeichner nachziehen.
+ *
+ * @returns {Promise<{ok:boolean, grund?:string, schonDa?:boolean}>}
+ *
+ * Wirft nie. Gefragt wird zuerst mit `rekorder:ping`; antwortet dort schon
+ * einer, ist nichts zu tun. `overlay.js` gibt alles mit dem Präfix `rekorder:`
+ * ausdrücklich frei, es kann diese Frage also nicht fälschlich bejahen.
+ */
+async function rekorderNachziehen(tabId) {
+  if (!Number.isInteger(tabId)) return { ok: false, grund: "tab_unbekannt" };
+  if (!(await aufzeichnungLaeuft())) return { ok: false, grund: "keine_aufnahme" };
+  /* Nur in den Tab, in dem der Mensch die Aufzeichnung gestartet hat. Alles
+     andere wäre ein Mitschnitt fremder Seiten, siehe `REKORDER_TAB_ABLAGE`. */
+  if ((await aufnahmeTab()) !== tabId) return { ok: false, grund: "anderer_tab" };
+
+  const lage = await rekorderSenden(tabId, { typ: "rekorder:ping" });
+  if (!lage.ok) return { ok: false, grund: lage.fehler || "kein_empfaenger" };
+  return { ok: true, schonDa: lage.antwort && lage.antwort.laeuft === true };
+}
+
+/*
+ * Der Anschluss an den Produktivweg — die Zeile, an der H6 hängt.
+ *
+ * `status: "loading"` und nicht erst `complete`: Ein Klick eine halbe Sekunde
+ * nach dem Seitenaufbau gehört noch zum Ablauf, und bis `complete` vergehen auf
+ * einer beladenen Seite mehrere Sekunden. Ein zweites Einspielen ist harmlos,
+ * `rekorder.js` bricht an seinem eigenen Riegel `__smartrchromeRekorder` ab.
+ */
+chrome.tabs.onUpdated.addListener((tabId, aenderung) => {
+  if (!aenderung || aenderung.status !== "loading") return;
+  rekorderNachziehen(tabId).catch(() => {});
+});
+
+/* ------------------------------------------------------------------ *
+ * Der Not-Aus, alle drei Eingänge (Vertrag v3.5 §5, Festlegung F2)
+ *
+ * Befund B9 vom 14.08.2026, gemessen am echten Nachrichtenhörer und nicht
+ * vermutet: Die drei Eingänge — Schild und Esc Esc aus dem Tab, Stoppknopf der
+ * Seitenleiste, Tastenkürzel — riefen ausschliesslich `link.trennen`. Damit war
+ * die HALBE Zusage gebaut, und zwar die lokale Hälfte:
+ *
+ *   - Nach `{typ:"notbremse", quelle:"schild"}` lief der Cloud-Auftrag weiter.
+ *     Drei weitere Abfragen auf `/chat/poll/…` bei +1503, +3504 und +5506 ms,
+ *     `/chat/cancel` null Mal, `chatZustand()` meldete weiter `{laeuft:true}`.
+ *   - Verschärfend: Der Wecker `smartrchat-wache` und der Schlüssel `chat_lauf`
+ *     überlebten den Not-Aus. `chat.wacheLaufen` nahm das Abholen nach einem
+ *     Neustart des Dienstarbeiters WIEDER AUF. Ein Not-Aus, den ein Wecker
+ *     rückgängig macht, ist keiner.
+ *   - Und das Zeichen im Tab hing allein an der Seitenleiste. War sie zu, sah
+ *     der Mensch im Tab nichts davon, dass gestoppt wurde.
+ *
+ * Ab jetzt geht jeder der drei Wege durch diese eine Funktion. Die Reihenfolge
+ * darin ist ihr ganzer Sinn: erst kappen, dann melden. `link.trennen` ruft
+ * `laufAbbrechen()` synchron, noch vor seinem ersten `await`, und
+ * `chat.chatAbbrechen()` bricht den Botengang ebenso sofort ab und räumt Wecker
+ * und Ablage weg. Zwischen dem Ereignis und dem Zustand „nichts läuft mehr"
+ * liegt keine Netzrunde.
+ * ------------------------------------------------------------------ */
+
+async function notbremseAusloesen(quelle, ausTab = null) {
+  /* Die Ziele ZUERST und ohne `await`: `link.trennen` räumt die Sitzung gleich
+     weg, und danach wüsste niemand mehr, welcher Tab gemeint war. */
+  const ziele = new Set();
+  if (Number.isInteger(ausTab)) ziele.add(ausTab);
+  const ausSitzung = link.sitzungTabId();
+  if (Number.isInteger(ausSitzung)) ziele.add(ausSitzung);
+
+  /* 1. Die Browsersteuerung. Synchron gekappt, ohne auf den Relay zu warten. */
+  link.trennen("notbremse").catch(() => {});
+
+  /* 2. Die Cloud-Hälfte derselben Zusage: laufender Botengang abgebrochen,
+        Auftrag beim Server gestoppt, Wecker und `chat_lauf` weggeräumt. Ohne
+        diesen Aufruf holt der Wecker die Antwort nach dem nächsten Start des
+        Dienstarbeiters weiter ab. */
+  const cloud = chat.chatAbbrechen().catch(() => ({ ok: false }));
+
+  /* 3. Das Zeichen im Tab, von hier aus und nicht aus der Seitenleiste. Sie
+        darf es zusätzlich tun, sie ist aber nicht mehr der einzige Weg — ein
+        Not-Aus, den man nur bei offener Seitenleiste sieht, ist für jemanden
+        mit geschlossener Leiste unsichtbar. */
+  const imTab = Promise.all(
+    [...ziele].map((tabId) => anSeite(tabId, { typ: "overlay:gestoppt" }, 2000))
+  );
+
+  /* 4. Und die Seitenleiste, falls eine offen ist. Ist sie zu, geht die
+        Nachricht ins Leere; das ist kein Fehler. */
+  chrome.runtime
+    .sendMessage({
+      typ: "notbremse:an-panel",
+      quelle,
+      tabId: Number.isInteger(ausTab) ? ausTab : null,
+    })
+    .catch(() => {});
+
+  const [, zeichen] = await Promise.all([cloud, imTab]);
+  return { ok: true, tabs: [...ziele], gestoppt: zeichen.filter((z) => z.ok).length };
+}
+
 /*
  * Einen gespeicherten Ablauf abspielen (§7.3).
  *
@@ -264,6 +466,17 @@ async function rekorderSenden(tabId, nachricht) {
  * Einen `agent` trägt dieser Rahmen NICHT. Hier steuert kein Agent, hier hat
  * ein Mensch auf „Abspielen" gedrückt, und ein erfundener Agentenname stünde
  * hinterher im Protokollbuch als Tatsache.
+ *
+ * Befund M11 vom 14.08.2026: Ohne Verbindung reichte diese Stelle `{}` weiter
+ * und gab die Antwort der Befehlsschleife zurück, „Die Browsersitzung ist
+ * beendet". Der Satz sprach von einer Sitzung, die es nie gegeben hatte, und
+ * der Knopf konnte in dieser Lage baulich nie etwas tun. Der Vertrag lässt zwei
+ * Wege zu: wirklich abspielen oder vorher ehrlich sagen, was fehlt. Gebaut ist
+ * der zweite — er sagt es VOR dem Versuch und nennt den Weg dorthin.
+ *
+ * Eine zweite Tür ist das ausdrücklich nicht: Diese Prüfung erlaubt nichts, sie
+ * sagt nur früher ab. Was durchkommt, geht unverändert durch dieselbe
+ * Befehlsschleife wie ein Agentenbefehl.
  */
 async function ablaufSpielen(id, params) {
   const kennung = typeof id === "string" ? id : "";
@@ -276,6 +489,16 @@ async function ablaufSpielen(id, params) {
   }
 
   const sitzung = await link.zustand();
+  if (!sitzung || !sitzung.verbunden) {
+    return {
+      ok: false,
+      kennung: "keine_sitzung",
+      klartext:
+        "Zum Abspielen brauche ich eine Verbindung zu dem Tab, auf dem der Ablauf laufen soll. Öffne die Seite, verbinde dich mit dem Tab, dann spiele ich ihn ab.",
+      daten: null,
+    };
+  }
+
   const ergebnis = await ausfuehrer.befehlAusfuehren(
     {
       /* Die Kennung des Ablaufs ist zugleich die Kennung dieses Laufes. Der
@@ -288,7 +511,7 @@ async function ablaufSpielen(id, params) {
       reason: `Ich spiele den gespeicherten Ablauf ${kennung} ab.`,
       params: params && typeof params === "object" && !Array.isArray(params) ? params : {},
     },
-    sitzung && sitzung.verbunden ? sitzung : {}
+    sitzung
   );
 
   return {
@@ -315,13 +538,10 @@ chrome.runtime.onMessage.addListener((n, absender, antwort) => {
   }
 
   if (n.typ === "notbremse") {
-    /* Kommt aus der Seite (Esc Esc). Die Seitenleiste entscheidet, was das
-       für die Anzeige bedeutet — die Verbindung wird hier sofort gekappt,
-       ohne auf sie zu warten. */
-    link.trennen("notbremse").catch(() => {});
-    chrome.runtime
-      .sendMessage({ typ: "notbremse:an-panel", quelle: n.quelle, tabId: absender?.tab?.id })
-      .catch(() => {});
+    /* Kommt aus der Seite: Esc Esc oder der Stoppknopf im Schild. Gekappt wird
+       sofort, in derselben Runde — die Antwort geht raus, ohne dass jemand auf
+       den Relay oder auf die Seitenleiste wartet. */
+    notbremseAusloesen(n.quelle, absender && absender.tab ? absender.tab.id : null).catch(() => {});
     antwort({ ok: true });
     return true;
   }
@@ -490,7 +710,30 @@ chrome.runtime.onMessage.addListener((n, absender, antwort) => {
       antwort({ verbunden: false });
       return false;
     }
-    link.zustand().then(antwort);
+    /*
+     * Der Agentenname gehört in diese Antwort (Befund H5 vom 14.08.2026).
+     *
+     * Die Seitenleiste holt sich hier ihren Zustand zurück, wenn sie neu
+     * aufgeht. Ohne dieses Feld blieb die Dauerzeile aus §8.4 nach dem
+     * Wiederöffnen weg, und zwar still: `link.js` sendet
+     * `link:cloud-sitzung` nur beim START der Sitzung, und den Start hat
+     * eine geschlossene Seitenleiste nie gehört.
+     *
+     * Gesäubert wird gegen die Positivliste `AGENTEN` und nicht bloss auf
+     * erlaubte Zeichen. Der Name kommt vom Relay (§8.1), also von aussen;
+     * was nicht auf der Liste steht, ist kein Agent, und eine Dauerzeile
+     * „Cloud-Sitzung aktiv: Buchhaltung" wäre eine Behauptung, die diese
+     * Erweiterung nicht belegen kann. Kein Name, kein Feld, keine Zeile.
+     */
+    link
+      .zustand()
+      .then((stand) => {
+        const roh = stand && typeof stand.agent === "string" ? stand.agent.trim() : "";
+        const agent = AGENTEN.includes(roh) ? roh : "";
+        const { agent: _weg, ...rest } = stand || {};
+        antwort(agent ? { ...rest, agent } : rest);
+      })
+      .catch(() => antwort({ verbunden: false }));
     return true;
   }
 
@@ -566,10 +809,7 @@ chrome.runtime.onMessage.addListener((n, absender, antwort) => {
       antwort(ABSAGE_ABSENDER);
       return false;
     }
-    link.trennen("notbremse").catch(() => {});
-    chrome.runtime
-      .sendMessage({ typ: "notbremse:an-panel", quelle: n.grund || "seitenleiste" })
-      .catch(() => {});
+    notbremseAusloesen(n.grund || "seitenleiste", null).catch(() => {});
     antwort({ ok: true });
     return true;
   }
@@ -580,7 +820,31 @@ chrome.runtime.onMessage.addListener((n, absender, antwort) => {
       return false;
     }
     rekorderSenden(n.tabId, { typ: n.typ, tabId: n.tabId })
-      .then((lage) => {
+      .then(async (lage) => {
+        /* Wer aufzeichnet, zeichnet in EINEM Tab auf. Gemerkt wird er hier,
+           weil hier der Mensch gedrückt hat; ohne diese Notiz wüsste die
+           Neueinspielung nach einem Seitenwechsel nicht, wohin sie gehört
+           (Befund H6). Vergessen wird er beim Beenden, und zwar auch dann,
+           wenn das Beenden selbst nicht mehr durchkam: Ein gemerkter Tab ohne
+           laufende Aufzeichnung wäre die Notiz, an der die nächste Navigation
+           doch wieder etwas nachzieht. */
+        if (lage.ok && n.typ === "rekorder:start") await aufnahmeTabMerken(n.tabId);
+        if (n.typ === "rekorder:stop") await aufnahmeTabVergessen();
+        /*
+         * Der Bildvorrat gehört zu GENAU EINER Aufzeichnung (Befund M3 vom
+         * 14.08.2026). Bis hierher wurde `sa_rekorder_bilder` nur bei
+         * `onStartup` und `onInstalled` geleert; wer den Browser tagelang
+         * offen lässt, sammelte die Bilder mehrerer Aufnahmen an, bis zu 60
+         * JPEGs des ganzen sichtbaren Tabs und 4 MiB. `content/rekorder.js`
+         * räumt seine eigene Ablage `sa_rekorder` in `stoppen()` längst weg,
+         * nur die Bilder blieben liegen.
+         *
+         * Beim START ebenso, und das ist die wichtigere Hälfte: Eine neue
+         * Aufnahme, die Bilder der vorigen erbt, schriebe sie als `s1.webp`
+         * in einen Ablauf, in dem sie nie aufgenommen wurden. Der Vorrat
+         * beginnt leer, damit die Bildnummern zu den Schritten passen.
+         */
+        await ausfuehrer.rekorderBilderLeeren().catch(() => {});
         if (!lage.ok) {
           antwort({
             ok: false,
@@ -831,10 +1095,8 @@ chrome.alarms.onAlarm.addListener((wecker) => {
 });
 
 chrome.commands.onCommand.addListener((befehl) => {
-  if (befehl === "notbremse") {
-    link.trennen("notbremse").catch(() => {});
-    chrome.runtime
-      .sendMessage({ typ: "notbremse:an-panel", quelle: "tastenkuerzel" })
-      .catch(() => {});
-  }
+  /* Alt+Umschalt+S. Derselbe Weg wie Esc Esc und der Stoppknopf, nur mit einem
+     anderen Auslöser — der Tab kommt hier aus der Sitzung, weil ein
+     Tastenkürzel keinen nennt. */
+  if (befehl === "notbremse") notbremseAusloesen("tastenkuerzel", null).catch(() => {});
 });

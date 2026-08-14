@@ -124,61 +124,56 @@
     "visibility:visible !important;opacity:1 !important;";
 
   /* ------------------------------------------------------------------ *
-   * Die Geheimerkennung — Zwilling von `geheim()` in content/overlay.js
+   * Die Geheimerkennung — sie steht nicht mehr hier
+   *
+   * Bis zum 14.08.2026 stand an dieser Stelle eine Zwillingsfassung der
+   * Erkennung aus `content/overlay.js`, Wort für Wort abgeschrieben, mit dem
+   * Kommentar „wer eine der Listen ändert, ändert beide". Genau das ist nicht
+   * geschehen. Die Abnahme hat drei Lecks gemessen, die alle drei in
+   * `sa_workflows` gelandet sind: sechs Kästchen eines Einmalcodes, eine
+   * Kartennummer im Branchenfeld `name="pan"` und ein Passwortfeld nach dem
+   * Klick aufs Auge (`type=text`, `name="pw"`).
+   *
+   * Ab Festlegung F4 gibt es genau eine Quelle: `content/geheim.js`, als
+   * erste Datei eingespielt, erreichbar über `globalThis.SMARTR_GEHEIM`. Sie
+   * entscheidet nicht mehr, was NICHT gespeichert wird, sondern was
+   * nachweislich harmlos ist — alles andere wird zu `user_input_required`.
    * ------------------------------------------------------------------ */
 
-  /* Die standardisierten Autocomplete-Marken (WHATWG HTML 4.10.18.7). Die
-     ganze cc-Familie zählt dazu: Nummer, Ablauf, Prüfziffer und Inhaber sind
-     zusammen die Zahlung. */
-  const GEHEIME_MARKEN = new Set(["current-password", "new-password", "one-time-code"]);
+  const quelle = () => globalThis.SMARTR_GEHEIM;
 
-  /* Wörter, die für sich allein stehen müssen. „pin" steckt in „shipping",
-     „tan" in „Standort". */
-  const GEHEIM_WORT = new Set([
-    "pin", "pins", "tan", "tans", "itan", "mtan", "puk",
-    "cvc", "cvv", "csc", "otp", "iban", "bic",
-  ]);
-
-  /* Wortstücke, die auch mitten im Wort geheim bleiben. */
-  const GEHEIM_TEIL = [
-    "pass", "pwd", "kennwort", "geheim", "secret", "token", "einmal",
-    "card", "karte", "kredit", "credit",
-    "pruefziff", "prüfziff", "pruefnummer", "prüfnummer",
-    "sicherheitscode", "sicherheitsfrage", "sicherheitsnummer",
-    "ccnum", "ccexp", "cccsc", "ccname", "cctype",
-  ];
-
-  /* Befund M2 der Gegenlesung in `overlay.js`: „code" allein sagt nicht,
-     welcher Code gemeint ist, sein Nachbar sagt es. Ohne diese Ausnahmen
-     galten Postleitzahl, Ländervorwahl und Gutscheincode als Geheimnis. */
-  const CODE_HARMLOS = [
-    "post", "postal", "zip", "plz",
-    "country", "land", "laender", "länder", "iso",
-    "area", "dial", "vorwahl",
-    "lang", "language", "sprache", "locale",
-    "currency", "waehrung", "währung",
-    "promo", "coupon", "gutschein", "rabatt", "aktions", "discount", "voucher",
-    "produkt", "product", "artikel", "sku", "store", "filiale", "shop",
-    "bar", "qr", "farb", "color",
-  ];
-
-  const codeGeheim = (flach) => {
-    if (!flach.includes("code")) return false;
-    let rest = flach;
-    for (const nachbar of CODE_HARMLOS) {
-      rest = rest.split(`${nachbar}code`).join("|").split(`code${nachbar}`).join("|");
-    }
-    return rest.includes("code");
+  /* Ohne die eine Quelle wird nichts aufgezeichnet. Das ist kein Notausgang,
+     sondern die Zusage selbst: Eine Aufnahme ohne Geheimerkennung schreibt
+     alles mit, was in einem Feld steht. Lieber gar keine Aufnahme als eine,
+     die man erst hinterher liest. */
+  const geheimBereit = () => {
+    const G = quelle();
+    return !!(G && typeof G.wertFreigeben === "function" && typeof G.geheimUmfeld === "function");
   };
 
-  const woerterVon = (s) =>
-    String(s || "")
-      .replace(/([a-zäöüß0-9])([A-ZÄÖÜ])/g, "$1 $2")
-      .toLowerCase()
-      .split(/[^a-zäöüß0-9]+/)
-      .filter(Boolean);
+  const geheim = (el) => {
+    const G = quelle();
+    if (!G || typeof G.geheim !== "function") return true; // im Zweifel geheim
+    try {
+      return G.geheim(el) === true;
+    } catch (_) {
+      return true;
+    }
+  };
 
-  const flachVon = (s) => String(s || "").toLowerCase().replace(/[^a-zäöüß0-9]+/g, "");
+  const geheimUmfeld = (el) => {
+    const G = quelle();
+    if (!G || typeof G.geheimUmfeld !== "function") return true;
+    try {
+      return G.geheimUmfeld(el) === true;
+    } catch (_) {
+      return true;
+    }
+  };
+
+  /* ------------------------------------------------------------------ *
+   * Kleinkram
+   * ------------------------------------------------------------------ */
 
   const merkmal = (el, name) => {
     try {
@@ -189,121 +184,18 @@
     }
   };
 
-  /* Die Beschriftung eines Feldes, ausdrücklich OHNE seinen Inhalt. Der Text
-     IM Element sagt nichts darüber, ob das Feld geheim ist; das Etikett davor
-     schon. Jedes Stück bleibt für sich: aneinandergehängt ergäben „Alp" und
-     „Assistent" das Wortstück „pass". */
-  const beschriftungVon = (el) => {
-    const teile = [merkmal(el, "aria-label"), merkmal(el, "title"), merkmal(el, "placeholder")];
-    const bez = merkmal(el, "aria-labelledby");
-    if (bez) {
-      for (const id of bez.split(/\s+/)) {
-        const n = id && document.getElementById(id);
-        if (n) teile.push(n.textContent || "");
-      }
-    }
-    if (el.id) {
-      try {
-        const l = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
-        if (l) teile.push(l.textContent || "");
-      } catch (_) {
-        /* Eine Kennung, die kein gültiger Selektor wird, hat kein Etikett.
-           Das ist kein Grund, die ganze Erkennung fallen zu lassen. */
-      }
-    }
-    if ((el.tagName === "INPUT" || el.tagName === "TEXTAREA") && typeof el.closest === "function") {
-      const um = el.closest("label");
-      if (um) teile.push(um.textContent || "");
-    }
-    return teile.filter(Boolean);
-  };
-
-  /**
-   * Trägt dieses Element ein Geheimnis?
-   *
-   * Wortgleich mit `geheim()` in `content/overlay.js` (Befund S5 und M2
-   * dort). Wer eine der Listen ändert, ändert beide, sonst liest der Rekorder
-   * etwas mit, das die Wahrnehmung längst verweigert.
-   */
-  function geheim(el) {
-    if (!el || el.nodeType !== 1) return false;
-    const tag = el.tagName;
-    const kannInhalt =
-      tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable === true;
-    if (!kannInhalt) return false;
-
-    if (merkmal(el, "type").toLowerCase() === "password") return true;
-    if (String(el.type || "").toLowerCase() === "password") return true;
-
-    for (const marke of merkmal(el, "autocomplete").toLowerCase().split(/\s+/)) {
-      if (!marke) continue;
-      if (GEHEIME_MARKEN.has(marke)) return true;
-      if (marke.startsWith("cc-")) return true;
-    }
-
-    const merkmale = [
-      el.name || "",
-      el.id || "",
-      merkmal(el, "name"),
-      merkmal(el, "autocomplete"),
-      ...beschriftungVon(el),
-    ];
-
-    for (const m of merkmale) {
-      for (const wort of woerterVon(m)) {
-        if (GEHEIM_WORT.has(wort)) return true;
-      }
-      const flach = flachVon(m);
-      if (flach && GEHEIM_TEIL.some((t) => flach.includes(t))) return true;
-      if (flach && codeGeheim(flach)) return true;
-    }
-    return false;
-  }
-
-  /**
-   * Gehört dieses Element zum Umfeld eines Geheimnisses?
-   *
-   * Das Feld selbst, und dazu der Knopf, der ein Formular mit einem
-   * Geheimfeld absendet — das ist die Anmeldung. §3.1 zieht dieselbe Grenze
-   * für den Klassifizierer („click auf ein Element in einem Formular, das ein
-   * Geheimfeld enthält").
-   *
-   * Warum der Knopf mitzählt, obwohl er selbst nichts Geheimes trägt: Ein
-   * aufgezeichneter Ablauf, der eine Anmeldemaske absendet, versucht beim
-   * Abspielen eine Anmeldung ohne Passwort. Das ist im besten Fall ein
-   * Fehlversuch und im schlechteren einer von dreien, nach denen das Konto
-   * gesperrt ist. Anmelden bleibt Sache des Menschen.
-   */
-  function geheimUmfeld(el) {
-    if (!el || el.nodeType !== 1) return false;
-    if (geheim(el)) return true;
-    if (typeof el.closest !== "function") return false;
-    let form = null;
+  /* Darf dieser Text in den Ablauf? Dieselbe Frage und dieselbe Antwort wie
+     in `selektor.js` — beide fragen `content/geheim.js`. Fehlt sie, wird
+     nicht geraten (Befund B6, 14.08.2026). */
+  const textOffen = (text) => {
+    const G = quelle();
+    if (!G || typeof G.textHarmlos !== "function") return false;
     try {
-      form = el.closest("form");
-    } catch (_) {
-      form = null;
-    }
-    if (!form || typeof form.querySelectorAll !== "function") return false;
-    let felder = [];
-    try {
-      felder = Array.from(form.querySelectorAll("input, textarea, select"));
+      return G.textHarmlos(text) === true;
     } catch (_) {
       return false;
     }
-    if (!felder.some((f) => geheim(f))) return false;
-    /* Nur die Absendewege des Formulars, nicht jeder Klick darin. Ein Klick
-       auf „Passwort vergessen" ist kein Anmeldeversuch. */
-    const tag = el.tagName;
-    const art = merkmal(el, "type").toLowerCase();
-    if (tag === "BUTTON" && art !== "button" && art !== "reset") return true;
-    if (tag === "INPUT" && (art === "submit" || art === "image")) return true;
-    return false;
-  }
-
-  /* ------------------------------------------------------------------ *
-   * Kleinkram
-   * ------------------------------------------------------------------ */
+  };
 
   const jetzt = () =>
     typeof performance !== "undefined" && performance && typeof performance.now === "function"
@@ -324,46 +216,31 @@
     return s.length <= grenze ? s : `${s.slice(0, grenze - 1)}…`;
   }
 
-  /* Trägt dieses Element einen Inhalt, der nicht sein Name ist? Die Antwort
-     kommt aus `selektor.js`, damit Anker und Beschreibung dieselbe Grenze
-     ziehen. Fehlt sie, steht dieselbe Regel hier noch einmal. */
-  function traegtInhalt(el) {
-    const S = globalThis.SMARTR_SELEKTOR;
-    if (S && typeof S.traegtInhalt === "function") {
-      try {
-        return S.traegtInhalt(el) === true;
-      } catch (_) {
-        /* dann von Hand */
-      }
-    }
-    const tag = el && el.tagName;
-    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (!!el && el.isContentEditable === true);
-  }
-
   /**
-   * Der Name des Elements für die Rückfrage und für die Selbstheilung (§7.4).
+   * Der Name des Elements für die Rückfrage, für die Selbstheilung (§7.4) und
+   * ab Festlegung F3 für den Identitätsvergleich.
    *
-   * Ausdrücklich ohne Inhalt: Bei allem, was etwas trägt — Eingabefeld,
-   * Auswahlliste, bearbeitbarer Bereich —, ist der Text IM Element das
-   * Getippte. Es in die Beschreibung zu schreiben wäre genau der Weg an §7.2
-   * vorbei, den diese Datei verschliessen soll.
+   * Gebaut wird sie in `content/geheim.js`, und das aus zwei Gründen.
+   * Erstens ist die Beschreibung eine Leckstelle: Befund B6 vom 14.08.2026
+   * hat den Einmalcode einer 2FA-Seite genau hier herausgetragen
+   * („beschreibung":"849271"), weil der Text IM Element ungeprüft übernommen
+   * wurde. Zweitens antwortet `overlay:kaskade` ab F3 mit `name`, und der
+   * Ausführer hält ihn gegen genau dieses Feld. Zwei Funktionen, die den
+   * Namen verschieden bilden, meldeten einen Unterschied, wo keiner ist.
+   *
+   * Fehlt die Quelle, bleibt der Elementname. Er sagt wenig und verrät
+   * nichts — und ohne Quelle läuft ohnehin keine Aufnahme.
    */
   function beschreibungVon(el) {
-    const kandidaten = [merkmal(el, "aria-label"), merkmal(el, "title")];
-    const bez = merkmal(el, "aria-labelledby");
-    if (bez) {
-      for (const id of bez.split(/\s+/)) {
-        const n = id && document.getElementById(id);
-        if (n) kandidaten.push(n.textContent || "");
+    const G = quelle();
+    if (G && typeof G.beschreibungVon === "function") {
+      try {
+        return G.beschreibungVon(el, BESCHREIBUNG_ZEICHEN);
+      } catch (_) {
+        /* dann der nackte Elementname */
       }
     }
-    if (!traegtInhalt(el)) kandidaten.push(el.textContent || "");
-    kandidaten.push(merkmal(el, "placeholder"), merkmal(el, "alt"), merkmal(el, "name"));
-    for (const k of kandidaten) {
-      const s = kuerzen(k, BESCHREIBUNG_ZEICHEN);
-      if (s) return s;
-    }
-    return kuerzen(String(el.tagName || "").toLowerCase(), BESCHREIBUNG_ZEICHEN);
+    return kuerzen(String((el && el.tagName) || "").toLowerCase(), BESCHREIBUNG_ZEICHEN);
   }
 
   function rechteckVon(el) {
@@ -702,28 +579,38 @@
   function aufEingabe(e) {
     if (!aufnahmefaehig(e)) return;
     const el = e.target;
-    /* Die Abzweigung steht VOR jedem Zugriff auf den Wert. Das ist der ganze
-       Unterschied zwischen „wird nicht aufgezeichnet" und „wird gelesen und
-       dann weggelassen". */
-    if (geheimUmfeld(el)) {
-      menschUebernimmt();
-      return;
-    }
     const tag = el.tagName;
-    let wert = null;
     if (tag === "INPUT" || tag === "TEXTAREA") {
       const art = merkmal(el, "type").toLowerCase() || "text";
       /* Ankreuzfelder, Dateiwahl und Knöpfe sind kein Tippen. Der Klick
          darauf ist schon aufgezeichnet, ihr „Wert" wäre entweder ein
          Wahrheitswert oder ein erfundener Dateipfad. */
       if (["checkbox", "radio", "file", "submit", "button", "reset", "image", "range"].includes(art)) return;
-      wert = el.value == null ? "" : String(el.value);
-    } else if (el.isContentEditable === true) {
-      wert = el.textContent == null ? "" : String(el.textContent);
-    } else {
+    } else if (el.isContentEditable !== true) {
       return;
     }
-    const kurz = kuerzen(wert, WERT_ZEICHEN);
+
+    /* Die eine Frage, und sie steht VOR jedem Zugriff auf den Wert.
+     *
+     * Befund B5 vom 14.08.2026: Hier stand `wert = el.value`, sobald das Feld
+     * nicht in einer bekannten Geheimliste stand. Was die Liste nicht kannte,
+     * lag danach im Klartext in `sa_workflows` — drei gemessene Fälle: die
+     * sechs Kästchen eines Einmalcodes, die Kartennummer im Branchenfeld
+     * `name="pan"` und das Passwortfeld nach dem Klick aufs Auge.
+     *
+     * `wertFreigeben` dreht die Beweislast um (F4): Es liest den Wert erst,
+     * wenn Bauform, Umfeld, Feldreihe und Harmlos-Beleg durch sind. Was es
+     * nicht belegen kann, wird `user_input_required` — ein Schritt, den der
+     * Mensch beim Abspielen einmal ausfüllt. */
+    const G = quelle();
+    const befund = G && typeof G.wertFreigeben === "function"
+      ? G.wertFreigeben(el)
+      : { ok: false, grund: "geheim_fehlt" };
+    if (!befund || befund.ok !== true) {
+      menschUebernimmt();
+      return;
+    }
+    const kurz = kuerzen(befund.wert, WERT_ZEICHEN);
 
     /* Jeder Tastendruck ist ein `input`-Ereignis. Aufgezeichnet wird der
        Stand des Feldes, nicht die Reise dorthin. */
@@ -759,8 +646,14 @@
     } catch (_) {
       option = null;
     }
-    const etikett = option ? kuerzen(option.text, ETIKETT_ZEICHEN) : "";
-    const wert = option && typeof option.value === "string" ? option.value.trim() : "";
+    const roh = option ? kuerzen(option.text, ETIKETT_ZEICHEN) : "";
+    /* Auch das Etikett einer Option geht durch dieselbe Prüfung wie ein
+       Textanker (Befund B6): Eine Liste „Ihre gespeicherten Karten" trägt in
+       ihren Optionen die Kartennummern. Fällt das Etikett heraus, bleibt die
+       Stelle in der Liste — die verrät nichts. */
+    const etikett = roh && textOffen(roh) ? roh : "";
+    const rohWert = option && typeof option.value === "string" ? option.value.trim() : "";
+    const wert = rohWert && textOffen(rohWert) ? rohWert : "";
     /* Genau ein Weg, sonst lehnt `workflowPruefen` den Schritt ab. Das
        Etikett zuerst: Es ist das, was der Mensch gesehen hat und was ihm in
        der Rückfrage vorgelesen wird. */
@@ -977,6 +870,18 @@
         hinweis: "Den Tab neu laden. Bleibt es dabei, wurde selektor.js nicht vor rekorder.js eingespielt.",
       };
     }
+    if (!geheimBereit()) {
+      /* Befund B5/B6 vom 14.08.2026 und Festlegung F4: Ohne
+         `content/geheim.js` gäbe es keine Geheimerkennung, und eine Aufnahme
+         ohne Geheimerkennung schreibt Passwörter mit. Lieber gar keine
+         Aufnahme als eine, die man erst hinterher liest. */
+      return {
+        ok: false,
+        fehler: "geheim_fehlt",
+        satz: "Die Aufnahme kann nicht starten, weil der Schutz für Passwortfelder in dieser Seite fehlt.",
+        hinweis: "Den Tab neu laden. Bleibt es dabei, wurde geheim.js nicht vor rekorder.js eingespielt.",
+      };
+    }
     if (laeuft) return { ok: true, laeuft: true, anzahl: schritte.length, schon: true };
 
     laeuft = true;
@@ -1100,10 +1005,18 @@
   });
 
   /* Für die Prüfsätze und für den Fall, dass ein anderes Inhaltsskript
-     dieselbe Frage stellen muss: Die Geheimerkennung ist die einzige Regel
-     hier, deren Ergebnis man dem Ablauf nicht ansieht — ein nicht
-     aufgezeichneter Wert sieht aus wie ein Wert, den es nie gab. */
-  globalThis.SMARTR_REKORDER = Object.freeze({ geheim, geheimUmfeld, stand, VERBOT_GRUND });
+     dieselbe Frage stellen muss. `geheim` und `geheimUmfeld` reichen nur
+     durch, entschieden wird in `content/geheim.js` — zwei Fassungen derselben
+     Erkennung waren der Befund, den F4 abgeschafft hat. */
+  globalThis.SMARTR_REKORDER = Object.freeze({
+    geheim,
+    geheimUmfeld,
+    geheimBereit,
+    textOffen,
+    beschreibungVon,
+    stand,
+    VERBOT_GRUND,
+  });
 
   window.__smartrchromeRekorder = true;
   wiederaufnehmen();

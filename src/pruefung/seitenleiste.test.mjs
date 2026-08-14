@@ -633,6 +633,16 @@ async function panelStarten({
      selbst, und genau das muss sie koennen. */
   startseiteModul = {},
   werkbankModul = {},
+  /*
+   * Ob die Cloud auf dem Weg zum Ticket ein Kennwort verlangt.
+   *
+   * Befund Abnahme 14.08.2026 (N2): Die Attrappe gab bis dahin ausnahmslos
+   * sofort ein Ticket zurueck und liess damit genau die Stelle weg, an der ein
+   * Mensch im echten Chrome noch einmal etwas tun muss — im anderen Tab
+   * vergleichen und freigeben. Ein Pruefsatz ueber „genau EIN Klick" ueber
+   * einer Attrappe, die das Nachfragen wegnimmt, misst die Attrappe.
+   */
+  freigabeMitKennwort = false,
 } = {}) {
   const spur = []; // an den Hintergrunddienst
   const anTabSpur = []; // an das Seitenskript
@@ -647,6 +657,18 @@ async function panelStarten({
      wirklich in der Hand hat — ob es zurückgegeben wurde, ist deshalb keine
      Frage des Aussehens, sondern die Frage, ob er noch arbeiten kann. */
   const rechteZurueck = [];
+  /*
+   * Was der BROWSER und die Cloud selbst noch fragen, nachdem der Mensch in
+   * der Seitenleiste gedrueckt hat.
+   *
+   * Ohne diese Liste war „genau EIN Klick" eine halbe Wahrheit: Gezaehlt wurden
+   * die Klicks in der Seitenleiste, und die beiden Stellen, an denen der Mensch
+   * im echten Chrome trotzdem noch einmal drueckt, hatte die Attrappe
+   * weggenommen (`permissions.request` sagt zu allem sofort ja, das Ticket kam
+   * ohne Kennwort). Gemessen wird ab jetzt beides getrennt: die Klicks HIER und
+   * die Fragen DORT. Eine ehrliche Zwei ist mehr wert als eine gemessene Eins.
+   */
+  const browserFragen = [];
   /* Was am FENSTER hängt (pagehide, keydown). Bis zum 10.08.2026 verschluckte
      diese Attrappe jeden Fensterzuhörer — damit war ausgerechnet der Weg
      unprüfbar, auf dem die Seitenleiste bisher die Sitzung abriss. */
@@ -826,7 +848,15 @@ async function panelStarten({
         onMessage: { addListener: (f) => hoerer.push(f) },
         async sendMessage(nachricht) {
           spur.push(nachricht);
-          if (Object.hasOwn(workerAntworten, nachricht.typ)) return workerAntworten[nachricht.typ];
+          if (Object.hasOwn(workerAntworten, nachricht.typ)) {
+            const antwort = workerAntworten[nachricht.typ];
+            /* Eine Funktion darf je Aufruf etwas anderes sagen — genau das tut
+               der Hintergrunddienst: Der erste `link:verbinden` bekommt die
+               Sitzung, der zweite ein „schon verbunden". Ohne diesen Weg liesse
+               sich der Wettlauf aus B8 gar nicht fahren, und ein Wettlauf, den
+               niemand fahren kann, hat keinen Pruefsatz. */
+            return typeof antwort === "function" ? antwort(nachricht) : antwort;
+          }
           return { ok: true };
         },
       },
@@ -909,6 +939,19 @@ async function panelStarten({
       buchstabiert: (wort) => String(wort).split("").join(" "),
       async freigabeDurchlaufen(angaben) {
         ticketSpur.push(angaben || {});
+        /* Verlangt die Cloud ein Kennwort, muss der Mensch in einem ZWEITEN
+           Tab vergleichen und freigeben. Das ist keine Kleinigkeit am Rand,
+           das ist der zweite Handgriff im ganzen Weg — und ohne ihn misst
+           „ein Klick" an der Wirklichkeit vorbei (N2). */
+        if (freigabeMitKennwort && typeof angaben?.aufKennwort === "function") {
+          browserFragen.push("freigabeseite-in-der-cloud");
+          angaben.aufKennwort({
+            kennwort: "K7RM2X",
+            buchstabiert: "K 7 R M 2 X",
+            ansage: "Kaufmann sieben Richard Martha zwei Xanthippe",
+            adresse: "https://cloud.smartragents.ai/link/freigabe?t=probe",
+          });
+        }
         return { ticket: "ticket-attrappe" };
       },
       async freigabeseiteOeffnen() {},
@@ -924,6 +967,10 @@ async function panelStarten({
          Reihenfolge IST die Zusage (Prüfsatz E2). */
       async rechtHolen(muster) {
         aufrufe.push("permissions.request");
+        /* Chrome zeigt hier seinen eigenen Dialog. Die Attrappe sagt sofort ja,
+           der Mensch tut es nicht — also wird die Frage wenigstens gezaehlt und
+           benannt (N2). */
+        browserFragen.push("chrome-freigabe-fuer-diese-seite");
         return rechte.rechtHolen(muster);
       },
       async rechtZurueckgeben(muster) {
@@ -1112,6 +1159,12 @@ async function panelStarten({
     antraege: () => ticketSpur,
     /* Wie oft die Seitenleiste ein Seitenrecht zurückgegeben hat. */
     rechteRueckgaben: () => rechteZurueck.length,
+    /* Was Browser und Cloud selbst noch fragen, in der Reihenfolge, in der sie
+       fragen. Das ist der ehrliche Teil der Zusage „ein Klick" (N2). */
+    browserFragen: () => [...browserFragen],
+    browserFragenLeeren: () => {
+      browserFragen.length = 0;
+    },
     /* Ein Ereignis am Fenster auslösen — pagehide ist der Weg, auf dem die
        Seitenleiste verschwindet. Gibt es dafür gar keinen Zuhörer mehr, ist
        das schon der Befund. */
@@ -2025,7 +2078,28 @@ test("M3e — Dauer und Stufe überstehen das Schließen der Seitenleiste", asyn
   const zweite = await panelStarten({ speicher: erste.ablage });
   t.after(zweite.aufraeumen);
 
-  assert.equal(zweite.gewaehlt("dauer"), "600", "vor dem Dialog steht noch die Vorgabe aus dem HTML");
+  /*
+   * Geändert am 14.08.2026, und zwar begründet.
+   *
+   * Hier stand: „vor dem Dialog steht noch die Vorgabe aus dem HTML", gemessen
+   * als `gewaehlt("dauer") === "600"`. Das war eine Zusage über einen inneren
+   * Zwischenstand, keine über den Menschen — und sie stand dem Befund M8 im
+   * Weg: Der eine Klick beantragt die gemerkte Stufe, bis hin zu Vollzugriff,
+   * und muss sie deshalb NENNEN, bevor er gedrückt wird. Nennen kann sie nur,
+   * wer sie kennt, und zwei Lesarten derselben Ablage wären zwei Wahrheiten.
+   * Also wird die gemerkte Wahl seit dem 14.08.2026 schon beim Laden
+   * hergestellt (einstellungenLaden → auswahlHerstellen), und Anzeige wie
+   * Antrag lesen danach dieselben Felder.
+   *
+   * Was die Zusage IMMER war, bleibt und wird darunter unverändert gemessen:
+   * Der Dialog zeigt die gemerkte Wahl, und die Zusammenfassung liest sie vor.
+   */
+  assert.equal(zweite.gewaehlt("dauer"), "3600", "die gemerkte Wahl steht schon vor dem Dialog");
+  assert.equal(
+    zweite.el("verbinden-stufe").textContent.startsWith("Bedienen"),
+    true,
+    "und der eine Klick nennt sie, bevor er gedrückt wird (M8)"
+  );
   await zweite.klick("verbinden-start");
 
   assert.equal(zweite.gewaehlt("dauer"), "3600", "die gemerkte Dauer ist wieder vorausgewählt");
@@ -2880,20 +2954,69 @@ const TABS_GEMISCHT = () => [
  * E — der eine Klick
  * ------------------------------------------------------------------ */
 
-test("E1 — Vom Oeffnen bis zur aktiven Verbindung ist es genau EIN Klick", async (t) => {
+test("E1 — In der Seitenleiste ist es EIN Klick, und der Browser fragt danach selbst", async (t) => {
+  /*
+   * Umgeschrieben am 14.08.2026 (Befund N2 der Abnahme).
+   *
+   * Vorher stand hier ausschliesslich `klicks() === 1`, gemessen gegen zwei
+   * ausgesprochen freundliche Attrappen: `permissions.request` sagte sofort ja,
+   * und das Ticket kam ohne Kennwort. Das sind genau die beiden Stellen, an
+   * denen ein Mensch im echten Chrome noch einmal etwas tun muss. Eine
+   * gemessene Eins ueber einer Attrappe, die das Nachfragen wegnimmt, ist eine
+   * Zahl ueber die Attrappe und nicht ueber den Weg.
+   *
+   * Gemessen werden ab jetzt beide Seiten getrennt, und beide werden benannt:
+   * die Klicks IN DER SEITENLEISTE, und die Fragen, die BROWSER UND CLOUD
+   * danach selbst stellen. Die Zusage lautet damit ehrlich: ein Klick hier,
+   * plus die Freigabe, die Chrome fuer diese Seite verlangt, und, wenn die
+   * Cloud es verlangt, das Kennwort im anderen Tab.
+   */
   const p = await panelStarten({ workerAntworten: { "link:verbinden": sitzungAntwort() } });
   t.after(p.aufraeumen);
 
   assert.equal(p.el("app").dataset.state, "bereit", "Vorbedingung: die Leiste ist eben aufgegangen");
   assert.equal(p.el("verbindungsleiste").hidden, false, "Vorbedingung: der Weg steht above the fold");
   assert.equal(p.el("verbinden-tab").hidden, false, "Vorbedingung: der Knopf ist sichtbar");
+  assert.equal(p.el("verbinden-tab").disabled, false, "Vorbedingung: er ist auch bedienbar");
   p.klicksZuruecksetzen();
+  p.browserFragenLeeren();
 
   await p.klick("verbinden-tab");
 
   assert.equal(p.el("app").dataset.state, "aktiv", "nach dem einen Klick steht die Verbindung");
   assert.ok(p.zustand.sitzung, "und zwar wirklich, nicht nur auf dem Bildschirm");
-  assert.equal(p.klicks(), 1, `gezaehlt wurden ${p.klicks()} Klicks, erlaubt ist genau einer`);
+  assert.equal(p.klicks(), 1, `gezaehlt wurden ${p.klicks()} Klicks in der Leiste, erlaubt ist genau einer`);
+
+  /* Und das, was der Browser selbst noch fragt, steht mit Namen da, statt
+     unter den Tisch zu fallen. */
+  assert.deepEqual(
+    p.browserFragen(),
+    ["chrome-freigabe-fuer-diese-seite"],
+    "auf der Lesestufe fragt danach genau eine Stelle noch einmal: Chrome selbst"
+  );
+
+  /* Verlangt die Cloud eine Rueckfrage, sind es zwei — und die Kennwortkarte
+     steht dann wirklich da, statt dass der Weg unbemerkt daran vorbeilaeuft. */
+  const r = await panelStarten({
+    freigabeMitKennwort: true,
+    workerAntworten: { "link:verbinden": sitzungAntwort() },
+  });
+  t.after(r.aufraeumen);
+  r.klicksZuruecksetzen();
+  r.browserFragenLeeren();
+  await r.klick("verbinden-tab");
+  assert.equal(r.klicks(), 1, "in der Leiste bleibt es trotzdem bei einem Klick");
+  assert.deepEqual(
+    r.browserFragen(),
+    ["chrome-freigabe-fuer-diese-seite", "freigabeseite-in-der-cloud"],
+    "mit Rueckfrage der Cloud sind es zwei Stellen, und beide heissen beim Namen"
+  );
+  assert.equal(
+    r.el("kennwort-wert").textContent,
+    "K7RM2X",
+    "das Kennwort steht wirklich in der Karte, der Mensch vergleicht es im anderen Tab"
+  );
+  assert.equal(r.el("app").dataset.state, "aktiv", "und danach steht die Verbindung");
 
   /* Gegenprobe, damit die Zahl oben etwas misst: Der alte Weg ueber den Dialog
      braucht weiterhin mehr als einen Klick. Waere der Zaehler blind, kaeme
@@ -3028,6 +3151,343 @@ test("E6 — Auch durch die echte Startseite bleibt es ein Klick mit heiler Nutz
     "permissions.request",
     `die Nutzergeste ist unterwegs verbraucht worden: ${p.aufrufe().join(" → ")}`
   );
+});
+
+/* ================================================================== *
+ * ZZ — die Funde der Abnahme vom 14.08.2026, gefahren
+ *
+ * Jeder Satz hier faehrt den Weg, den ein Mensch wirklich geht, und jeder ist
+ * gegengeprobt worden: Reparatur zurueckgebaut, rot gemessen, wieder
+ * eingebaut, gruen gemessen. Was die Gegenprobe rot gemacht hat, steht beim
+ * jeweiligen Satz.
+ * ================================================================== */
+
+/* Eine Sitzungsantwort, die beim ZWEITEN Anlauf zur Absage wird — so wie der
+   Hintergrunddienst es tut, wenn schon eine Leitung steht. */
+function verbindenZweimal() {
+  let runde = 0;
+  return () => {
+    runde += 1;
+    return runde === 1 ? sitzungAntwort() : { ok: false, klartext: "Es läuft schon eine Verbindung." };
+  };
+}
+
+test("ZZ13 — Der zweite Klick waehrend des Aufbaus nimmt dem ersten nichts weg", async (t) => {
+  /*
+   * Der BLOCKER B8, gemessen am 14.08.2026: Klick auf „Mit diesem Tab
+   * verbinden", nach 0,3 s noch einmal geklickt, weil sichtbar nichts
+   * passierte. Lauf A bekam die Sitzung, Lauf B bekam `schon_verbunden` und
+   * lief in aufbauAbbrechen — `overlay:aus` an den Tab UND
+   * `seitenrechteZurueckgeben` fuer genau den Ursprung, auf dem A arbeitete.
+   * Endstand: Chip „Aktiv, Nur zusehen", Sitzungsleiste sichtbar, dabei
+   * rechteZurueckgegeben=1, anTab=[overlay:an, overlay:aus], kein
+   * link:trennen. Der Mensch liest „Aktiv", der Agent hat sein Recht auf die
+   * Seite verloren, und die Sitzung laeuft am Dienst weiter.
+   *
+   * Zwei Klicks OHNE Abwarten dazwischen, also genau der Wettlauf. Dass der
+   * Knopf nach dem ersten Klick abgeschaltet ist, hilft hier absichtlich
+   * nicht: Die Nachbildung loest den zweiten Klick trotzdem aus, damit der
+   * Riegel selbst gemessen wird und nicht die Freundlichkeit des Browsers.
+   */
+  const p = await panelStarten({ workerAntworten: { "link:verbinden": verbindenZweimal() } });
+  t.after(p.aufraeumen);
+  p.alleSpurenLeeren();
+
+  const ersterLauf = p.klick("verbinden-tab");
+  const zweiterLauf = p.klick("verbinden-tab");
+  await Promise.all([ersterLauf, zweiterLauf]);
+
+  assert.ok(p.zustand.sitzung, "die Sitzung des ersten Laufs steht");
+  assert.equal(p.el("app").dataset.state, "aktiv");
+  assert.equal(
+    p.anWorkerVoll().filter((n) => n.typ === "link:verbinden").length,
+    1,
+    "es geht genau EIN link:verbinden hinaus"
+  );
+  assert.equal(p.antraege().length, 1, "und genau ein Antrag auf die Freigabeseite");
+
+  /* Das Entscheidende: Was der Agent WIRKLICH in der Hand hat. */
+  assert.equal(
+    p.rechteRueckgaben(),
+    0,
+    "dem laufenden Agenten wird sein Seitenrecht nicht weggenommen"
+  );
+  assert.deepEqual(
+    p.anTab(),
+    ["overlay:an"],
+    `am Tab passiert genau das eine, was passieren soll: ${p.anTab().join(" → ")}`
+  );
+  assert.ok(!p.anWorker().includes("link:trennen"), "und getrennt wird nichts");
+
+  /* Und die Anzeige sagt dasselbe wie der Zustand, in beide Richtungen. */
+  assert.match(p.el("zustand-text").textContent, /^Aktiv/, "der Chip sagt aktiv");
+  assert.equal(p.el("sitzungsleiste").hidden, false, "und der Stopp-Knopf steht da");
+});
+
+test("ZZ13b — Auch der Dialogknopf startet keinen zweiten Lauf neben dem ersten", async (t) => {
+  /* Derselbe Riegel, zweiter Eingang: `verbinden()` haengt auch am
+     Dialogknopf, und ein Riegel, der nur an einer Tuer sitzt, ist keiner. */
+  const p = await panelStarten({ workerAntworten: { "link:verbinden": verbindenZweimal() } });
+  t.after(p.aufraeumen);
+  await p.klick("verbinden-start");
+  p.alleSpurenLeeren();
+
+  const a = p.klick("verbinden");
+  const b = p.klick("verbinden");
+  await Promise.all([a, b]);
+
+  assert.ok(p.zustand.sitzung, "eine Sitzung ist entstanden");
+  assert.equal(p.antraege().length, 1, "aber nur eine");
+  assert.equal(p.rechteRueckgaben(), 0, "und kein Seitenrecht geht verloren");
+  assert.deepEqual(p.anTab(), ["overlay:an"]);
+});
+
+test("ZZ11 — Zwischen Klick und Sitzung sieht der Mensch, dass gearbeitet wird", async (t) => {
+  /*
+   * Fund H3, gemessen am 14.08.2026 mit einem Dienstarbeiter, der 300 ms
+   * braucht, also dem MV3-Regelfall Kaltstart: 50 ms nach dem Klick waren
+   * Chip, Knopf, Karten und Stoerungszeile unveraendert. Die einzige Meldung
+   * ging nach `#ansage`, und das ist per panel.css auf ein Pixel geklippt,
+   * also ausschliesslich fuer den Bildschirmleser da. Wer sieht, sah nichts,
+   * drueckte noch einmal, und daraus wurde der Blocker B8.
+   */
+  let loesen;
+  const langsamerDienst = new Promise((f) => {
+    loesen = f;
+  });
+  const p = await panelStarten({ workerAntworten: { "link:verbinden": () => langsamerDienst } });
+  t.after(p.aufraeumen);
+
+  const vorher = {
+    chip: p.el("zustand-text").textContent,
+    knopf: p.el("verbinden-tab").disabled,
+  };
+  assert.equal(vorher.knopf, false, "Vorbedingung: vorher ist der Knopf bedienbar");
+
+  const lauf = p.klick("verbinden-tab");
+  /* Ein Takt der Warteschlange — das Gegenstueck zu den gemessenen 50 ms. */
+  await new Promise((f) => setTimeout(f, 0));
+  await new Promise((f) => setTimeout(f, 0));
+
+  assert.equal(p.zustand.sitzung, null, "Vorbedingung: die Sitzung gibt es noch nicht");
+  assert.notEqual(p.el("zustand-text").textContent, vorher.chip, "der Chip hat sich geruehrt");
+  assert.match(
+    p.el("zustand-text").textContent,
+    /Verbindung her/,
+    `der Chip sagt, was laeuft: „${p.el("zustand-text").textContent}"`
+  );
+  assert.equal(p.el("verbinden-tab").disabled, true, "der Knopf loest nichts mehr aus, und das sieht man");
+  assert.equal(p.el("app").dataset.aufbau, "laeuft", "und die Flaeche traegt den Zustand fuer das Auge");
+  assert.match(p.el("verbinden-hinweis").textContent, /Verbindung her/, "die Zeile daneben sagt es in Worten");
+
+  loesen(sitzungAntwort());
+  await lauf;
+
+  assert.equal(p.el("app").dataset.state, "aktiv", "danach steht die Verbindung");
+  assert.equal(p.el("verbinden-tab").disabled, false, "und der Knopf ist wieder, was er war");
+  assert.equal(p.el("app").dataset.aufbau, "", "die Arbeitsanzeige geht mit");
+});
+
+test("ZZ11b — Scheitert der Aufbau, geht die Arbeitsanzeige trotzdem weg", async (t) => {
+  /* Eine Anzeige, die nur beim Gelingen zurueckgesetzt wird, laesst den Knopf
+     nach dem ersten Fehlschlag fuer immer abgeschaltet stehen. */
+  const p = await panelStarten({
+    workerAntworten: { "link:verbinden": { ok: false, klartext: "Der Dienst mag nicht." } },
+  });
+  t.after(p.aufraeumen);
+
+  await p.klick("verbinden-tab");
+
+  assert.equal(p.zustand.sitzung, null, "Vorbedingung: es ist wirklich nichts entstanden");
+  assert.equal(p.el("verbinden-tab").disabled, false, "der Weg zurueck steht offen");
+  assert.equal(p.el("app").dataset.aufbau, "");
+  assert.match(p.el("stoerung").textContent, /Der Dienst mag nicht/, "und der Grund steht sichtbar da");
+  assert.match(p.el("zustand-text").textContent, /Angemeldet/, "der Chip sagt wieder die Wahrheit");
+});
+
+test("ZZ9 — Mit dem Sitzungsende geht die Anzeige, und zwar sofort", async (t) => {
+  /*
+   * Fund H4, gemessen am 14.08.2026 fuer Stopp, „abgelaufen" und „verloren":
+   * `zustand.sitzung` war schon null und das Seitenrecht zurueckgegeben,
+   * waehrend die Leiste noch bei +608 ms „Aktiv, Nur zusehen" zeigte, samt
+   * gruener Sitzungsleiste mit Stopp-Knopf und Tabkarte mit gruenem Punkt.
+   * Erst bei +1509 ms wurde daraus „Angemeldet, bereit", und in genau diesem
+   * Fenster war der Weg zurueck nicht begehbar.
+   *
+   * Gemessen wird deshalb OHNE jedes Warten: Der Zustand muss schon vor dem
+   * ersten await stimmen. Ein Pruefsatz, der auf den Zustand wartet, koennte
+   * den Fund gar nicht sehen.
+   */
+  for (const grund of ["nutzer", "abgelaufen", "verloren", "notbremse"]) {
+    const p = await panelStarten();
+    t.after(p.aufraeumen);
+    await p.sitzungHerstellen();
+    assert.equal(p.el("app").dataset.state, "aktiv", `${grund}: Vorbedingung, es laeuft etwas`);
+
+    const lauf = p.f.beenden(grund);
+
+    assert.equal(p.zustand.sitzung, null, `${grund}: die Sitzung ist zu Ende`);
+    assert.equal(p.el("app").dataset.state, "bereit", `${grund}: und die Anzeige sagt es sofort`);
+    assert.equal(p.el("sitzungsleiste").hidden, true, `${grund}: keine Sitzungsleiste ohne Sitzung`);
+    assert.equal(p.el("tabkarte").hidden, true, `${grund}: und keine Tabkarte mit gruenem Punkt`);
+    assert.match(
+      p.el("zustand-text").textContent,
+      /Angemeldet/,
+      `${grund}: der Chip sagt nicht mehr „Aktiv": „${p.el("zustand-text").textContent}"`
+    );
+    assert.equal(
+      p.el("verbindungsleiste").hidden,
+      false,
+      `${grund}: und der Weg zurueck ist im selben Augenblick begehbar`
+    );
+
+    await lauf;
+    assert.equal(p.el("app").dataset.state, "bereit", `${grund}: und er bleibt es auch danach`);
+  }
+});
+
+test("ZZ9b — Die Schlussansage kommt trotzdem, sie kommt nur nach dem Bildwechsel", async (t) => {
+  /* Die Verzoegerung von 1200 ms war damit begruendet, dass die Schlussansage
+     nicht von einem Bildwechsel ueberholt wird. Sie faellt weg, die Ansage
+     nicht: Sie steht als Blase im Verlauf und wird gesprochen. */
+  const p = await panelStarten();
+  t.after(p.aufraeumen);
+  await p.sitzungHerstellen();
+  p.spurLeeren();
+
+  await p.f.beenden("nutzer");
+
+  assert.ok(
+    p.verlauf().some((b) => /Beendet/.test(b)),
+    `die Schlussansage steht im Verlauf: ${p.verlauf().join(" | ")}`
+  );
+  assert.ok(
+    p.gesprochen.some((s) => /Beendet/.test(s)),
+    "und sie wird gesprochen"
+  );
+});
+
+test("ZZM7 — Die Statuskarte der Startseite ist waehrend der Sitzung wirklich zu sehen", async (t) => {
+  /*
+   * Fund M7: Der Zweig `verbunden=true` in startseite.js wurde ausschliesslich
+   * in ein Element gemalt, das in genau diesem Augenblick versteckt war —
+   * panel.js deckte `#startseite` zu, sobald eine Sitzung lief. Gemessen und
+   * nie gesehen, also der Befund vom 11.08.2026 in neuer Gestalt.
+   *
+   * Gefahren wird durch das ECHTE Modul, nicht durch eine Attrappe.
+   */
+  const echt = await import("../panel/startseite.js");
+  echt._zuruecksetzen();
+  const p = await panelStarten({
+    alleTabs: TABS_GEMISCHT(),
+    startseiteModul: echt,
+    workerAntworten: { "link:verbinden": sitzungAntwort() },
+  });
+  t.after(p.aufraeumen);
+  t.after(() => echt._zuruecksetzen());
+  await new Promise((f) => setTimeout(f, 0));
+
+  const start = p.el("startseite");
+  assert.equal(start.hidden, false, "Vorbedingung: im Ruhezustand steht sie da");
+  assert.equal(start.querySelector("ul").hidden, false, "Vorbedingung: mit ihrer Tabliste");
+
+  await p.klick("verbinden-tab");
+
+  assert.ok(p.zustand.sitzung, "Vorbedingung: es laeuft wirklich eine Sitzung");
+  assert.equal(start.hidden, false, "die Startseite ist waehrend der Sitzung NICHT zugedeckt");
+  assert.equal(
+    start.querySelector("span").className,
+    "sa-punkt an",
+    "und der Punkt darin ist wirklich gruen"
+  );
+  const ziel = start.querySelector("div").querySelector("p").textContent;
+  assert.match(ziel, /Verbunden mit/, `die Karte nennt die Lage: „${ziel}"`);
+  assert.match(ziel, /Warenkorb/, "und den Tab, um den es geht");
+  assert.equal(
+    start.querySelector("ul").hidden,
+    true,
+    "die Tabliste geht dafuer: sie waere der Weg zu einem zweiten Antrag, und den gibt es nicht"
+  );
+
+  /* Gegenprobe: Ohne Sitzung ist es genau umgekehrt, und zwar sofort. */
+  await p.f.beenden("nutzer");
+  assert.equal(start.hidden, false, "im Ruhezustand steht sie weiter da");
+  assert.equal(start.querySelector("ul").hidden, false, "jetzt wieder mit Tabliste");
+  assert.equal(start.querySelector("span").className, "sa-punkt", "und ohne gruenen Punkt");
+});
+
+test("ZZM8 — Der eine Klick nennt die Stufe, die er beantragt, bevor er gedrueckt wird", async (t) => {
+  /*
+   * Fund M8: „Mit diesem Tab verbinden" beantragt die zuletzt gemerkte Stufe,
+   * bis hin zu Vollzugriff, und vor dem Klick stand nirgends auf der
+   * Startseite, welche das ist. Wer einmal Vollzugriff gewaehlt hatte, bekam
+   * ihn danach mit einem Klick wieder, ohne ihn zu lesen.
+   *
+   * Gemessen wird beides zusammen: was DASTEHT und was danach WIRKLICH
+   * beantragt wird. Eine Anzeige, die nicht am Antrag haengt, waere nur eine
+   * zweite Behauptung.
+   */
+  const faelle = [
+    [null, "Nur zusehen", "read", "confirm_each"],
+    ["write", "Bedienen", "write", "confirm_each"],
+    ["voll", "Vollzugriff", "write", "auto"],
+  ];
+  for (const [gemerkt, wort, access, schrittmodus] of faelle) {
+    const p = await panelStarten({
+      speicher: gemerkt ? { wahlStufe: gemerkt } : {},
+      workerAntworten: { "link:verbinden": sitzungAntwort() },
+    });
+    t.after(p.aufraeumen);
+
+    const zeile = p.el("verbinden-stufe").textContent;
+    assert.ok(
+      zeile.startsWith(wort),
+      `gemerkt „${gemerkt}": am Knopf steht nicht die Stufe, die er beantragt: „${zeile}"`
+    );
+    /* Und es steht dieselbe Zusage dabei wie im Dialog (Regel aus S4): Das
+       Etikett verspricht nichts, was nicht gilt. */
+    if (gemerkt) {
+      assert.match(zeile, /Anmelden machst du selbst/, `gemerkt „${gemerkt}": der Vorbehalt fehlt`);
+    }
+    for (const muster of [/passwor|passwör|kennwort/i, /\bmeldet? (sich|dich) an\b/i]) {
+      assert.ok(!muster.test(zeile), `die Zeile verspricht zu viel: „${zeile}"`);
+    }
+
+    await p.klick("verbinden-tab");
+    const antrag = p.antraege().at(-1).gewuenscht;
+    assert.equal(antrag.access, access, `gemerkt „${gemerkt}": beantragt wurde etwas anderes`);
+    assert.equal(antrag.step_mode, schrittmodus, `gemerkt „${gemerkt}": anderer Schrittmodus`);
+  }
+
+  /* Und die Zeile folgt der Wahl im Dialog, ohne dass jemand neu laedt. */
+  const q = await panelStarten({ workerAntworten: { "link:verbinden": sitzungAntwort() } });
+  t.after(q.aufraeumen);
+  await q.klick("verbinden-start");
+  await q.waehlen("stufe", "voll");
+  assert.ok(
+    q.el("verbinden-stufe").textContent.startsWith("Vollzugriff"),
+    `nach der Wahl steht am Knopf: „${q.el("verbinden-stufe").textContent}"`
+  );
+});
+
+test("ZZN1 — Ohne Ziel verspricht der eine Klick nichts", async (t) => {
+  /*
+   * Fund N1: `setzeZustand("bereit")` stand vor `tabsAuffrischen()`, und
+   * dazwischen war `zustand.aktuellerTab` noch null. Der Knopf stand da,
+   * loeste aber nur `erklaerkarteZeigen(SPERRE.browser)` aus — also die
+   * Auskunft „das ist eine Browserseite" ueber einen Tab, den niemand
+   * angesehen hat.
+   */
+  const ohne = await panelStarten({ alleTabs: [], tab: null });
+  t.after(ohne.aufraeumen);
+  assert.equal(ohne.zustand.aktuellerTab, null, "Vorbedingung: es gibt kein Ziel");
+  assert.equal(ohne.el("verbindungsleiste").hidden, false, "der Weg steht trotzdem sichtbar da");
+  assert.equal(ohne.el("verbinden-tab").disabled, true, "aber der Knopf verspricht nichts");
+
+  const mit = await panelStarten({ alleTabs: TABS_GEMISCHT() });
+  t.after(mit.aufraeumen);
+  assert.ok(mit.zustand.aktuellerTab, "Gegenprobe: hier gibt es ein Ziel");
+  assert.equal(mit.el("verbinden-tab").disabled, false, "und dann ist der Knopf bedienbar");
 });
 
 /* ------------------------------------------------------------------ *
@@ -3668,6 +4128,81 @@ test("C3 — Das Ende der Tab-Sitzung raeumt die Cloud-Sitzung nicht weg", async
   assert.equal(p.zustand.sitzung, null, "Vorbedingung: die Steuersitzung ist zu Ende");
   assert.equal(p.el("cloud-zeile").hidden, false, "die Fernsitzung steht weiterhin da");
   assert.equal(p.el("cloud-agent").textContent, "SMarTrTrader");
+});
+
+test("C4 — Nach dem Wiederoeffnen steht die Dauerzeile wieder da, nicht nur beim Start", async (t) => {
+  /*
+   * Fund H5 der Abnahme vom 14.08.2026: `zustandNachfragen()` stellte Sitzung,
+   * Tab und Ursprung wieder her, rief `cloudSitzungZeigen` aber nie. Einziger
+   * Aufrufer war der Nachrichtenhoerer, und `link.js` sendet
+   * `link:cloud-sitzung` nur beim START der Sitzung. Gemessen wurde:
+   * `link:zustand?` liefert `{verbunden:true, agent:"SMarTrCEO"}`,
+   * `zustand.sitzung` steht, aber `#cloud-zeile.hidden === true`,
+   * `#cloud-agent === ""` und „Am Werk:" auf der Startseite leer.
+   *
+   * Vertrag §8.4 verlangt die drei Zeichen, solange die Sitzung LAEUFT, nicht
+   * nur im Augenblick ihres Starts. Gefahren wird durch das echte
+   * Startseiten-Modul, damit auch die zweite Anzeige wirklich gemessen ist.
+   */
+  const echt = await import("../panel/startseite.js");
+  echt._zuruecksetzen();
+  const p = await panelStarten({
+    startseiteModul: echt,
+    workerAntworten: {
+      "link:zustand?": {
+        verbunden: true,
+        tabId: 7,
+        ursprungMuster: "https://geizhals.de/*",
+        agent: "SMarTrCEO",
+        stufe: "write",
+        code: "AB12CD",
+        endetUm: Date.now() + 600000,
+        modus: "tab",
+        bereich: ["geizhals.de"],
+        schrittmodus: "confirm_each",
+      },
+    },
+  });
+  t.after(p.aufraeumen);
+  t.after(() => echt._zuruecksetzen());
+  await new Promise((f) => setTimeout(f, 0));
+
+  assert.ok(p.zustand.sitzung, "Vorbedingung: die Sitzung ist wiederhergestellt");
+  assert.equal(p.el("cloud-zeile").hidden, false, "die Dauerzeile steht da (§8.4, Punkt 1)");
+  assert.equal(p.el("cloud-agent").textContent, "SMarTrCEO", "und sie nennt den Agenten");
+  assert.equal(p.zustand.cloudAgent, "SMarTrCEO");
+
+  /* Und dieselbe Auskunft auf der Startseite, wo sie „Am Werk:" heisst. */
+  const agentZeile = p.el("startseite").querySelector(".sa-start-agent");
+  assert.ok(agentZeile, "Vorbedingung: die echte Startseite ist gebaut");
+  assert.equal(agentZeile.hidden, false, "die Zeile Am Werk bleibt nicht leer");
+  assert.match(agentZeile.textContent, /SMarTrCEO/);
+
+  /* Gegenprobe: Meldet der Dienst keinen Agenten, wird auch keiner behauptet.
+     Eine Dauerzeile ohne Namen behauptete eine Fernsitzung, von der niemand
+     weiss, wem sie gehoert. */
+  echt._zuruecksetzen();
+  const q = await panelStarten({
+    startseiteModul: echt,
+    workerAntworten: {
+      "link:zustand?": {
+        verbunden: true,
+        tabId: 7,
+        ursprungMuster: "https://geizhals.de/*",
+        stufe: "read",
+        code: "CD34EF",
+        endetUm: Date.now() + 600000,
+        modus: "tab",
+        bereich: ["geizhals.de"],
+        schrittmodus: "confirm_each",
+      },
+    },
+  });
+  t.after(q.aufraeumen);
+  await new Promise((f) => setTimeout(f, 0));
+  assert.ok(q.zustand.sitzung, "Vorbedingung: auch hier laeuft eine Sitzung");
+  assert.equal(q.el("cloud-zeile").hidden, true, "ohne Agentennamen keine Dauerzeile");
+  assert.equal(q.zustand.cloudAgent, null);
 });
 
 /* ------------------------------------------------------------------ *

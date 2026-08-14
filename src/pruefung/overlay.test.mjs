@@ -25,6 +25,8 @@ import vm from "node:vm";
 
 const QUELLE = new URL("../content/overlay.js", import.meta.url);
 const WACHE_QUELLE = new URL("../content/klickwache.js", import.meta.url);
+const GEHEIM_QUELLE = new URL("../content/geheim.js", import.meta.url);
+const SELEKTOR_QUELLE = new URL("../content/selektor.js", import.meta.url);
 
 /* ------------------------------------------------------------------ *
  * Attrappe des Seitenbaums
@@ -82,6 +84,13 @@ function knoten(tag, {
   const nr = ++naechsteId;
   const flaeche = rect || platz(nr);
   const el = {
+    /* Ein Element trägt im Browser `nodeType === 1`. Bis zum 14.08.2026 fehlte
+       die Angabe hier, und solange niemand danach fragte, war das
+       gleichgültig. `content/geheim.js` fragt danach — eine Attrappe ohne
+       Knotenart hielte jedes Feld für „kein Element" und damit für harmlos,
+       und die ganze Geheimprüfung liefe ins Leere, ohne dass ein Prüfsatz es
+       merkt. */
+    nodeType: 1,
     __art: art,
     __versteckt: versteckt,
     __z: z,
@@ -176,7 +185,7 @@ function knoten(tag, {
    aria-labelledby zeigt. Er steht absichtlich NICHT in der Elementliste: Er
    beschriftet ein Feld, er ist keines. */
 function etikett(text, { id = "", fuer = "" } = {}) {
-  return { tagName: "LABEL", id, __fuer: fuer, textContent: text, getAttribute: () => null };
+  return { nodeType: 1, tagName: "LABEL", id, __fuer: fuer, textContent: text, getAttribute: () => null };
 }
 
 /* Ereignisse und die zwei Prototypen mit dem echten Wert-Setter. */
@@ -587,10 +596,22 @@ function umgebungBauen(elemente, etiketten = []) {
   return { sandbox, zustand };
 }
 
-async function overlayStarten(elemente, etiketten = [], { ohneWache = false } = {}) {
+async function overlayStarten(elemente, etiketten = [], { ohneWache = false, ohneGeheim = false } = {}) {
   const quelle = await readFile(QUELLE, "utf8");
   const { sandbox, zustand } = umgebungBauen(elemente, etiketten);
   vm.createContext(sandbox);
+  /* `geheim.js` steht ganz vorn, genau wie in `src/net/seite.js` (Festlegung
+     F4 vom 14.08.2026). Vorher trug diese Datei ihre eigene Abschrift der
+     Geheimfeld-Erkennung, und `rekorder.js` eine zweite; zwei Abschriften
+     einer Sicherheitszusage sind auseinandergelaufen, und fünf Geheimnisse
+     lagen danach in `sa_workflows`.
+     `ohneGeheim` ist die Gegenprobe: Fehlt die Quelle, gilt jedes Feld als
+     geheim, und es wird weder gelesen noch hineingetippt. */
+  if (!ohneGeheim) {
+    const geheimQuelle = await readFile(GEHEIM_QUELLE, "utf8");
+    vm.runInContext(geheimQuelle, sandbox, { filename: "geheim.js" });
+    assert.ok(sandbox.SMARTR_GEHEIM, "geheim.js muss sich an globalThis hängen");
+  }
   /* Die Klickwache wird eingespielt wie im Browser: VOR dem Overlay, als
      klassisches Skript, in denselben globalen Rahmen (`src/net/seite.js`
      spielt genau diese Reihenfolge ein). Damit läuft in dieser Prüfung
@@ -3315,6 +3336,7 @@ test("Einspielen: die Klickwache kommt vor dem Overlay in die Seite", async () =
   const dateien = auftraege();
   assert.equal(dateien.length, 1, "ein Auftrag genügt, wenn alles da ist");
   assert.deepEqual(dateien[0], [
+    "src/content/geheim.js",
     "src/content/klickwache.js",
     "src/content/selektor.js",
     "src/content/overlay.js",
@@ -3325,6 +3347,10 @@ test("Einspielen: die Klickwache kommt vor dem Overlay in die Seite", async () =
     dateien[0].indexOf("src/content/klickwache.js") < dateien[0].indexOf("src/content/overlay.js"),
     "die Wache muss VOR dem Overlay eingespielt werden"
   );
+  /* Festlegung F4 vom 14.08.2026: `geheim.js` steht ganz vorn. Wer sie fragt,
+     muss sie vorfinden — `overlay.js` und `rekorder.js` fragen sie beide, und
+     `overlay.js` hält ohne sie jedes Feld für geheim. */
+  assert.equal(dateien[0][0], "src/content/geheim.js", "die eine Quelle steht ganz vorn");
 });
 
 test("Einspielen: fehlt die Datei des Teach-Modus, wird trotzdem bedient", async () => {
@@ -3338,7 +3364,15 @@ test("Einspielen: fehlt die Datei des Teach-Modus, wird trotzdem bedient", async
 
   const dateien = auftraege();
   assert.equal(dateien.length, 2, "erst der volle Auftrag, dann der Pflichtteil");
-  assert.deepEqual(dateien[1], ["src/content/klickwache.js", "src/content/overlay.js"]);
+  assert.deepEqual(dateien[1], [
+    "src/content/geheim.js",
+    "src/content/klickwache.js",
+    "src/content/overlay.js",
+  ]);
+  /* `geheim.js` fällt aus dem Pflichtteil NICHT heraus, anders als
+     `selektor.js`. Ohne sie hielte `overlay.js` jedes Feld für geheim, und die
+     Erweiterung stünde in der Seite, ohne noch ein Feld lesen zu können. */
+  assert.ok(dateien[1].includes("src/content/geheim.js"), "die eine Quelle gehört zur Pflicht");
 });
 
 test("Einspielen: ohne Wache wird auch nichts eingespielt", async () => {
@@ -3445,4 +3479,225 @@ test("Modus: die Automatik atmet in ihrer eigenen Farbe, das tote Zeichen gar ni
     zustand.stil.slice(stelle, stelle + 260).includes("91,141,239"),
     "ein blauer Rahmen mit grünem Schein wären zwei Aussagen auf einmal"
   );
+});
+
+/* ================================================================== *
+ * Befund M5 vom 14.08.2026 — die Anmeldemaske ohne <form>
+ *
+ * `bauformVon` fragte ausschliesslich `closest("form")`. Eine Anmeldemaske
+ * ohne `<form>`, also der Normalfall in React und Vue, meldete damit immer
+ * `formularGeheim: false` — und der Vertragsfall aus §3.1 („click auf ein
+ * Element in einem Formular, das ein Geheimfeld enthält") feuerte dort nie.
+ * Das Passwort stand im Feld, und der Absendeklick ging im Modus `auto` stumm
+ * durch.
+ * ================================================================== */
+
+/* Eine Hülle um mehrere Felder, mit Elternkette und eigener Suche.
+ *
+ * Bis zum 14.08.2026 kannte diese Attrappe keine Elternkette: `knoten` setzte
+ * `parentElement` auf null und niemand füllte es. Solange `formularGeheim`
+ * nur `closest("form")` fragte und die Prüfsätze nie ein Formular bauten,
+ * fiel das nicht auf — die Angabe war schlicht ungeprüft. Ohne diese Hülle
+ * bliebe sie es. */
+function huelle(tag, kinder, attrs = {}) {
+  const el = knoten(tag, { art: "bereich", attrs, text: "" });
+  el.children = kinder;
+  for (const kind of kinder) {
+    kind.parentElement = el;
+    kind.parentNode = el;
+  }
+  el.querySelectorAll = (sel) => {
+    const marken = String(sel)
+      .split(",")
+      .map((t) => t.trim().toUpperCase())
+      .filter(Boolean);
+    return kinder.filter((kind) => marken.includes(kind.tagName));
+  };
+  return el;
+}
+
+async function anmeldemaskeOhneForm() {
+  const benutzer = knoten("input", {
+    attrs: { name: "benutzername", type: "text", "aria-label": "Benutzername" },
+    type: "text",
+    value: "julian",
+  });
+  const passwort = knoten("input", {
+    attrs: { name: "passwort", type: "password", "aria-label": "Passwort" },
+    type: "password",
+    value: "streng-geheim-123",
+  });
+  const anmelden = knoten("button", { text: "Anmelden" });
+  const maske = huelle("div", [benutzer, passwort, anmelden], { class: "anmeldemaske" });
+
+  const suche = knoten("input", {
+    attrs: { name: "suche", type: "search", "aria-label": "Produktsuche" },
+    type: "search",
+    value: "SSD 2TB",
+  });
+  const suchen = knoten("button", { text: "Suchen" });
+  const suchleiste = huelle("div", [suche, suchen], { class: "suchleiste" });
+
+  const alles = [maske, benutzer, passwort, anmelden, suchleiste, suche, suchen];
+  const { fragen } = await overlayStarten(alles);
+  const baum = fragen({ typ: "overlay:baum" });
+  const refVon = (name) => {
+    const zeile = baum.knoten.find((k) => k.name === name);
+    assert.ok(zeile, `„${name}" muss im Textbaum stehen: ${JSON.stringify(baum.knoten)}`);
+    return zeile.ref;
+  };
+  return { fragen, baum, refVon };
+}
+
+test("Bauform: der Anmeldeknopf einer Maske ohne <form> meldet das Geheimfeld", async () => {
+  const { fragen, baum, refVon } = await anmeldemaskeOhneForm();
+  const knopf = fragen({ typ: "overlay:nachschlagen", ref: refVon("Anmelden"), epoche: baum.epoche });
+  assert.equal(knopf.ok, true);
+  assert.equal(
+    knopf.formularGeheim,
+    true,
+    "ohne diese Angabe entscheidet der Klassifizierer über den Anmeldeklick am Wort"
+  );
+});
+
+test("Bauform: eine Suchleiste daneben bleibt harmlos", async () => {
+  /* Die Gegenprobe im selben Baum: Wäre die Angabe schlicht überall `true`,
+     wäre sie genauso wertlos wie überall `false`. Ein Abschnitt endet, wo die
+     Seite ihn enden lässt. */
+  const { fragen, baum, refVon } = await anmeldemaskeOhneForm();
+  const knopf = fragen({ typ: "overlay:nachschlagen", ref: refVon("Suchen"), epoche: baum.epoche });
+  assert.equal(knopf.ok, true);
+  assert.equal(knopf.formularGeheim, false);
+
+  /* Und das Suchfeld selbst bleibt lesbar. */
+  const feld = baum.knoten.find((k) => k.name === "Produktsuche");
+  assert.equal(feld.wert, "SSD 2TB");
+});
+
+/* ================================================================== *
+ * Befund M6 — Esc Esc ruft `gestoppt()` nicht lokal
+ *
+ * Anders als der Knopf-Zweig. Zusammen mit dem Befund, dass `overlay:gestoppt`
+ * bis dahin nur aus der Seitenleiste kam, hiess das: Bei geschlossener
+ * Seitenleiste sagte das Schild weiter „steuert diesen Tab", während der Klick
+ * noch landete.
+ * ================================================================== */
+
+test("Notbremse: zweimal Escape stellt das Zeichen sofort auf GESTOPPT", async () => {
+  const { zustand, sandbox } = await sitzungStarten();
+  escEsc(zustand);
+
+  /* Gemeldet wird weiterhin, und zwar zuerst. */
+  assert.deepEqual(gesendet(sandbox), [{ typ: "notbremse", quelle: "esc-esc" }]);
+  /* Und das Zeichen sagt es, ohne auf eine Antwort des Dienstes zu warten. */
+  assert.equal(
+    teilHolen(zustand, "rahmen").getAttribute("data-zustand"),
+    "gestoppt",
+    "wer stoppt, will sehen, dass gestoppt ist"
+  );
+  assert.equal(teilHolen(zustand, "schild").getAttribute("data-zustand"), "gestoppt");
+  assert.equal(schildSatz(zustand), "GESTOPPT, der Agent steuert nicht mehr");
+  assert.equal(teilHolen(zustand, "zeiger").getAttribute("data-an"), "0");
+  assert.equal(teilHolen(zustand, "ziel").getAttribute("data-an"), "0");
+});
+
+test("Notbremse: Esc Esc und der Knopf im Schild sagen dasselbe", async () => {
+  /* Zwei Wege zur selben Reissleine dürfen nicht zwei Lagen anzeigen. */
+  const ueberEsc = await sitzungStarten();
+  escEsc(ueberEsc.zustand);
+
+  const ueberKnopf = await sitzungStarten();
+  notausDruecken(ueberKnopf.zustand);
+
+  for (const teil of ["rahmen", "schild"]) {
+    assert.equal(
+      teilHolen(ueberEsc.zustand, teil).getAttribute("data-zustand"),
+      teilHolen(ueberKnopf.zustand, teil).getAttribute("data-zustand"),
+      `${teil}: beide Wege müssen dieselbe Lage zeigen`
+    );
+  }
+  assert.equal(schildSatz(ueberEsc.zustand), schildSatz(ueberKnopf.zustand));
+});
+
+/* ================================================================== *
+ * Festlegung F3 — `overlay:kaskade` antwortet mit Identität
+ *
+ * Befund B7: Ein Anker aus nichts als Elementname und Stellenangabe trifft
+ * nach einem Umbau weiter genau ein Element, nur ein anderes. Die Antwort
+ * hiess `ok:true`, getroffen wurde das falsche Feld, und der Ablauf meldete
+ * Erfolg. Damit der Ausführer das gegenhalten kann, braucht er Name und Rolle
+ * des getroffenen Elements.
+ * ================================================================== */
+
+async function mitSelektor(elemente) {
+  const alles = await overlayStarten(elemente);
+  /* Das echte `selektor.js`, in denselben globalen Rahmen wie im Browser.
+     Die Attrappe beantwortet jede Suche mit ihrer ganzen Elementliste; mit
+     genau einem Element ist das dieselbe Aussage wie im Browser, und die
+     Auflösung läuft wirklich durch `kaskadeAufloesen`. */
+  vm.runInContext(await readFile(SELEKTOR_QUELLE, "utf8"), alles.sandbox, {
+    filename: "selektor.js",
+  });
+  assert.ok(alles.sandbox.SMARTR_SELEKTOR, "selektor.js muss sich an globalThis hängen");
+  return alles;
+}
+
+test("Kaskade: die Antwort trägt Name und Rolle, nicht nur die Referenz", async () => {
+  const knopf = knoten("button", { attrs: { "aria-label": "Zur Kasse" }, text: "Zur Kasse" });
+  const { fragen } = await mitSelektor([knopf]);
+
+  const a = fragen({ typ: "overlay:kaskade", kaskade: ['[aria-label="Zur Kasse"]'] });
+  assert.equal(a.ok, true, JSON.stringify(a));
+  assert.equal(typeof a.ref, "string");
+  assert.equal(typeof a.epoche, "string");
+  assert.equal(a.name, "Zur Kasse", "ohne den Namen kann niemand die Identität gegenhalten");
+  assert.equal(a.rolle, "button");
+  assert.equal(a.anker, '[aria-label="Zur Kasse"]');
+});
+
+test("Kaskade: der Name kommt aus derselben Regel wie die Beschreibung im Ablauf", async () => {
+  /* F3 vergleicht `name` gegen `schritt.beschreibung`. Beide entstehen in
+     `content/geheim.js` — zwei Funktionen, die den Namen verschieden bilden,
+     meldeten einen Unterschied, wo keiner ist. */
+  const knopf = knoten("button", { attrs: { title: "Erneut einstellen" }, text: "Erneut" });
+  const { fragen, sandbox } = await mitSelektor([knopf]);
+
+  const a = fragen({ typ: "overlay:kaskade", kaskade: ['[title="Erneut einstellen"]'] });
+  assert.equal(a.ok, true, JSON.stringify(a));
+  assert.equal(a.name, sandbox.SMARTR_GEHEIM.beschreibungVon(knopf));
+});
+
+test("Kaskade: ein Anker, der nichts trifft, bleibt eine benannte Absage", async () => {
+  const knopf = knoten("button", { attrs: { "aria-label": "Zur Kasse" }, text: "Zur Kasse" });
+  const { fragen } = await mitSelektor([knopf]);
+  const a = fragen({ typ: "overlay:kaskade", kaskade: [] });
+  assert.deepEqual(a, { ok: false, fehler: "kaskade_gebrochen" });
+});
+
+/* ================================================================== *
+ * Festlegung F4 — ohne die eine Quelle wird nichts gelesen
+ * ================================================================== */
+
+test("Geheimquelle: fehlt geheim.js, gilt jedes Feld als geheim", async () => {
+  /* Die Gegenprobe zu F4. Ohne Erkennung ist unbekannt, was in einem Feld
+     steht, und unbekannt heisst hier nicht lesen und nicht hineintippen.
+     Laut ist es auch: Jede Absage heisst dann `feld_geheim`. */
+  const suche = knoten("input", {
+    attrs: { name: "suche", type: "text", "aria-label": "Produktsuche" },
+    type: "text",
+    value: "SSD 2TB",
+  });
+  const { fragen } = await overlayStarten([suche], [], { ohneGeheim: true });
+  const a = fragen({ typ: "overlay:baum" });
+  const feld = a.knoten.find((k) => k.art === "element");
+  assert.equal(feld.wert, null, "ohne Erkennung wird kein Wert gelesen");
+  assert.deepEqual(
+    fragen({ typ: "overlay:tippen", ref: feld.ref, epoche: a.epoche, text: "abc" }),
+    { ok: false, fehler: "feld_geheim" }
+  );
+
+  /* Und mit der Quelle ist dasselbe Feld wieder ein gewöhnliches Suchfeld. */
+  const mit = await overlayStarten([suche]);
+  const b = mit.fragen({ typ: "overlay:baum" });
+  assert.equal(b.knoten.find((k) => k.art === "element").wert, "SSD 2TB");
 });

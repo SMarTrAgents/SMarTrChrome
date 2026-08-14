@@ -108,10 +108,19 @@
       ist, und zwar mit der Stufe, die zuletzt gewählt wurde. Der Dialog
       verschwindet nicht, er ist nur nicht mehr der Regelweg — er steht als
       „Dauer und Geltung ändern" daneben.
+
+      #verbinden-stufe nennt genau diese gemerkte Stufe, BEVOR sie beantragt
+      wird (Befund Abnahme 14.08.2026, M8): Bis dahin stand nirgends auf der
+      Startseite, was der eine Klick gleich beantragt, bis hin zu Vollzugriff.
+      Der Text kommt aus STUFENTEXT in panel.js, also aus derselben Quelle wie
+      der Dialog — deshalb trägt das Element hier keinen eigenen Schlüssel und
+      keinen festen Satz. Er ist beschreibend und nicht Teil des Knopfnamens,
+      darum steht er in aria-describedby und nicht im aria-label.
     -->
     <div id="verbindungsleiste" class="verbindungsleiste" hidden>
-      <button id="verbinden-tab" class="verbinden-tab" type="button" aria-describedby="verbinden-hinweis" data-i18n="kopf_verbinden_tab">Mit diesem Tab verbinden</button>
+      <button id="verbinden-tab" class="verbinden-tab" type="button" aria-describedby="verbinden-hinweis verbinden-stufe" data-i18n="kopf_verbinden_tab">Mit diesem Tab verbinden</button>
       <span id="verbinden-hinweis" class="verbinden-hinweis" data-i18n="kopf_verbinden_hinweis">für den Tab, den du gerade offen hast</span>
+      <span id="verbinden-stufe" class="verbinden-stufe"></span>
       <button id="verbinden-start" class="einstellungen-aendern" type="button"
               data-i18n="kopf_einstellungen_oeffnen">Dauer und Geltung ändern</button>
     </div>

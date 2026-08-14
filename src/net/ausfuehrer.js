@@ -55,6 +55,8 @@ import {
   bereichPasst,
   hostAus,
   saeubern,
+  eigen,
+  vergleichsform,
   textbaumBauen,
   rahmenDeckeln,
   parameterPruefen,
@@ -125,12 +127,27 @@ const gezeigterModus = new Map();
 const ABBRUCH = Symbol("abbruch");
 let abbruchSignal = signalNeu();
 
+/*
+ * Dasselbe Signal in zwei Gestalten, und beide werden gebraucht.
+ *
+ * `versprechen` ist das, gegen das ein laufender Befehl rennt — es gewinnt
+ * das `Promise.race` und liefert die Antwort an den Agenten.
+ *
+ * `abbruch` ist ein `AbortSignal` und geht in JEDEN Aufruf an die Seite
+ * (Festlegung F1). Es ist die Antwort auf den Befund vom 14.08.2026 (B3):
+ * `Promise.race` beendet nur das Warten, nicht den Verlierer. Gewann das
+ * Not-Aus-Signal, lief `AUSFUEHRUNG[cmd]` weiter und schickte seine Handlung
+ * trotzdem an die Seite — gemessen 16996 ms nach dem Kappen. Ein Rennen
+ * gewinnt man nicht, indem man wegsieht; der Verlierer muss selbst aufhören,
+ * und dafür braucht er ein Signal, das er lesen kann.
+ */
 function signalNeu() {
   let ausloesen = null;
   const versprechen = new Promise((fertig) => {
     ausloesen = fertig;
   });
-  return { versprechen, ausloesen };
+  const steuerung = new AbortController();
+  return { versprechen, ausloesen, steuerung, abbruch: steuerung.signal };
 }
 
 /** Beim Sitzungsanfang: Zähler auf null, alte Läufe entwerten. */
@@ -195,6 +212,17 @@ export function laufAbbrechen() {
   abbruchSignal = signalNeu();
   kette = Promise.resolve();
   marken.clear();
+  /* Erst das Abbruchsignal, dann das Versprechen. Die Reihenfolge trägt die
+     Zusage aus B3: Wer geweckt wird, soll ein Signal vorfinden, das schon
+     gebrochen ist — sonst schickt er zwischen Wecken und Lesen noch eine
+     letzte Nachricht in die Seite. */
+  if (altesSignal && altesSignal.steuerung) {
+    try {
+      altesSignal.steuerung.abort();
+    } catch (_) {
+      /* Ein Signal, das sich nicht brechen lässt, hält den Not-Aus nicht auf. */
+    }
+  }
   /* Zuletzt, weil das Erfüllen des Versprechens die wartenden Befehle weckt:
      Sie sollen die neue Lage vorfinden und nicht die alte. */
   if (altesSignal && altesSignal.ausloesen) altesSignal.ausloesen(ABBRUCH);
@@ -343,18 +371,40 @@ export async function modusSetzen(tabId, modus, grenze) {
 export async function modusStand(tabId) {
   const stand = await modusStandLesen();
   const schluessel = String(tabId);
+  /* `tabId` kommt aus der Seitenleiste, also über eine Nachricht — mit `eigen`
+     (H2 vom 14.08.2026). Ohne sie gäbe `modus:stand?` für einen Tab namens
+     „constructor" eine Funktion als Modus zurück. */
   return {
-    modus: stand.tabs[schluessel] || MODUS_STANDARD,
-    schritte: stand.schritte[schluessel] || 0,
+    modus: eigen(stand.tabs, schluessel) || MODUS_STANDARD,
+    schritte: eigen(stand.schritte, schluessel) || 0,
     grenze: stand.grenze,
   };
 }
 
-/** Der Modus, der wirklich gilt: der kleinere von Browser und Server. */
+/**
+ * Der Modus, der wirklich gilt: der kleinere von Browser und Server.
+ *
+ * Befund vom 14.08.2026 (H2), und er stand genau in der einen Zeile, die
+ * diese Zusage trägt: `SERVER_MODUS[schrittmodus] || "manual"` über einem
+ * gewöhnlichen Objektliteral. `constructor`, `toString`, `valueOf`,
+ * `__proto__` und `hasOwnProperty` liefern dort eine Funktion, und eine
+ * Funktion ist wahr — das `|| "manual"` griff nicht, `MODUS_RANG[<Funktion>]`
+ * wurde `undefined`, der Vergleich `undefined < 3` falsch, und der lokale
+ * Modus blieb stehen. Gemessen: `schrittmodus=constructor` bei lokalem `auto`
+ * ergab NULL Rückfragen beim Klick. Die Zusage „der Serverwert schränkt ein,
+ * er erweitert nie" war damit für jeden unbekannten Wert falsch.
+ *
+ * Zwei Zeilen, zwei Riegel: `eigen` fragt nach dem eigenen Eintrag, und der
+ * Rang wird gemessen statt geglaubt. Was nicht zu lesen ist, wird `manual` —
+ * dieselbe Richtung wie überall: weniger, nicht mehr.
+ */
 function modusVerrechnen(lokal, schrittmodus) {
   const l = MODI.includes(lokal) ? lokal : MODUS_STANDARD;
-  const s = SERVER_MODUS[schrittmodus] || "manual";
-  return MODUS_RANG[s] < MODUS_RANG[l] ? s : l;
+  const gelesen = eigen(SERVER_MODUS, schrittmodus);
+  const s = MODI.includes(gelesen) ? gelesen : "manual";
+  const rangS = eigen(MODUS_RANG, s) || 1;
+  const rangL = eigen(MODUS_RANG, l) || 1;
+  return rangS < rangL ? s : l;
 }
 
 /*
@@ -365,11 +415,11 @@ function modusVerrechnen(lokal, schrittmodus) {
  * der Sitzung — sie geht in eine fremde Seite, und was dorthin geht, kann
  * diese Seite lesen.
  */
-async function modusAnDieSeite(tabId, modus, zwingend = false) {
+async function modusAnDieSeite(tabId, modus, zwingend = false, signal = null) {
   if (!Number.isInteger(tabId) || !MODI.includes(modus)) return;
   if (!zwingend && gezeigterModus.get(tabId) === modus) return;
   gezeigterModus.set(tabId, modus);
-  await anSeite(tabId, { typ: "overlay:modus", modus }, 2000).catch(() => {});
+  await anSeite(tabId, { typ: "overlay:modus", modus }, 2000, { signal }).catch(() => {});
 }
 
 /* --------------------------------------------------------------------- *
@@ -581,6 +631,94 @@ function protokoll(text, { cmd = "", ergebnis = "" } = {}) {
   melden({ typ: "link:protokoll", text, cmd, zeit: Date.now(), ergebnis });
 }
 
+/* --------------------------------------------------------------------- *
+ * Der Riegel
+ *
+ * Befund vom 14.08.2026 (B3, B4). `Promise.race` beendet das Warten, nicht
+ * den Verlierer: Gewann der Not-Aus, lief die Ausführung weiter und griff
+ * danach noch in die Seite. Zwei Dinge halten das ab, und beide werden
+ * gebraucht:
+ *
+ *  1. Das Abbruchsignal steckt in JEDEM Aufruf an die Seite (F1). Ist es
+ *     gebrochen, wird gar nicht erst gesendet.
+ *  2. Nach JEDEM `await` in den `tu*`-Funktionen wird der Riegel gefragt,
+ *     bevor der nächste Schritt folgt. Das braucht es zusätzlich, weil nicht
+ *     jeder Weg in die Seite über `anSeite` läuft: `tabs.update`,
+ *     `tabs.goBack`, `captureVisibleTab` und das Einspielen der
+ *     Inhaltsskripte sind eigene Türen.
+ *
+ * Der Grundsatz, an dem beides hängt: **Nach dem Not-Aus verlässt nichts mehr
+ * die Erweiterung in Richtung Seite.**
+ * --------------------------------------------------------------------- */
+
+/**
+ * Den Riegel dieses Schrittes an den Not-Aus binden.
+ *
+ * Er bricht, sobald der Not-Aus bricht — und `schliessen()` bricht ihn auch
+ * dann, wenn das Rennen anders zu Ende gegangen ist. Der Horcher wird dabei
+ * wieder abgemeldet: Das Not-Aus-Signal lebt so lange wie die ganze Sitzung,
+ * und ein Horcher je Befehl wäre nach ein paar hundert Schritten eine Liste,
+ * die niemand mehr leert.
+ */
+function riegelBinden(meinSignal) {
+  const steuerung = new AbortController();
+  const quelle = meinSignal && meinSignal.abbruch ? meinSignal.abbruch : null;
+  let horcher = null;
+  if (quelle && quelle.aborted === true) {
+    steuerung.abort();
+  } else if (quelle) {
+    horcher = () => steuerung.abort();
+    quelle.addEventListener("abort", horcher, { once: true });
+  }
+  return {
+    signal: steuerung.signal,
+    schliessen() {
+      if (quelle && horcher) quelle.removeEventListener("abort", horcher);
+      steuerung.abort();
+    },
+  };
+}
+
+/** Ist der Riegel gefallen? Dann geschieht nichts mehr. */
+function riegelZu(lage) {
+  if (!lage) return !aktiv;
+  if (!aktiv) return true;
+  if (Number.isInteger(lage.generation) && lage.generation !== generation) return true;
+  return !!(lage.abbruch && lage.abbruch.aborted === true);
+}
+
+/** Die Antwort, die ein abgebrochener Schritt gibt. Eine Antwort, kein Sturz. */
+function riegelAbsage(lage) {
+  return misslungen(lage.id, lage.cmd, "session_beendet",
+    "Die Browsersitzung wurde mitten im Schritt beendet. Ich arbeite nicht weiter.",
+    { m: lage.meta() });
+}
+
+/**
+ * Warten, das sich abbrechen lässt.
+ *
+ * `tuClick` wartete fest 600 ms und las danach die Seite erneut; auch das lief
+ * nach dem Not-Aus weiter (B3). Ein Wecker, den niemand löschen kann, hält
+ * ausserdem den Dienstarbeiter am Leben.
+ */
+function schlafen(ms, signal) {
+  if (signal && signal.aborted === true) return Promise.resolve();
+  return new Promise((fertig) => {
+    let horcher = null;
+    const uhr = setTimeout(() => {
+      if (signal && horcher) signal.removeEventListener("abort", horcher);
+      fertig();
+    }, ms);
+    if (signal) {
+      horcher = () => {
+        clearTimeout(uhr);
+        fertig();
+      };
+      signal.addEventListener("abort", horcher, { once: true });
+    }
+  });
+}
+
 /**
  * Die Rückfrage beim Menschen.
  *
@@ -686,17 +824,41 @@ const WACHE_ABGEWANDERT =
   "Dieser Tab hat seit der Freigabe die Seite gewechselt. Ich arbeite hier nicht weiter, und ich sage auch nicht, wo er jetzt steht.";
 const WACHE_NICHT_VORN =
   "Dieser Tab steht gerade nicht im Vordergrund. Ich fotografiere nicht, was ich nicht steuern darf.";
+/*
+ * Der Satz für den gesperrten Wirt (Befund vom 14.08.2026, B2).
+ *
+ * Er nennt die Adresse nicht, aus demselben Grund wie `WACHE_ABGEWANDERT`.
+ * Er nennt aber die Sperrliste, denn die hat der Mensch selbst geschrieben —
+ * ihm zu sagen, dass seine eigene Einstellung greift, verrät nichts.
+ */
+const WACHE_GESPERRT =
+  "Dieser Tab steht auf einem Wirt, den du gesperrt hast. Hier arbeite ich nicht, und ich lese hier auch nichts.";
 
 /**
  * Noch einmal hinsehen, bevor etwas geschieht.
  *
+ * `wirte` sind die Wirte, über die der Mensch in DIESEM Schritt entschieden
+ * hat: der, auf dem der Tab beim Fragen stand, und bei `navigate` das Ziel.
+ * Sie stehen hier wegen des Befundes vom 14.08.2026 (B2): Die Sperrliste
+ * wurde ausschliesslich VOR der Frage gemessen. Wanderte der Tab danach von
+ * selbst auf einen gesperrten Wirt — Weiterleitung, Zeitgeber, abgeschicktes
+ * Formular —, arbeitete die Erweiterung dort weiter, als hätte niemand
+ * hingesehen.
+ *
+ * Warum nicht schlicht „gesperrt heisst nie": Weil §3.2 die Sperrliste als
+ * Rückfall auf Handbetrieb beschreibt und nicht als Verbot. Es bleibt seine
+ * Bank und nicht unsere; sagt er ja, wird gearbeitet. Diese Wache trennt
+ * deshalb genau das eine vom anderen: Ein gesperrter Wirt, über den gefragt
+ * wurde, ist erlaubt. Ein gesperrter Wirt, auf dem der Tab überraschend
+ * steht, ist es nicht.
+ *
  * @param {{id:string, cmd:string, meta:Function}} ziel
  * @param {number} tabId
  * @param {object} sitzung
- * @param {{vordergrund?:boolean}} wahl
+ * @param {{vordergrund?:boolean, wirte?:Set<string>}} wahl
  * @returns {Promise<{ok:true, tab:object, adresse:string}|{ok:false, absage:object}>}
  */
-async function wacheStellen(ziel, tabId, sitzung, { vordergrund = false } = {}) {
+async function wacheStellen(ziel, tabId, sitzung, { vordergrund = false, wirte = null } = {}) {
   let tab = null;
   try {
     tab = await chrome.tabs.get(tabId);
@@ -743,7 +905,59 @@ async function wacheStellen(ziel, tabId, sitzung, { vordergrund = false } = {}) 
     };
   }
 
+  const gesperrt = await wirtGesperrt(adresse, wirte);
+  if (gesperrt) {
+    protokoll("Der Tab steht auf einem gesperrten Wirt, ich arbeite hier nicht weiter.", {
+      cmd: ziel.cmd,
+      ergebnis: "guardrail_blocked",
+    });
+    return {
+      ok: false,
+      absage: misslungen(ziel.id, ziel.cmd, "guardrail_blocked", WACHE_GESPERRT, {
+        retryable: false,
+        hint: "Den Nutzer bitten, den Tab zurückzubringen — oder diesen Wirt in den Einstellungen von der Sperrliste zu nehmen.",
+        m: ziel.meta(),
+      }),
+    };
+  }
+
   return { ok: true, tab, adresse };
+}
+
+/**
+ * Die Regeln zweier Wirte, in die strengere Richtung zusammengelegt (B2).
+ *
+ * Wirft nie. Lässt sich die Matrix nicht lesen, gilt, was `regelnFuer` selbst
+ * für diesen Fall vorsieht — diese Funktion erfindet keine Erlaubnis.
+ */
+async function regelnZusammen(adresse, zieladresse) {
+  const hier = await regelnFuer(adresse);
+  if (!zieladresse) return hier;
+  const dort = await regelnFuer(zieladresse);
+  const freiHier = Array.isArray(hier && hier.frei) ? hier.frei : [];
+  const freiDort = Array.isArray(dort && dort.frei) ? dort.frei : [];
+  return {
+    gesperrt: (hier && hier.gesperrt === true) || (dort && dort.gesperrt === true),
+    frei: freiHier.filter((k) => freiDort.includes(k)),
+  };
+}
+
+/**
+ * Steht dieser Wirt auf der Sperrliste, ohne dass jemand danach gefragt wurde?
+ *
+ * Wirft nie: Eine Matrix, die sich nicht lesen lässt, hält keine Sitzung an —
+ * aber sie erteilt auch keine Erlaubnis, deshalb gilt im Zweifel „nicht
+ * gesperrt" nur, wenn wirklich nichts dagegen spricht.
+ */
+async function wirtGesperrt(adresse, wirte) {
+  const wirt = hostAus(adresse);
+  if (wirte && wirt && wirte.has(wirt)) return false;
+  try {
+    const regeln = await regelnFuer(adresse);
+    return regeln && regeln.gesperrt === true;
+  } catch (_) {
+    return false;
+  }
 }
 
 /* --------------------------------------------------------------------- *
@@ -804,7 +1018,7 @@ const SEITEN_RESERVE_MS = 1500;
  * verdächtig. Das Muster ist UNSER Wort aus der Liste, nie der Fremdtext, in
  * dem es stand.
  */
-async function einschleusungMessen(lage, text) {
+async function einschleusungMessen(lage, text, adresse = "") {
   if (!lage) return;
   const v = einschleusungVerdacht(text);
   if (!v.verdacht) return;
@@ -813,17 +1027,78 @@ async function einschleusungMessen(lage, text) {
   if (lage.einschleusung) return;
   lage.einschleusung = v.muster;
 
-  if (lage.modus === "auto") {
+  const heruntergestuft = lage.modus === "auto";
+  if (heruntergestuft) {
     lage.modus = "assist";
     const stand = await modusStandLesen();
     stand.tabs[String(lage.tabId)] = "assist";
     await modusStandSchreiben(stand);
-    await modusAnDieSeite(lage.tabId, "assist");
+    await modusAnDieSeite(lage.tabId, "assist", false, lage.abbruch);
   }
   protokoll(
     "Auf dieser Seite steht ein Versuch, mir neue Anweisungen unterzuschieben. Ich frage ab jetzt wieder bei jedem Schritt nach.",
     { cmd: lage.cmd, ergebnis: "injection_suspected" }
   );
+
+  /*
+   * Befund vom 14.08.2026 (M2): Bis hierher ging der Fund AUSSCHLIESSLICH als
+   * Protokollzeile an die Seitenleiste. Ist sie zu — und im Hintergrundbetrieb
+   * ist sie das immer —, erfuhr es niemand, und im Protokollbuch stand es
+   * auch nicht. Ein Schutz, dessen Auslösen niemand je erfährt, ist eine
+   * Zusage ohne Zeugen.
+   *
+   * Zwei Wege, und sie tun Verschiedenes: Das Buch ist die Nachschau („was ist
+   * in meinem Namen geschehen?"), die Systemmeldung ist der Augenblick („dein
+   * Browser arbeitet gerade anders als eingestellt").
+   *
+   * Der Eintrag ins Buch ist ausdrücklich EIN ZWEITER neben dem der Aktion.
+   * §8.3 sagt „jede Fernaktion bekommt genau einen Eintrag", und dieser hier
+   * ist keine Fernaktion, sondern ein Befund über die Seite, auf der sie
+   * stattfand. Er hätte in der Zeile der Aktion keinen Platz: Ihre Felder sind
+   * eine Positivliste, und die aufzubohren hiesse, die Datenminimierung
+   * aufzumachen, die den Sinn des Buches trägt.
+   */
+  await buchEintragen({
+    zeit: Date.now(),
+    agent: lage.agent,
+    cmd: lage.cmd,
+    url: adresse || (lage.kopf && lage.kopf.url) || "",
+    ergebnis: "injection_suspected",
+    /* Die Klassen des Schrittes gehören nicht hierher: Dieser Eintrag sagt
+       etwas über die Seite, nicht über die Handlung. */
+    klassen: [],
+  }).catch(() => undefined);
+
+  /* Die Systemmeldung nur, wenn sich WIRKLICH etwas geändert hat. Bei jedem
+     Fachartikel über Einschleusung eine Meldung zu werfen, wäre der schnellste
+     Weg, sie abzuschalten — und dann meldet auch die wichtige nichts mehr. */
+  if (heruntergestuft) systemmeldung(
+    "SMarTrChrome hat die Automatik angehalten",
+    "Auf der offenen Seite steht ein Versuch, dem Agenten neue Anweisungen unterzuschieben. Ab jetzt wird wieder bei jedem Schritt gefragt."
+  );
+}
+
+/*
+ * Eine Meldung, die auch ohne offene Seitenleiste ankommt (M2).
+ *
+ * Sie ist Beste-Kraft und niemals eine Bedingung: Fehlt die Berechtigung
+ * `notifications`, gibt es die Schnittstelle gar nicht, und dann bleibt es
+ * beim Protokollbuch. Ein Schutz, der an einer fehlenden Berechtigung
+ * stürzte, wäre schlimmer als einer, der leise ist.
+ */
+function systemmeldung(titel, text) {
+  try {
+    if (!chrome.notifications || typeof chrome.notifications.create !== "function") return;
+    const zurueck = chrome.notifications.create("", {
+      type: "basic",
+      iconUrl: "icons/icon-128.png",
+      title: titel,
+      message: text,
+    });
+    if (zurueck && typeof zurueck.catch === "function") zurueck.catch(() => {});
+  } catch (_) {
+    /* Ohne Meldungsrecht bleibt das Buch der Weg. */
+  }
 }
 
 /** Was der Agent über einen Einschleusungsverdacht erfährt. */
@@ -840,7 +1115,12 @@ function einschleusungAnhaengen(rahmen, lage) {
 
 /** Die Wahrnehmung erheben und in den Textbaum verwandeln. */
 async function wahrnehmen(tabId, kopf, frist, offscreen = false, lage = null) {
-  const antwort = await anSeite(tabId, { typ: "overlay:baum", offscreen: offscreen === true }, frist);
+  const antwort = await anSeite(
+    tabId,
+    { typ: "overlay:baum", offscreen: offscreen === true },
+    frist,
+    { signal: lage && lage.abbruch }
+  );
   /* `geantwortet` bleibt erhalten und wird nicht mit der Kennung verrechnet:
      „die Seite hat sich gemeldet und konnte nicht" ist etwas anderes als „von
      der Seite kam gar nichts". Vorher fiel beides auf denselben Satz zusammen. */
@@ -859,7 +1139,7 @@ async function wahrnehmen(tabId, kopf, frist, offscreen = false, lage = null) {
   });
   /* Vor dem Verpacken, nicht danach: Der Modus soll schon stehen, wenn der
      nächste Schritt die Entscheidungstabelle fragt. */
-  await einschleusungMessen(lage, baum.text);
+  await einschleusungMessen(lage, baum.text, kopf.url);
   return {
     ok: true,
     snapshot: {
@@ -890,7 +1170,8 @@ async function wahrnehmen(tabId, kopf, frist, offscreen = false, lage = null) {
  * gescheitert zu melden wäre die schlimmere Falschaussage.
  */
 async function wahrnehmenGesichert(lage, offscreen = false) {
-  const wache = await wacheStellen(lage, lage.tabId, lage.sitzung);
+  if (riegelZu(lage)) return { ok: false, geantwortet: false, fehler: "abgebrochen" };
+  const wache = await wacheStellen(lage, lage.tabId, lage.sitzung, { wirte: lage.wirte });
   if (!wache.ok) {
     return { ok: false, geantwortet: false, fehler: "bereich_verlassen", ausserhalb: true, absage: wache.absage };
   }
@@ -942,7 +1223,8 @@ async function tuReadPage(rahmen, lage) {
 }
 
 async function tuGetState(rahmen, lage) {
-  const antwort = await anSeite(lage.tabId, { typ: "overlay:zustand" }, lage.seitenfrist());
+  const antwort = await anSeite(lage.tabId, { typ: "overlay:zustand" }, lage.seitenfrist(),
+    { signal: lage.abbruch });
   if (!antwort.ok || !antwort.antwort.ok) {
     return absageDerSeite(lage, antwort, {
       /* Die Seite hat geantwortet, aber ihr eigenes Ablesen ist gescheitert.
@@ -997,7 +1279,8 @@ async function tuScroll(rahmen, lage) {
       ref: lage.plan.ref,
       epoche: lage.epoche,
     },
-    Math.max(1000, lage.restfrist() - 2000)
+    Math.max(1000, lage.restfrist() - 2000),
+    { signal: lage.abbruch }
   );
   if (!antwort.ok || !antwort.antwort.ok) {
     return absageDerSeite(lage, antwort, {
@@ -1054,7 +1337,8 @@ async function zeigerZeigen(lage) {
       beschriftung: ziel.name,
       rect: ziel.rect,
     },
-    Math.max(1000, lage.seitenfrist())
+    Math.max(1000, lage.seitenfrist()),
+    { signal: lage.abbruch }
   ).catch(() => {});
 }
 
@@ -1094,10 +1378,14 @@ const ARBEITSMUSTER = {
   run_workflow: "abspielen",
 };
 
-async function arbeitsZeigerFahren(tabId, cmd, frist) {
-  const muster = ARBEITSMUSTER[cmd];
-  if (!muster) return;
-  await anSeite(tabId, { typ: "overlay:arbeitszeiger", muster }, Math.max(800, frist || 1500))
+async function arbeitsZeigerFahren(tabId, cmd, frist, signal = null) {
+  /* `eigen` und nicht `ARBEITSMUSTER[cmd]`: `cmd` kommt aus dem Rahmen des
+     Relays, und über einem Objektliteral fände `toString` eine Funktion, die
+     dann als „Muster" in eine fremde Seite ginge (H2 vom 14.08.2026). */
+  const muster = eigen(ARBEITSMUSTER, cmd);
+  if (typeof muster !== "string") return;
+  await anSeite(tabId, { typ: "overlay:arbeitszeiger", muster }, Math.max(800, frist || 1500),
+    { signal })
     .catch(() => {});
 }
 
@@ -1112,7 +1400,8 @@ async function tuHighlight(rahmen, lage) {
       beschriftung: ziel.name,
       rect: ziel.rect,
     },
-    lage.seitenfrist()
+    lage.seitenfrist(),
+    { signal: lage.abbruch }
   );
   if (!gesetzt.ok) {
     return misslungen(lage.id, lage.cmd, "tab_gone",
@@ -1134,10 +1423,17 @@ async function tuHighlight(rahmen, lage) {
 async function tuClick(rahmen, lage) {
   const ziel = lage.ziel;
   await zeigerZeigen(lage);
+  /* Nach dem `await` und vor dem nächsten Griff in die Seite: Genau in diesem
+     Fenster lag der Befund B3 vom 14.08.2026. Die Seite antwortete auf
+     `overlay:zeiger` nicht, der Not-Aus kam, der Agent bekam nach 0 ms
+     `session_beendet` — und 16996 ms später ging `overlay:klicken` doch noch
+     raus. */
+  if (riegelZu(lage)) return riegelAbsage(lage);
   const antwort = await anSeite(
     lage.tabId,
     { typ: "overlay:klicken", ref: ziel.ref, epoche: lage.epoche },
-    Math.max(1000, lage.restfrist() - 4000)
+    Math.max(1000, lage.restfrist() - 4000),
+    { signal: lage.abbruch }
   );
   if (!antwort.ok || !antwort.antwort.ok) {
     return absageDerSeite(lage, antwort, {
@@ -1155,11 +1451,15 @@ async function tuClick(rahmen, lage) {
   /* Nach dem Klick eine neue Wahrnehmung — die Seite hat sich vermutlich
      verändert. Nach einer Navigation ist das Inhaltsskript weg; dann geht die
      Antwort ohne Wahrnehmung raus, und der Agent ruft `readPage` selbst. */
-  await new Promise((r) => setTimeout(r, 600));
-  const w = await wahrnehmenGesichert(lage).catch(() => ({ ok: false }));
+  await schlafen(600, lage.abbruch);
   const daten = {
     clicked: { ref: ziel.ref, role: saeubern(ziel.rolle, 40), name: saeubern(ziel.name, GRENZEN.nameZeichen) },
   };
+  /* Der Klick hat stattgefunden, also wird er gemeldet — aber die Wahrnehmung
+     danach ist Zugabe und unterbleibt nach dem Not-Aus. Sie hier trotzdem zu
+     holen hiesse, nach dem Kappen noch einmal die ganze Seite zu lesen. */
+  if (riegelZu(lage)) return gelungen(lage.id, lage.cmd, daten, lage.meta());
+  const w = await wahrnehmenGesichert(lage).catch(() => ({ ok: false }));
   if (w && w.ok) daten.snapshot = w.snapshot;
   return gelungen(lage.id, lage.cmd, daten, lage.meta());
 }
@@ -1174,6 +1474,7 @@ async function tuClick(rahmen, lage) {
 async function tuType(rahmen, lage) {
   const text = lage.plan.text;
   await zeigerZeigen(lage);
+  if (riegelZu(lage)) return riegelAbsage(lage);
   const antwort = await anSeite(
     lage.tabId,
     {
@@ -1184,7 +1485,8 @@ async function tuType(rahmen, lage) {
       leeren: lage.plan.leeren,
       absenden: lage.plan.absenden,
     },
-    Math.max(1000, lage.restfrist() - 4000)
+    Math.max(1000, lage.restfrist() - 4000),
+    { signal: lage.abbruch }
   );
   if (!antwort.ok || !antwort.antwort.ok) {
     return absageDerSeite(lage, antwort, {
@@ -1240,6 +1542,7 @@ async function tuType(rahmen, lage) {
 async function tuSelect(rahmen, lage) {
   const plan = lage.plan;
   await zeigerZeigen(lage);
+  if (riegelZu(lage)) return riegelAbsage(lage);
   const antwort = await anSeite(
     lage.tabId,
     {
@@ -1250,7 +1553,8 @@ async function tuSelect(rahmen, lage) {
       etikett: plan.etikett,
       index: plan.index,
     },
-    Math.max(1000, lage.restfrist() - 4000)
+    Math.max(1000, lage.restfrist() - 4000),
+    { signal: lage.abbruch }
   );
   if (!antwort.ok || !antwort.antwort.ok) {
     /* „Noch einmal versuchen" (das letzte Feld je Zeile) steht nur da, wo ein
@@ -1316,8 +1620,10 @@ async function tuExtract(rahmen, lage) {
   /* Der einzige Weg, der Seitentext ausliefert, ohne durch `wahrnehmen` zu
      gehen — also braucht er die Wache selbst. Ohne sie läse `extract` die
      Zeilen der Seite, auf die der Tab nach der Freigabe gewechselt ist. */
-  const wache = await wacheStellen(lage, lage.tabId, lage.sitzung);
+  if (riegelZu(lage)) return riegelAbsage(lage);
+  const wache = await wacheStellen(lage, lage.tabId, lage.sitzung, { wirte: lage.wirte });
   if (!wache.ok) return wache.absage;
+  if (riegelZu(lage)) return riegelAbsage(lage);
   const antwort = await anSeite(
     lage.tabId,
     {
@@ -1327,7 +1633,8 @@ async function tuExtract(rahmen, lage) {
       felder: plan.felder,
       epoche: lage.epoche,
     },
-    Math.max(1000, lage.restfrist() - 2000)
+    Math.max(1000, lage.restfrist() - 2000),
+    { signal: lage.abbruch }
   );
   if (!antwort.ok || !antwort.antwort.ok) {
     return absageDerSeite(lage, antwort, {
@@ -1427,7 +1734,8 @@ async function tuWaitFor(rahmen, lage) {
       epoche: lage.epoche,
       fristMs: wartenMs,
     },
-    wartenMs + 1500
+    wartenMs + 1500,
+    { signal: lage.abbruch }
   );
   if (!antwort.ok || !antwort.antwort.ok) {
     return absageDerSeite(lage, antwort, {
@@ -1531,7 +1839,11 @@ async function tuScreenshot(rahmen, lage) {
        `captureVisibleTab` nimmt den aktiven Tab des Fensters auf, nicht den,
        den wir übergeben. Steht inzwischen ein anderer vorn, wäre das Bild von
        einer nie freigegebenen Seite. */
-    const wache = await wacheStellen(lage, lage.tabId, lage.sitzung, { vordergrund: true });
+    if (riegelZu(lage)) return riegelAbsage(lage);
+    const wache = await wacheStellen(lage, lage.tabId, lage.sitzung, {
+      vordergrund: true,
+      wirte: lage.wirte,
+    });
     if (!wache.ok) return wache.absage;
     const tab = wache.tab;
 
@@ -1623,6 +1935,25 @@ export const REKORDER_BILD_ABLAGE = "sa_rekorder_bilder";
 const REKORDER_BILDER_HOECHSTENS = 60;
 const REKORDER_BILDER_ZEICHEN = 4 * 1024 * 1024;
 
+/*
+ * Wie lange ein Bildvorrat höchstens stehenbleibt (Befund M3 vom 14.08.2026).
+ *
+ * Bis dahin wurde `sa_rekorder_bilder` ausschliesslich beim BROWSERSTART
+ * weggeräumt. Zu jedem Klick- und Auswahlschritt liegt hier ein JPEG des
+ * ganzen sichtbaren Tabs — bis zu 60 Stück und 4 MiB —, und wer den Browser
+ * wochenlang offen lässt, trägt die Bilder jeder Aufzeichnung dieser Wochen
+ * mit sich herum. Sie zeigen ganze Seiten, also Warenkörbe, Postfächer und
+ * alles, was beim Aufzeichnen offen stand.
+ *
+ * Diese Frist ist die Bremse, die diese Datei allein setzen kann: Ein Vorrat,
+ * den seit zwei Stunden niemand ergänzt hat, gehört zu einer Aufnahme, die
+ * niemand mehr beendet. Die Aufnahme selbst hört woanders auf — der
+ * Dienstarbeiter beantwortet `rekorder:stop`, und dort gehört
+ * `rekorderBilderLeeren()` hin. Das ist gemeldet und steht nicht in diesem
+ * Gebiet; bis dahin räumt wenigstens die Zeit auf.
+ */
+export const REKORDER_BILDER_FRIST_MS = 2 * 60 * 60 * 1000;
+
 /* Der Name kommt aus dem Inhaltsskript und damit aus einer fremden Seite. Er
    wird Schlüssel in unserer Ablage, also wird er gemessen und nicht gesäubert:
    Ein Name, der das Muster nicht trifft, ist keiner. */
@@ -1696,6 +2027,16 @@ export async function rekorderBild(tabId, angaben = {}) {
     if (roh && typeof roh.bilder === "object" && roh.bilder) vorrat = { ...roh.bilder };
   } catch (_) {
     vorrat = {};
+  }
+
+  /* Was zu einer längst vergessenen Aufnahme gehört, geht jetzt (M3). Der
+     Deckel darunter zählt danach nur noch, was wirklich zu dieser Aufnahme
+     gehört — sonst sagte eine Absage „genug Bilder gespeichert" über Bilder
+     von vorgestern. */
+  const alt = Date.now() - REKORDER_BILDER_FRIST_MS;
+  for (const [schluessel, bild] of Object.entries(vorrat)) {
+    const zeit = Number(bild && bild.zeit);
+    if (!Number.isFinite(zeit) || zeit < alt) delete vorrat[schluessel];
   }
 
   const schonDa = Object.prototype.hasOwnProperty.call(vorrat, name);
@@ -1776,9 +2117,13 @@ export async function rekorderBilderLeeren() {
  * Antwort geht mit `statusHint: "loading"` heraus, damit der Agent weiß, dass
  * er ein Zwischenbild sieht.
  */
-async function tabFertigAbwarten(tabId, fristMs) {
+async function tabFertigAbwarten(tabId, fristMs, signal = null) {
   const ende = Date.now() + Math.max(500, fristMs);
   for (;;) {
+    /* Diese Schleife kann Sekunden dauern. Ohne den Riegel liefe sie nach dem
+       Not-Aus weiter und hielte den Dienstarbeiter am Leben (B3/B4 vom
+       14.08.2026). */
+    if (signal && signal.aborted === true) return { ok: false, fehler: "abgebrochen" };
     let tab = null;
     try {
       tab = await chrome.tabs.get(tabId);
@@ -1788,7 +2133,7 @@ async function tabFertigAbwarten(tabId, fristMs) {
     if (!tab) return { ok: false, fehler: "tab_gone" };
     if (tab.status === undefined || tab.status === "complete") return { ok: true, tab };
     if (Date.now() >= ende) return { ok: false, fehler: "frist", tab };
-    await new Promise((r) => setTimeout(r, 150));
+    await schlafen(150, signal);
   }
 }
 
@@ -1807,7 +2152,7 @@ async function tabFertigAbwarten(tabId, fristMs) {
  * über den Ortswechsel wieder offen. Zwei Aufrufer, eine Quelle: so können die
  * beiden Stellen nicht erneut auseinanderlaufen.
  */
-async function rahmenWiederAnschalten(tabId, overlay) {
+async function rahmenWiederAnschalten(tabId, overlay, signal = null) {
   if (!overlay || overlay.schonDa) return;
   /* Ein frisch eingespieltes Inhaltsskript weiss nichts von einem Modus. Was
      wir ihm zuletzt gesagt haben, ist mit der alten Seite gestorben — also
@@ -1818,7 +2163,7 @@ async function rahmenWiederAnschalten(tabId, overlay) {
     typ: "overlay:an",
     gross,
     text: "SMarTrAgent steuert diesen Tab, Esc Esc = Stopp",
-  }, 2000).catch(() => {});
+  }, 2000, { signal }).catch(() => {});
 }
 
 /**
@@ -1828,7 +2173,10 @@ async function rahmenWiederAnschalten(tabId, overlay) {
  *          |{ok:false, code:string, satz:string, hinweis:string|null, retryable:boolean}}
  */
 async function nachDemWechsel(lage, fristMs) {
-  const fertig = await tabFertigAbwarten(lage.tabId, fristMs);
+  const fertig = await tabFertigAbwarten(lage.tabId, fristMs, lage.abbruch);
+  if (riegelZu(lage)) {
+    return { ok: false, code: "session_beendet", satz: "Die Browsersitzung wurde während des Wechsels beendet.", hinweis: null, retryable: false };
+  }
   if (!fertig.ok && fertig.fehler === "tab_gone") {
     return { ok: false, code: "tab_gone", satz: "Der Tab ist beim Wechsel verschwunden.", hinweis: null, retryable: false };
   }
@@ -1862,7 +2210,32 @@ async function nachDemWechsel(lage, fristMs) {
     };
   }
 
-  const overlay = await overlaySicherstellen(lage.tabId);
+  /* Und die Sperrliste, ein zweites Mal (Befund vom 14.08.2026, B2).
+     Bis dahin prüfte dieser Nachlauf ausschliesslich `bereichPasst` — der
+     Bereich ist die Freigabe des Menschen für die SITZUNG, die Sperrliste ist
+     seine dauerhafte Ansage „hier nicht". Eine Weiterleitung konnte damit aus
+     einem freigegebenen Wirt einen gesperrten machen, und danach wurde dort
+     der Rahmen aufgebaut und die Seite wahrgenommen. Gefragt hatte niemand:
+     Vor dem Wechsel stand der Tab noch woanders.
+
+     Was der Mensch für DIESEN Schritt freigegeben hat, steht in `lage.wirte`
+     und gilt weiter. Alles andere ist eine Überraschung, und Überraschungen
+     werden hier nicht gelesen. */
+  if (await wirtGesperrt(adresse, lage.wirte)) {
+    protokoll("Der Tab steht nach dem Wechsel auf einem gesperrten Wirt, ich lese hier nicht.", {
+      cmd: lage.cmd,
+      ergebnis: "guardrail_blocked",
+    });
+    return {
+      ok: false,
+      code: "guardrail_blocked",
+      satz: WACHE_GESPERRT,
+      hinweis: "Den Nutzer bitten, den Tab zurückzubringen — oder diesen Wirt in den Einstellungen von der Sperrliste zu nehmen.",
+      retryable: false,
+    };
+  }
+
+  const overlay = await overlaySicherstellen(lage.tabId, { signal: lage.abbruch });
   if (!overlay.ok) {
     return {
       ok: false,
@@ -1877,7 +2250,7 @@ async function nachDemWechsel(lage, fristMs) {
 
   /* Vor der Wahrnehmung, nicht danach: schon der erste Blick auf die neue Seite
      soll unter sichtbarem Rahmen geschehen. */
-  await rahmenWiederAnschalten(lage.tabId, overlay);
+  await rahmenWiederAnschalten(lage.tabId, overlay, lage.abbruch);
 
   const kopf = { url: adresse, titel: await tabTitel(lage.tabId) };
   const w = await wahrnehmen(lage.tabId, kopf, lage.seitenfrist(), false, lage).catch(() => ({ ok: false }));
@@ -1898,6 +2271,11 @@ function wechselAbsage(lage, nachlauf) {
 
 async function tuNavigate(rahmen, lage) {
   const plan = lage.plan;
+  /* `tabs.update` ist eine eigene Tür in die Seite, an `anSeite` vorbei.
+     Befund B4 vom 14.08.2026: Der Arbeitszeiger stand ausserhalb des Rennens,
+     und in diesem Fenster lief der Ortswechsel nach dem Not-Aus trotzdem —
+     gemessen wurde ein `tabs.update`, das NACH dem Kappen ausgeführt wurde. */
+  if (riegelZu(lage)) return riegelAbsage(lage);
   try {
     await chrome.tabs.update(lage.tabId, { url: plan.url });
   } catch (fehler) {
@@ -1923,6 +2301,7 @@ async function tuNavigate(rahmen, lage) {
 }
 
 async function tuBack(rahmen, lage) {
+  if (riegelZu(lage)) return riegelAbsage(lage);
   try {
     await chrome.tabs.goBack(lage.tabId);
   } catch (fehler) {
@@ -2012,13 +2391,22 @@ const SCHRITT_TEXT = Object.freeze({
  * zusammen: Eine Referenz ohne ihre Epoche ist eine Zahl, die auf der nächsten
  * Wahrnehmung etwas anderes bedeutet.
  *
- * @returns {{ok:true, ref:string, epoche:string|null} | {ok:false, fehler:string}}
+ * Seit Festlegung F3 (14.08.2026) antwortet die Seite zusätzlich mit `name`,
+ * `rolle` und `anker`. Der Grund ist der Unterschied zwischen Eindeutigkeit
+ * und Identität: Dass ein Anker GENAU EIN Element trifft, sagt nichts darüber,
+ * ob es dasselbe Element ist wie beim Aufzeichnen. Eine fremde Seite baut
+ * um, ein `[data-testid]` wandert an einen anderen Knopf, und der Ablauf
+ * klickt zuverlässig das Falsche.
+ *
+ * @returns {{ok:true, ref:string, epoche:string|null, name:string, rolle:string}
+ *          | {ok:false, fehler:string}}
  */
 async function kaskadeAufloesen(lage, kaskade) {
   const antwort = await anSeite(
     lage.tabId,
     { typ: "overlay:kaskade", kaskade },
-    Math.max(1000, lage.seitenfrist())
+    Math.max(1000, lage.seitenfrist()),
+    { signal: lage.abbruch }
   );
   if (!antwort.ok || !antwort.antwort.ok) {
     return { ok: false, fehler: String((antwort.antwort && antwort.antwort.fehler) || "kaskade_gebrochen") };
@@ -2030,14 +2418,74 @@ async function kaskadeAufloesen(lage, kaskade) {
      „dein Anker findet nichts mehr". */
   if (!ref) return { ok: false, fehler: "kaskade_gebrochen" };
   const epoche = typeof antwort.antwort.epoche === "string" ? saeubern(antwort.antwort.epoche, 24) : null;
-  return { ok: true, ref, epoche };
+  /* Name und Rolle sind Text von der besuchten Seite und werden wie jeder
+     solche Text gesäubert und gedeckelt. Sie gehen nie in einen Satz für den
+     Menschen, sondern ausschliesslich in den Vergleich unten. */
+  const name = saeubern(antwort.antwort.name, GRENZEN.nameZeichen);
+  const rolle = saeubern(antwort.antwort.rolle, 40);
+  return { ok: true, ref, epoche, name, rolle };
+}
+
+/**
+ * Ist das gefundene Element auch das gemeinte? (Festlegung F3)
+ *
+ * Verglichen wird der Name, den die Seite JETZT nennt, mit dem, was beim
+ * Aufzeichnen über dieses Element festgehalten wurde. Alles wird flach
+ * gemacht, damit Grossschreibung, Umlautschreibweise und Satzzeichen keine
+ * Rolle spielen; verglichen wird auf Gleichheit oder darauf, dass eines im
+ * anderen als ganzes Wort steckt.
+ *
+ * Festgehalten wurde ZWEIERLEI, und beides zählt:
+ *
+ *  1. `beschreibung` — was die Werkbank notiert hat. Sie stammt meist vom
+ *     Element selbst (aria-label, title, Text), kann aber ein Satz eines
+ *     Menschen sein.
+ *  2. Die Textanker der Kaskade (`text=…`). Sie sind die maschinell
+ *     aufgezeichnete Tatsache: Dieser Anker VERLANGT genau diesen Text.
+ *
+ * Warum die Anker dazugehören und die Festlegung F3 hier über ihren
+ * Wortlaut hinausgeht: Gemessen am 14.08.2026 an einem echten Ablauf
+ * (`wf_knopf`, Anker `text=Jetzt kaufen`, Beschreibung „den Kauf
+ * abschliessen"). Der Anker trifft nachweislich das aufgezeichnete Element,
+ * und der Vergleich allein gegen die Prosa des Menschen hätte den Ablauf mit
+ * „falsches Ziel" abgebrochen. Eine Wache, die bei jedem zweiten richtigen
+ * Ablauf Alarm schlägt, wird abgeschaltet, und dann schützt sie gar nichts.
+ * Die Zusage bleibt trotzdem stehen: Trifft der Anker etwas, das WEDER zur
+ * Beschreibung noch zu einem Textanker passt, ist das kein Erfolg.
+ *
+ * Fehlt jede Angabe — kein Name von der Seite, keine Beschreibung, kein
+ * Textanker —, wird nicht verglichen. Das ist die milde Richtung, und sie ist
+ * hier die richtige: Ein Inhaltsskript älterer Fassung antwortet ohne `name`,
+ * ein Ablauf aus einer älteren Werkbank hat keine Beschreibung. Beides darf
+ * nicht dazu führen, dass gar nichts mehr läuft — der Schritt geht ohnehin
+ * durch Klassifizierer, Modus und Freigabe wie jeder andere.
+ */
+function zielIstDasAufgezeichnete(name, schritt) {
+  const a = vergleichsform(name);
+  if (!a) return true;
+
+  const belege = [];
+  if (schritt && schritt.beschreibung) belege.push(schritt.beschreibung);
+  if (Array.isArray(schritt && schritt.selector_cascade)) {
+    for (const anker of schritt.selector_cascade) {
+      if (typeof anker === "string" && anker.startsWith("text=")) belege.push(anker.slice(5));
+    }
+  }
+  if (!belege.length) return true;
+
+  return belege.some((roh) => {
+    const b = vergleichsform(roh);
+    return b && (a === b || a.includes(b) || b.includes(a));
+  });
 }
 
 /** Aus einem geprüften Schritt den Befehlsrahmen bauen, den `einzeln` erwartet. */
 async function schrittRahmenBauen(lage, schritt, nr, gesamt) {
   const wf = lage.plan.workflow;
-  const cmd = SCHRITT_BEFEHL[schritt.type];
-  if (!cmd) {
+  /* Der Schritttyp kommt aus einer gespeicherten Datei, also von aussen (H2
+     vom 14.08.2026). */
+  const cmd = eigen(SCHRITT_BEFEHL, schritt.type);
+  if (typeof cmd !== "string") {
     return {
       ok: false,
       satz: `Den Schritttyp „${saeubern(schritt.type, 40)}" spielt diese Fassung nicht ab.`,
@@ -2045,7 +2493,7 @@ async function schrittRahmenBauen(lage, schritt, nr, gesamt) {
     };
   }
 
-  const was = schritt.beschreibung || SCHRITT_TEXT[schritt.type] || schritt.type;
+  const was = schritt.beschreibung || eigen(SCHRITT_TEXT, schritt.type) || schritt.type;
   const rahmen = {
     id: `${lage.id}.${nr}`,
     cmd,
@@ -2085,6 +2533,20 @@ async function schrittRahmenBauen(lage, schritt, nr, gesamt) {
         hinweis: gebrochen
           ? "Die mitgelieferte Wahrnehmung zeigt, was jetzt dasteht. Nenne mir die Referenz des gemeinten Elements, dann spiele ich den Schritt damit."
           : "Den Tab neu laden und den Ablauf noch einmal starten. Bleibt es dabei, den Schritt in der Werkbank neu aufzeichnen.",
+      };
+    }
+    /* Festlegung F3: Identität, nicht nur Eindeutigkeit. Weicht der Name des
+       gefundenen Elements von dem ab, was der Mensch aufgezeichnet hat, ist
+       das kein Erfolg, sondern ein anderes Ziel — und ein Ablauf, der
+       zuverlässig das Falsche trifft, ist gefährlicher als einer, der
+       abbricht. */
+    if (!zielIstDasAufgezeichnete(gefunden.name, schritt)) {
+      return {
+        ok: false,
+        kaskade: true,
+        fehler: "kaskade_falsches_ziel",
+        satz: `Schritt ${nr} hat ein Element gefunden, aber nicht das aufgezeichnete: Der Anker trifft jetzt etwas anderes.`,
+        hinweis: "Die Seite wurde vermutlich umgebaut. Die mitgelieferte Wahrnehmung zeigt, was jetzt dasteht. Nenne mir die Referenz des gemeinten Elements, oder den Schritt in der Werkbank neu aufzeichnen.",
       };
     }
     rahmen.ref = gefunden.ref;
@@ -2166,8 +2628,9 @@ async function tuRunWorkflow(rahmen, lage) {
 
     /* Vor JEDEM Schritt: Lebt die Sitzung noch? Ohne diese Zeile liefe ein
        Ablauf nach dem Not-Aus weiter, bis der nächste Schritt zufällig an
-       einer anderen Prüfung scheitert. */
-    if (!aktiv || lage.generation !== generation) {
+       einer anderen Prüfung scheitert. Gefragt wird der Riegel und nicht nur
+       `aktiv`: Er kennt auch den Abbruch dieses einen Schrittes (B3). */
+    if (riegelZu(lage)) {
       return misslungen(lage.id, lage.cmd, "session_beendet",
         `Die Browsersitzung wurde beendet, ${gemacht} von ${gesamt} Schritten waren erledigt.`,
         { m: lage.meta() });
@@ -2201,7 +2664,13 @@ async function tuRunWorkflow(rahmen, lage) {
       return workflowSchrittAbsage(lage, nr, schritt, {
         satz: gebaut.satz,
         hinweis: gebaut.hinweis,
-        innen: gebaut.kaskade ? { code: "kaskade_gebrochen", message: gebaut.fehler } : null,
+        /* Der innere Code ist der, den die Kaskade wirklich gemeldet hat —
+           `kaskade_gebrochen`, wenn kein Anker mehr trifft, und
+           `kaskade_falsches_ziel`, wenn einer etwas anderes trifft (F3).
+           Beides unter einem Namen zu melden hiesse, dem Agenten zwei sehr
+           verschiedene Lagen als dieselbe zu verkaufen: Bei der einen hilft
+           eine neue Referenz, bei der anderen ist die Seite umgebaut. */
+        innen: gebaut.kaskade ? { code: gebaut.fehler || "kaskade_gebrochen", message: gebaut.fehler } : null,
       });
     }
 
@@ -2393,8 +2862,13 @@ async function einzeln(rahmen, sitzung, { id, cmd, begonnen, meineGeneration, no
 
   /* 1. Positivliste. Ein unbekannter Befehl wird abgelehnt und benannt — nicht
         stillschweigend verschluckt und nicht auf gut Glück versucht. */
-  const eintrag = BEFEHLE[cmd];
-  if (!eintrag) {
+  /* `cmd` kommt aus dem Rahmen des Relays. `BEFEHLE[cmd]` allein fände auch
+     `constructor` und `toString`, und der Befehl liefe mit einer geerbten
+     Funktion als „Eintrag" weiter — bis er irgendwo an `eintrag.tut` stürbe.
+     Dass er heute an der Stufenprüfung hängenbleibt, ist Zufall und keine
+     Prüfung (Befund H2 vom 14.08.2026). */
+  const eintrag = eigen(BEFEHLE, cmd);
+  if (!eintrag || typeof eintrag !== "object") {
     return misslungen(id, cmd, "not_supported",
       cmd
         ? `Den Befehl „${saeubern(cmd, 40)}" kann diese Erweiterung nicht.`
@@ -2483,7 +2957,7 @@ async function einzeln(rahmen, sitzung, { id, cmd, begonnen, meineGeneration, no
   /* 7. Der Rahmen muss stehen, bevor gelesen wird. Ohne ihn sieht der Mensch
         nicht, dass gerade auf seiner Seite gearbeitet wird — und dann wird
         nicht gearbeitet. */
-  const overlay = await overlaySicherstellen(tabId);
+  const overlay = await overlaySicherstellen(tabId, { signal: meinSignal.abbruch });
   if (!overlay.ok) {
     return misslungen(id, cmd, "snapshot_unavailable",
       overlay.fehler === "ursprung_gesperrt"
@@ -2498,7 +2972,7 @@ async function einzeln(rahmen, sitzung, { id, cmd, begonnen, meineGeneration, no
      die Seite nach dem ersten Seitenwechsel unsichtbar bedient. Das ist der
      Kern der Meldung „nichts passiert sichtbar". Jetzt wird der Rahmen bei
      jeder Neu-Einspielung wiederhergestellt. */
-  await rahmenWiederAnschalten(tabId, overlay);
+  await rahmenWiederAnschalten(tabId, overlay, meinSignal.abbruch);
 
   /* 7b. Der Modus, der wirklich gilt (§2). Er entsteht aus dem, was der Mensch
          am Browser eingestellt hat, und dem, was der Server zulässt — und es
@@ -2506,8 +2980,8 @@ async function einzeln(rahmen, sitzung, { id, cmd, begonnen, meineGeneration, no
          wurde: Die Seite soll ihn zeigen, sobald sie überhaupt etwas zeigt. */
   const stand = await modusStandLesen();
   const schluessel = String(tabId);
-  const modus = modusVerrechnen(stand.tabs[schluessel], sitzung && sitzung.schrittmodus);
-  await modusAnDieSeite(tabId, modus);
+  const modus = modusVerrechnen(eigen(stand.tabs, schluessel), sitzung && sitzung.schrittmodus);
+  await modusAnDieSeite(tabId, modus, false, meinSignal.abbruch);
 
   /* 8. Die Parameter — geprüft, BEVOR gefragt wird.
         Zwei Gründe, und beide sind Befunde:
@@ -2564,7 +3038,8 @@ async function einzeln(rahmen, sitzung, { id, cmd, begonnen, meineGeneration, no
         ref,
         epoche,
       },
-      6000
+      6000,
+      { signal: meinSignal.abbruch }
     );
     if (!nachschlag.ok || !nachschlag.antwort.ok) {
       return absageDerSeite({ id, cmd, meta: m }, nachschlag, {
@@ -2615,10 +3090,51 @@ async function einzeln(rahmen, sitzung, { id, cmd, begonnen, meineGeneration, no
    * Rückfrage auslösen, und deshalb steht `freigabeNoetig` und nicht diese
    * Datei am Ende der Kette.
    */
-  const kopfJetzt = { url: adresse, titel: "" };
+  /*
+   * Wo der Tab steht — UND wohin dieser Schritt ihn bringt.
+   *
+   * Befund vom 14.08.2026 (B1): Hier stand `{ url: adresse }`, also
+   * ausschliesslich die Adresse, auf der der Tab GERADE steht. Bei `navigate`
+   * wurde damit die Seite klassifiziert, die verlassen wird, und nie das
+   * Ziel. Alle adressgestützten harten Klassen — `zahlung`, `datei`,
+   * `captcha` — massen beim Ortswechsel die falsche Seite. Gemessen: Ein Tab
+   * auf `https://shop.de/artikel/12345` durfte in der Automatik
+   * `https://shop.de/order/confirm?buy=1` aufrufen, mit `success=true` und
+   * null Rückfragen. Ein Ein-Klick-Kauf per GET war stumm auslösbar.
+   *
+   * `back` trägt hier nichts ein und kann es nicht: Wohin der Verlauf führt,
+   * weiss vorher niemand. Für `back` bleibt es deshalb bei der Herkunft, und
+   * die zweite Wache in `nachDemWechsel` prüft die neue Adresse, sobald sie
+   * feststeht — dort gegen Bereich UND Sperrliste, bevor irgendetwas gelesen
+   * wird. Eine erfundene Zieladresse wäre schlechter als keine.
+   */
+  const kopfJetzt = { url: adresse, titel: "", ziel: cmd === "navigate" ? plan.url : null };
   const befund = klassenBestimmen(cmd, plan, ziel, kopfJetzt);
   buch.klassen = befund.klassen;
-  const regeln = await regelnFuer(adresse);
+
+  /*
+   * Die Regeln des Wirtes — auch die des ZIELS (Befund vom 14.08.2026, B2).
+   *
+   * `regelnFuer(adresse)` allein misst den Wirt, den der Tab gerade verlässt.
+   * Gemessen: Mit `sa_matrix.gesperrt=["bank.de"]`, Tab auf `shop.de`, Modus
+   * `auto`, lief `navigate` nach `https://bank.de/ueberweisung` mit
+   * `success=true` und null Rückfragen durch — und danach wurde dort der
+   * Rahmen aufgebaut und die Seite wahrgenommen. Vertrag §3.2, erste Zeile,
+   * verlangt für einen gesperrten Wirt in JEDEM Modus eine Frage.
+   *
+   * Zusammengelegt wird in die strengere Richtung: gesperrt, sobald EINER von
+   * beiden gesperrt ist, und freigeschaltet nur, was auf BEIDEN
+   * freigeschaltet ist. Eine Freischaltung, die der Mensch für den einen Wirt
+   * erteilt hat, ist keine für den anderen.
+   */
+  const regeln = await regelnZusammen(adresse, cmd === "navigate" ? plan.url : null);
+
+  /* Die Wirte, über die in DIESEM Schritt entschieden wird. Sie reisen bis in
+     die Wache nach der Freigabe: Ein gesperrter Wirt, über den gefragt wurde,
+     ist erlaubt; einer, auf dem der Tab überraschend steht, nicht. */
+  const wirte = new Set([hostAus(adresse)].filter(Boolean));
+  if (cmd === "navigate" && plan.host) wirte.add(plan.host);
+
   const entscheidung = freigabeNoetig(modus, befund, regeln);
 
   /* 9c. Die Agentenmatrix (§4). Sie steht NACH dem Klassifizierer, weil sie
@@ -2765,8 +3281,10 @@ async function einzeln(rahmen, sitzung, { id, cmd, begonnen, meineGeneration, no
 
           Zugesagt wird deshalb genau eines: der Zeiger. Danach ist Schluss. */
   if (befund.klassen.includes("captcha")) {
-    if (ziel) await zeigerZeigen({ tabId, ziel, seitenfrist: () => 2000 });
-    else await arbeitsZeigerFahren(tabId, cmd, 2000);
+    /* Auch dieser eine Zeiger trägt das Abbruchsignal: Er steht nach der
+       Freigabe, und nach dem Not-Aus geht auch er nicht mehr raus (B3). */
+    if (ziel) await zeigerZeigen({ tabId, ziel, seitenfrist: () => 2000, abbruch: meinSignal.abbruch });
+    else await arbeitsZeigerFahren(tabId, cmd, 2000, meinSignal.abbruch);
     protokoll("Hier steht ein Menschentest. Den löse ich nicht, den übergebe ich dir.",
       { cmd, ergebnis: "guardrail_blocked" });
     return misslungen(id, cmd, "guardrail_blocked",
@@ -2799,11 +3317,24 @@ async function einzeln(rahmen, sitzung, { id, cmd, begonnen, meineGeneration, no
          Der Kopf für die Ausführung entsteht ebenfalls hier, damit Adresse und
          Titel aus derselben Messung stammen wie die Erlaubnis und nicht aus
          einer älteren. */
-  const wache = await wacheStellen({ id, cmd, meta: m }, tabId, sitzung);
+  const wache = await wacheStellen({ id, cmd, meta: m }, tabId, sitzung, { wirte });
   if (!wache.ok) return wache.absage;
   const kopf = { url: wache.adresse, titel: (wache.tab && wache.tab.title) || "" };
 
   protokoll(`${eintrag.tut}: ${grund}`, { cmd });
+
+  /*
+   * Der Riegel dieses einen Schrittes (Befund vom 14.08.2026, B3 und B4).
+   *
+   * Er bricht aus zwei Gründen: wenn der Not-Aus kommt, und wenn dieses
+   * Rennen zu Ende ist. Der zweite Grund ist der weniger offensichtliche und
+   * genauso wichtig: Gewinnt der Wecker, bekommt der Agent `settle_timeout` —
+   * und die Ausführung liefe ohne diesen Riegel munter weiter und griffe
+   * danach noch in die Seite. Eine Antwort „hat nicht stattgefunden" über
+   * einem Schritt, der gerade doch stattfindet, ist die schlimmste Sorte
+   * Falschaussage.
+   */
+  const riegel = riegelBinden(meinSignal);
 
   const lage = {
     id,
@@ -2822,6 +3353,10 @@ async function einzeln(rahmen, sitzung, { id, cmd, begonnen, meineGeneration, no
     agent,
     generation: meineGeneration,
     signal: meinSignal,
+    /* Das Abbruchsignal für ALLES, was diesen Schritt verlässt (F1). */
+    abbruch: riegel.signal,
+    /* Die Wirte, über die der Mensch für diesen Schritt entschieden hat (B2). */
+    wirte,
     einschleusung: null,
     restfrist: () => Math.max(1000, frist(eintrag, uhrBeginn)),
     /* Für jeden Aufruf an die Seite: dieselbe Restfrist, aber mit Abstand zum
@@ -2837,10 +3372,38 @@ async function einzeln(rahmen, sitzung, { id, cmd, begonnen, meineGeneration, no
   const uhr = new Promise((fertig) => {
     wecker = setTimeout(() => fertig(null), Math.max(1500, frist(eintrag, uhrBeginn)));
   });
-  /* Sichtbar machen, dass jetzt gearbeitet wird — bei JEDEM Befehl, nicht nur
-     bei denen mit Ziel. Steht nach der Freigabe und vor der Ausführung, genau
-     wie der Zielzeiger: Ein abgelehnter Schritt bewegt weiterhin nichts. */
-  await arbeitsZeigerFahren(tabId, cmd, lage.seitenfrist());
+  /*
+   * Der Arbeitszeiger steht IM Rennen (Befund vom 14.08.2026, B4).
+   *
+   * Bis dahin wurde er davor abgewartet — nach dem letzten Riegel und vor dem
+   * `Promise.race`. In genau diesem Fenster wirkte der Not-Aus gar nicht:
+   * Antwortete die Seite auf `overlay:arbeitszeiger` nicht, erreichte
+   * `session_beendet` den Agenten erst nach 42034 ms, und `tabs.update` auf
+   * die Zieladresse lief NACH dem Not-Aus. Das betraf jeden einzelnen Befehl,
+   * denn diese Zeile steht vor jedem.
+   *
+   * Die Reihenfolge bleibt, was sie war: erst der Zeiger, dann die Tat. Er
+   * kündigt an, er berichtet nicht — und ein abgelehnter Schritt bewegt
+   * weiterhin nichts, weil das Ganze nach der Freigabe steht.
+   */
+  const arbeit = (async () => {
+    await arbeitsZeigerFahren(tabId, cmd, lage.seitenfrist(), lage.abbruch);
+    if (riegelZu(lage)) return riegelAbsage(lage);
+    /* `eigen` und nicht `AUSFUEHRUNG[cmd]`: Über einem Objektliteral fände ein
+       Rahmen mit `cmd: "constructor"` eine geerbte Funktion und riefe sie
+       (H2 vom 14.08.2026). Dass Schritt 1 und 4 das heute abfangen, ist
+       Zufall — und die Stelle, die etwas AUFRUFT, prüft selbst. */
+    const weg = eigen(AUSFUEHRUNG, cmd);
+    if (typeof weg !== "function") {
+      return misslungen(id, cmd, "not_supported",
+        `Den Befehl „${saeubern(cmd, 40)}" kann diese Erweiterung nicht.`,
+        { hint: `Möglich sind zurzeit: ${Object.keys(BEFEHLE).join(", ")}.`, m: m() });
+    }
+    return weg(rahmen, lage);
+  })();
+  /* Ein Läufer, dem niemand mehr zuhört, darf den Dienstarbeiter nicht mit
+     einer unbehandelten Ablehnung beenden. */
+  arbeit.catch(() => undefined);
 
   let ergebnis;
   try {
@@ -2848,13 +3411,13 @@ async function einzeln(rahmen, sitzung, { id, cmd, begonnen, meineGeneration, no
        Not-Aus steht IM Rennen, weil er sonst erst wirkte, wenn die Seite
        antwortet — und in den Sekunden bis dahin sieht der Mensch zu, wie
        weitergearbeitet wird (§5). */
-    ergebnis = await Promise.race([
-      AUSFUEHRUNG[cmd](rahmen, lage),
-      uhr,
-      meinSignal.versprechen,
-    ]);
+    ergebnis = await Promise.race([arbeit, uhr, meinSignal.versprechen]);
   } finally {
     if (wecker) clearTimeout(wecker);
+    /* Das Rennen ist entschieden. Wer es verloren hat, hört jetzt auf — das
+       ist der Teil, den `Promise.race` von sich aus NICHT tut und der den
+       ganzen Befund B3 ausmacht. */
+    riegel.schliessen();
   }
 
   if (ergebnis === ABBRUCH) {
@@ -2927,7 +3490,7 @@ function parameterRahmen(cmd, rahmen, id) {
  */
 function schleifePruefen(tabId, cmd, plan, kopf, stand, schluessel) {
   const grenze = stand.grenze;
-  const gemacht = stand.schritte[schluessel] || 0;
+  const gemacht = eigen(stand.schritte, schluessel) || 0;
   if (gemacht >= grenze) {
     return {
       code: "step_limit",
@@ -2962,7 +3525,7 @@ async function schrittZaehlen(tabId, cmd, plan, kopf, zuruecksetzen) {
 
   const stand = await modusStandLesen();
   const schluessel = String(tabId);
-  stand.schritte[schluessel] = zuruecksetzen ? 1 : (stand.schritte[schluessel] || 0) + 1;
+  stand.schritte[schluessel] = zuruecksetzen ? 1 : (eigen(stand.schritte, schluessel) || 0) + 1;
   await modusStandSchreiben(stand);
 }
 

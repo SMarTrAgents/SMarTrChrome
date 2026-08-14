@@ -36,10 +36,12 @@ import { attrappeSetzen } from "./chrome-attrappe.mjs";
 let welt = attrappeSetzen();
 
 const link = await import("../net/link.js");
+const chat = await import("../net/chat.js");
 const ausfuehrer = await import("../net/ausfuehrer.js");
 const protokollbuch = await import("../net/protokollbuch.js");
 const werkstatt = await import("../net/werkstatt.js");
 const { MODUS_ABLAGE } = await import("../net/befehle.js");
+const { REKORDER_ABLAGE } = await import("../net/werkstatt.js");
 
 /* Der Dienstarbeiter wird EINMAL geladen. Sein Nachrichtenhörer wird dabei
    angemeldet; ihn greifen wir hier ab und rufen ihn selbst, genau so, wie
@@ -49,6 +51,26 @@ const { MODUS_ABLAGE } = await import("../net/befehle.js");
 await import("../background/worker.js");
 const hoerer = welt.chrome.runtime.onMessage._zuhoerer[0];
 assert.equal(typeof hoerer, "function", "Der Dienstarbeiter meldet einen Nachrichtenhörer an.");
+
+/*
+ * Dieselben zwei Griffe für die beiden anderen Eingänge in denselben
+ * Produktivweg. Sie werden hier abgegriffen und nicht nachgebaut, weil ein
+ * nachgebauter Hörer nichts über die ausgelieferte Erweiterung sagt: Gemessen
+ * wird, was der Dienstarbeiter bei Chrome WIRKLICH anmeldet.
+ *
+ *  - `tabs.onUpdated` ist die Zeile, an der Befund H6 hängt (Aufzeichnung über
+ *    einen Seitenwechsel hinweg). Fehlt sie, gibt es hier keine Funktion,
+ *    und die Prüfsätze dazu werden rot, statt still zu verschwinden.
+ *  - `commands.onCommand` ist der dritte Not-Aus-Weg (Alt+Umschalt+S).
+ */
+const tabsAktualisiert = welt.chrome.tabs.onUpdated._zuhoerer[0];
+assert.equal(
+  typeof tabsAktualisiert,
+  "function",
+  "Der Dienstarbeiter hört auf `tabs.onUpdated` — ohne diese Anmeldung kann die Aufzeichnung keinen Seitenwechsel überleben.",
+);
+const tastenkuerzel = welt.chrome.commands.onCommand._zuhoerer[0];
+assert.equal(typeof tastenkuerzel, "function", "Und auf das Tastenkürzel.");
 
 /* ------------------------------------------------------------------ *
  * Werkzeug
@@ -249,10 +271,74 @@ function sitzungAusFremdemLeben(zusatz = {}) {
   };
 }
 
+/*
+ * Ein Gateway, das eine Chat-Antwort NIE fertig meldet.
+ *
+ * Genau diese Lage misst Befund B9: Der Botengang läuft, der Mensch drückt den
+ * Not-Aus, und die Frage ist, ob danach noch abgefragt wird. Zurückgegeben wird
+ * die Liste aller Rufe, damit sich `/chat/cancel` zählen lässt — „null Mal" war
+ * der gemessene Zustand vom 14.08.2026.
+ */
+function chatGatewayStellen() {
+  const rufe = [];
+  globalThis.fetch = async (adresse, angaben) => {
+    const weg = String(adresse);
+    rufe.push({ weg, angaben });
+    const antwort = (daten) => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => "application/json" },
+      async json() {
+        return daten;
+      },
+    });
+    if (weg.includes("/api/v1/chat/message")) return antwort({ task_id: "t-1", context_id: "c-1" });
+    if (weg.includes("/api/v1/chat/poll/")) return antwort({ status: "processing", steps: [] });
+    return antwort({});
+  };
+  return rufe;
+}
+
+/** Wie oft ein Weg gerufen wurde. */
+const rufeAuf = (rufe, stueck) => rufe.filter((r) => r.weg.includes(stueck)).length;
+
+/* Ein englischer Katalog. Er ist der ganze Prüfstand für Befund M10: Kommt der
+   Satz aus dem Katalog, steht hier Englisches; steht er als Literal im
+   Quelltext, kommt Deutsches. Dazwischen gibt es nichts. */
+const KATALOG_EN = {
+  ext_symbol_sitzung: { message: "SMarTrChrome, cloud session active" },
+  ext_symbol_sitzung_agent: {
+    message: "SMarTrChrome, cloud session active, $1 is steering this browser",
+  },
+  ext_meldung_titel: { message: "Cloud session active" },
+  ext_meldung_text: {
+    message: "An agent is now steering this browser. To stop, press Alt, Shift and S.",
+  },
+  ext_meldung_text_agent: {
+    message: "$1 is now steering this browser. To stop, press Alt, Shift and S.",
+  },
+};
+
+/** Eine laufende Aufzeichnung, so wie `content/rekorder.js` sie ablegt. */
+function aufnahmeAblage(laeuft = true) {
+  return {
+    [REKORDER_ABLAGE]: {
+      version: 1,
+      laeuft,
+      bildNr: 0,
+      schritte: [{ type: "click", selector_cascade: ["[data-testid='relist']"] }],
+    },
+  };
+}
+
 test.afterEach(async () => {
   /* Ohne diese Zeile hielte ein laufender Herzschlag (`setInterval`) den
      Prüflauf offen, und ein Lauf, der hängt, sagt niemandem, was kaputt ist. */
   await link.trennen("nutzer");
+  /* Dasselbe für den Botengang des Chats: Sein Abfragetakt ist eine echte
+     Zeitschaltung, und `chat.js` hält seinen Lauf im Modulspeicher, der die
+     Weltwechsel dieser Datei überlebt. */
+  await chat.chatAbbrechen();
 });
 
 /* ================================================================== *
@@ -489,6 +575,128 @@ test("Not-Aus: der Widerruf beim Relay findet statt, nach dem Kappen", async () 
   assert.equal(rumpf.code, "s-widerruf", "Mit der Kennung der Sitzung, die enden soll.");
 });
 
+test("Not-Aus: der Cloud-Auftrag hört mit auf, auf allen drei Wegen", async () => {
+  /*
+   * Befund B9 vom 14.08.2026, gemessen am echten Nachrichtenhörer: Nach
+   * `{typ:"notbremse", quelle:"schild"}` lief der Cloud-Auftrag weiter. Drei
+   * weitere Abfragen auf `/chat/poll/t-1`, `/chat/cancel` null Mal,
+   * `chatZustand()` meldete weiter `{laeuft:true}`. Die Cloud-Hälfte der Zusage
+   * aus §5 war gar nicht gebaut.
+   *
+   * Verschärfend und deshalb hier mitgemessen: Der Wecker `smartrchat-wache`
+   * und der Schlüssel `chat_lauf` überlebten den Not-Aus. `chat.wacheLaufen`
+   * hätte das Abholen nach dem nächsten Start des Dienstarbeiters WIEDER
+   * AUFGENOMMEN. Ein Not-Aus, den ein Wecker zurücknimmt, ist keiner.
+   *
+   * Gemessen wird über alle drei Eingänge, weil es drei Stellen im Quelltext
+   * sind. Ein Prüfsatz auf einen davon liesse die anderen zwei genau so
+   * zurück, wie sie am 14.08. waren.
+   */
+  const wege = [
+    {
+      name: "Schild im Tab",
+      async lauf() {
+        await anWorker({ typ: "notbremse", quelle: "schild" }, ausDemTab(7));
+      },
+    },
+    {
+      name: "Stoppknopf der Seitenleiste",
+      async lauf() {
+        await anWorker({ typ: "link:notaus", grund: "seitenleiste" });
+      },
+    },
+    {
+      name: "Tastenkürzel",
+      async lauf() {
+        tastenkuerzel("notbremse");
+      },
+    },
+  ];
+
+  for (const weg of wege) {
+    weltNeu();
+    await chat.chatAbbrechen(); /* Rest aus dem vorigen Durchgang */
+    const rufe = chatGatewayStellen();
+    await sitzungAufbauen({ agent: "SMarTrCEO", code: "s-cloud" });
+
+    const start = await chat.chatStarten({ text: "Was steht hier?", ausweis: "ausweis" });
+    assert.equal(start.ok, true, `${weg.name}: Vorbedingung, der Botengang ist losgeschickt.`);
+    await runden(10);
+    assert.equal(
+      (await chat.chatZustand()).laeuft,
+      true,
+      `${weg.name}: Vorbedingung, er läuft.`,
+    );
+    assert.ok(rufeAuf(rufe, "/chat/poll/") >= 1, `${weg.name}: Vorbedingung, es wird abgefragt.`);
+    assert.ok(
+      welt.wecker.some((w) => w.name === chat.CHAT_WECKER_NAME),
+      `${weg.name}: Vorbedingung, der Chat-Wecker steht.`,
+    );
+
+    const abfragenVorher = rufeAuf(rufe, "/chat/poll/");
+    await weg.lauf();
+    await runden(20);
+
+    assert.equal(
+      (await chat.chatZustand()).laeuft,
+      false,
+      `${weg.name}: Nach dem Not-Aus läuft kein Botengang mehr.`,
+    );
+    assert.equal(
+      rufeAuf(rufe, "/chat/cancel"),
+      1,
+      `${weg.name}: Der Auftrag wird beim Server gestoppt, genau einmal.`,
+    );
+    assert.deepEqual(
+      await welt.chrome.storage.session.get("chat_lauf"),
+      {},
+      `${weg.name}: Der abgelegte Botengang ist weg, sonst holt die Wache die Antwort nach dem nächsten Start weiter ab.`,
+    );
+    assert.ok(
+      !welt.wecker.some((w) => w.name === chat.CHAT_WECKER_NAME),
+      `${weg.name}: Der Chat-Wecker ist gelöscht.`,
+    );
+
+    /* Und die Messung, die der Befund wörtlich nennt: Es wird nicht weiter
+       abgefragt. Der Takt liegt bei zwei Sekunden, also wird hier wirklich
+       gewartet — eine kürzere Frist würde nichts messen. */
+    await new Promise((f) => setTimeout(f, 2300));
+    assert.equal(
+      rufeAuf(rufe, "/chat/poll/"),
+      abfragenVorher,
+      `${weg.name}: Nach dem Not-Aus kommt keine einzige Abfrage mehr.`,
+    );
+  }
+});
+
+test("Not-Aus: das Zeichen erreicht den Tab auch bei geschlossener Seitenleiste", async () => {
+  /*
+   * Festlegung F2: Der Dienstarbeiter sendet `overlay:gestoppt` selbst. Bis zum
+   * 14.08.2026 tat das ausschliesslich die Seitenleiste (panel.js). War sie zu
+   * — und genau dafür gibt es das Auge am Symbol —, blieb im Tab der grüne
+   * Rahmen stehen, obwohl nichts mehr lief.
+   *
+   * Gemessen wird ohne Seitenleiste: `panelAntwortet` ist null, jede Nachricht
+   * dorthin läuft ins Leere, so wie in Chrome.
+   */
+  for (const weg of ["schild", "seitenleiste", "tastenkuerzel"]) {
+    weltNeu();
+    await sitzungAufbauen({ agent: "SMarTrCEO", code: "s-schild", tabId: 7 });
+    const ab = welt.spur.length;
+
+    if (weg === "schild") await anWorker({ typ: "notbremse", quelle: "schild" }, ausDemTab(7));
+    else if (weg === "seitenleiste") await anWorker({ typ: "link:notaus", grund: "seitenleiste" });
+    else tastenkuerzel("notbremse");
+    await runden(20);
+
+    const anDenTab = welt.spur
+      .slice(ab)
+      .filter((e) => e.wohin === "seite" && e.nachricht.typ === "overlay:gestoppt");
+    assert.equal(anDenTab.length, 1, `${weg}: Im Tab steht „gestoppt", genau einmal.`);
+    assert.equal(anDenTab[0].tabId, 7, `${weg}: und zwar im Tab, für den freigegeben war.`);
+  }
+});
+
 test("Not-Aus: das Ende bekommt seine Zeile im Buch", async () => {
   weltNeu();
   await sitzungAufbauen({ agent: "SMarTrCEO", code: "s-buch" });
@@ -595,6 +803,187 @@ test("Kein stilles Warten: eine Fernaktion, eine Zeile im Buch, mit Ort statt In
 });
 
 /* ================================================================== *
+ * 3b. Die Sprache der beiden Zeichen ausserhalb der Seitenleiste (§12)
+ * ================================================================== */
+
+test("Sprache: Symboltitel und Systemmeldung kommen aus dem Katalog", async () => {
+  /*
+   * Befund M10 vom 14.08.2026, gemessen mit `--lang=en-US`: Beide Sätze kamen
+   * deutsch, weil sie als Literale im Quelltext standen und an `_locales`
+   * vorbeiliefen. Einem englischsprachigen Menschen mit geschlossener
+   * Seitenleiste blieb damit kein lesbares Zeichen ausser dem Abzeichen.
+   *
+   * Der Katalog hier ist englisch. Kommt der Satz aus dem Katalog, steht
+   * Englisches da; steht er im Quelltext, steht Deutsches da. Dazwischen gibt
+   * es nichts, und genau deshalb misst dieser Prüfsatz die Sache selbst.
+   */
+  weltNeu({ katalog: KATALOG_EN });
+  let ab = welt.spur.length;
+  await sitzungAufbauen({ agent: "SMarTrCEO" });
+
+  const z = zeichen(ab);
+  assert.equal(z.meldung.length, 1, "Vorbedingung: Die Systemmeldung lief.");
+  assert.equal(z.meldung[0].angaben.title, "Cloud session active", "Der Titel kommt aus dem Katalog.");
+  assert.equal(
+    z.meldung[0].angaben.message,
+    "SMarTrCEO is now steering this browser. To stop, press Alt, Shift and S.",
+    "Der Satz auch, mitsamt eingesetztem Agentennamen.",
+  );
+
+  const titel = welt.spur.slice(ab).filter((e) => e.wohin === "action.setTitle");
+  assert.ok(titel.length >= 1, "Der Titel am Symbol wird gesetzt.");
+  assert.equal(
+    titel[titel.length - 1].title,
+    "SMarTrChrome, cloud session active, SMarTrCEO is steering this browser",
+    "Und er kommt aus dem Katalog, nicht aus dem Quelltext.",
+  );
+  await link.trennen("nutzer");
+
+  /* Und ohne Agentennamen der zweite Schlüssel, nicht ein zusammengebauter
+     Satz mit einer Lücke darin. */
+  weltNeu({ katalog: KATALOG_EN });
+  ab = welt.spur.length;
+  await sitzungAufbauen({ agent: null, code: "ohne-namen" });
+  assert.equal(
+    zeichen(ab).meldung[0].angaben.message,
+    "An agent is now steering this browser. To stop, press Alt, Shift and S.",
+  );
+  assert.equal(
+    welt.spur.slice(ab).filter((e) => e.wohin === "action.setTitle").pop().title,
+    "SMarTrChrome, cloud session active",
+  );
+});
+
+test("Sprache: nach dem Sitzungsende steht wieder der Titel aus dem Manifest", async () => {
+  /*
+   * Der zweite Teil von M10: `titelSetzen` schrieb im AUS-Fall den deutschen
+   * Satz „SMarTrChrome, Niemand oeffnen" fest und überschrieb damit dauerhaft
+   * den Titel aus dem Manifest — der steht dort als `__MSG_ext_symbol_titel__`
+   * und ist längst übersetzt. Die leere Zeichenkette ist der einzige Weg, ihn
+   * zurückzugeben; jeder eigene Satz an dieser Stelle wäre eine zweite,
+   * unübersetzte Fassung daneben.
+   */
+  weltNeu({ katalog: KATALOG_EN });
+  await sitzungAufbauen({ agent: "SMarTrCEO" });
+  const ab = welt.spur.length;
+  await link.trennen("nutzer");
+
+  const titel = welt.spur.slice(ab).filter((e) => e.wohin === "action.setTitle");
+  assert.ok(titel.length >= 1, "Das Ende setzt den Titel zurück.");
+  assert.equal(
+    titel[titel.length - 1].title,
+    "",
+    "Leer heisst: Chrome nimmt wieder den übersetzten Titel aus dem Manifest.",
+  );
+});
+
+/* ================================================================== *
+ * 3c. Die Aufzeichnung überlebt den Seitenwechsel (Befund H6)
+ * ================================================================== */
+
+test("Aufzeichnung: nach einem Seitenwechsel wird der Aufzeichner im Produktivweg neu eingespielt", async () => {
+  /*
+   * Befund H6 vom 14.08.2026: `REKORDER_DATEIEN` wurde nur in `rekorderSenden`
+   * benutzt, und das lief nur für `rekorder:start` und `rekorder:stop`. Die
+   * ganze Wiederaufnahme aus `sa_rekorder` hing damit an einer Funktion, die im
+   * Produktivweg nie an die Reihe kam. Ein Ablauf über mehrere Seiten verlor
+   * beim ERSTEN Wechsel alles Weitere, lautlos.
+   *
+   * Deshalb geht dieser Prüfsatz nicht selbst einspielen — genau das machte den
+   * bisherigen Satz R17 grün. Er ruft den Hörer, den der Dienstarbeiter bei
+   * Chrome angemeldet hat, so wie Chrome ihn bei einer Navigation ruft.
+   */
+  const gefragt = [];
+  /* Wie viele Einspielungen es VOR dem Seitenwechsel gab. Alles davor gehört
+     zum alten Dokument; das neue antwortet erst, wenn es neu bestückt ist. */
+  let vorDemWechsel = 0;
+  weltNeu({
+    ablageLocal: aufnahmeAblage(true),
+    seiteAntwortet: (n) => {
+      gefragt.push(n.typ);
+      const eingespielt = welt.spur.filter((e) => e.wohin === "executeScript").length;
+      /* Nach einem Seitenwechsel ist das Inhaltsskript weg. Chrome lehnt eine
+         Nachricht an ein Dokument ohne Empfänger ab. */
+      if (eingespielt <= vorDemWechsel) throw new Error("kein Empfänger");
+      return { ok: true, laeuft: true };
+    },
+  });
+
+  /* Der Mensch startet die Aufzeichnung, auf dem Weg der Seitenleiste. */
+  const gestartet = await anWorker({ typ: "rekorder:start", tabId: 7 });
+  assert.equal(gestartet.ok, true, "Vorbedingung: Die Aufzeichnung läuft in Tab 7.");
+  vorDemWechsel = welt.spur.filter((e) => e.wohin === "executeScript").length;
+  assert.equal(vorDemWechsel, 1, "Vorbedingung: Dafür wurde einmal eingespielt.");
+
+  /* Und jetzt der Seitenwechsel. Gerufen wird der Hörer, den der
+     Dienstarbeiter bei Chrome angemeldet hat, mit den Angaben, die Chrome
+     mitgibt. Dieser Prüfsatz spielt ausdrücklich NICHT selbst ein. */
+  tabsAktualisiert(7, { status: "loading", url: "https://www.ebay.de/sh/lst/ended" }, { id: 7 });
+  await runden(25);
+
+  assert.ok(
+    gefragt.includes("rekorder:ping"),
+    "Gefragt wird zuerst, ob dort schon jemand aufzeichnet.",
+  );
+  const eingespielt = welt.spur.filter((e) => e.wohin === "executeScript");
+  assert.equal(eingespielt.length, 2, "Und weil niemand antwortet, wird neu eingespielt.");
+  assert.deepEqual(
+    eingespielt[1].auftrag.files,
+    ["src/content/geheim.js", "src/content/selektor.js", "src/content/rekorder.js"],
+    "Die Reihenfolge bleibt verbindlich: `geheim.js` zuerst, dann `selektor.js`, das schreibt, was `rekorder.js` braucht.",
+  );
+  assert.equal(eingespielt[1].auftrag.target.tabId, 7, "In den Tab, in dem aufgezeichnet wird.");
+
+  /* Ein FREMDER Tab bekommt nichts. Ohne diese Grenze würde aus der Reparatur
+     ein Mitschnitt: `content/rekorder.js` nimmt eine gemerkte Aufzeichnung in
+     jedem Dokument wieder auf, in das es eingespielt wird. */
+  vorDemWechsel = eingespielt.length;
+  tabsAktualisiert(9, { status: "loading", url: "https://bank.example/konto" }, { id: 9 });
+  await runden(25);
+  assert.equal(
+    welt.spur.filter((e) => e.wohin === "executeScript").length,
+    2,
+    "In einen anderen Tab wird nichts eingespielt, auch nicht versuchsweise.",
+  );
+
+  /* Und nach dem Beenden zieht auch der eigene Tab nichts mehr nach. */
+  await anWorker({ typ: "rekorder:stop", tabId: 7 });
+  const nachStop = welt.spur.filter((e) => e.wohin === "executeScript").length;
+  tabsAktualisiert(7, { status: "loading", url: "https://www.ebay.de/" }, { id: 7 });
+  await runden(25);
+  assert.equal(
+    welt.spur.filter((e) => e.wohin === "executeScript").length,
+    nachStop,
+    "Nach dem Beenden zeichnet nichts mehr nach, auch wenn die Ablage noch dasteht.",
+  );
+});
+
+test("Aufzeichnung: läuft keine, spielt ein Seitenwechsel auch nichts ein", async () => {
+  /*
+   * Die andere Hälfte derselben Zusage. Eine Erweiterung, die nach jedem
+   * Seitenwechsel einen Mitschreiber einspielt, wäre ein Mitschnitt, um den
+   * niemand gebeten hat. Gemessen wird beides: gar keine Ablage und eine
+   * Ablage, in der die Aufnahme beendet dasteht.
+   */
+  for (const lage of ["ohne Ablage", "Aufnahme beendet"]) {
+    weltNeu(lage === "ohne Ablage" ? {} : { ablageLocal: aufnahmeAblage(false) });
+    tabsAktualisiert(7, { status: "loading", url: "https://www.ebay.de/" }, { id: 7 });
+    await runden(25);
+
+    assert.equal(
+      welt.spur.filter((e) => e.wohin === "executeScript").length,
+      0,
+      `${lage}: Es wird nichts eingespielt.`,
+    );
+    assert.equal(
+      welt.spur.filter((e) => e.wohin === "seite").length,
+      0,
+      `${lage}: Und es wird auch nicht nachgefragt.`,
+    );
+  }
+});
+
+/* ================================================================== *
  * 4. Der Dienstarbeiter nach einem Neustart (MV3)
  * ================================================================== */
 
@@ -666,6 +1055,115 @@ test("Neustart: ohne Sitzung nimmt der Anlauf das Abzeichen weg", async () => {
     zeichen(ab).abzeichenWeg.length >= 1,
     "Ein Abzeichen, das einen Neustart überlebt, behauptet eine Sitzung, die es nicht gibt.",
   );
+});
+
+test("Das Buch: JEDES Sitzungsende bekommt seine Zeile, nicht nur das eine über `trennen`", async () => {
+  /*
+   * Befund N3 vom 14.08.2026: Die Zeile stand in `trennen()`, also auf einem
+   * von sechs Wegen. Der `disconnect`-Rahmen des Relays, das `onclose` der
+   * Leitung, die gescheiterte Verlängerung, die Wache ohne Leitung und die
+   * verwaiste Sitzung aus einem fremden Leben gingen ohne Eintrag durch
+   * `sitzungBeenden`. Ein Buch mit Lücken ist als Nachweis wertlos, und es sind
+   * gerade die Enden, die der Mensch NICHT selbst ausgelöst hat, nach denen er
+   * später sucht.
+   *
+   * Gemessen wird deshalb über alle Wege, auf denen eine Sitzung in dieser
+   * Erweiterung enden kann, und nicht an einem Beispiel.
+   */
+  const wege = [
+    {
+      name: "Der Mensch drückt Stopp",
+      ergebnis: "notbremse",
+      async lauf() {
+        await link.trennen("notbremse");
+      },
+    },
+    {
+      name: "Der Relay schliesst selbst",
+      ergebnis: "relay",
+      async lauf(draht) {
+        await draht.empfangen({ type: "disconnect", reason: "session_idle" });
+      },
+    },
+    {
+      name: "Die Leitung fällt weg",
+      ergebnis: "getrennt",
+      async lauf(draht) {
+        await draht.onclose({ code: 4409 });
+      },
+    },
+    {
+      name: "Die Wache findet keine Leitung mehr",
+      ergebnis: "verloren",
+      async lauf(draht) {
+        draht.readyState = DrahtAttrappe.CLOSED;
+        await link.wacheLaufen();
+      },
+    },
+    {
+      name: "Die Frist ist um",
+      ergebnis: "abgelaufen",
+      expiry: 0.002,
+      async lauf() {
+        await new Promise((f) => setTimeout(f, 20));
+        await link.wacheLaufen();
+      },
+    },
+    {
+      name: "Die Verlängerung scheitert",
+      ergebnis: "verloren",
+      async lauf(alt) {
+        const laeuft = link.verlaengernMit({ ticket: "zweites-ticket", ausweis: "ausweis" });
+        laeuft.catch(() => {});
+        let neu = DrahtAttrappe.letzte;
+        for (let i = 0; i < 100 && neu === alt; i += 1) {
+          await new Promise((f) => setImmediate(f));
+          neu = DrahtAttrappe.letzte;
+        }
+        neu.oeffnen();
+        await neu.empfangen({ type: "disconnect", reason: "unauthorized" });
+        await neu.onclose({ code: 4401 });
+        await laeuft.catch(() => {});
+      },
+    },
+  ];
+
+  for (const weg of wege) {
+    weltNeu();
+    const draht = await sitzungAufbauen({
+      agent: "SMarTrCEO",
+      code: "s-ende",
+      expiry: weg.expiry || 1800,
+    });
+    assert.deepEqual(await protokollbuch.lesen(), [], `${weg.name}: Vorbedingung, das Buch ist leer.`);
+
+    await weg.lauf(draht);
+    await runden(10);
+
+    const enden = (await protokollbuch.lesen()).filter((e) => e.cmd === "disconnect");
+    assert.equal(enden.length, 1, `${weg.name}: genau eine Zeile für das Ende, nicht null und nicht zwei.`);
+    assert.equal(enden[0].ergebnis, weg.ergebnis, `${weg.name}: und sie sagt, warum Schluss war.`);
+    assert.equal(enden[0].agent, "SMarTrCEO", `${weg.name}: mit dem Agenten, dem die Sitzung gehörte.`);
+    assert.equal((await link.zustand()).verbunden, false, `${weg.name}: und die Sitzung ist wirklich beendet.`);
+  }
+
+  /* Und die Gegenprobe zur Gegenprobe: Der siebte Weg, die verwaiste Sitzung
+     aus einem fremden Leben, geht durch dieselbe Stelle. */
+  weltNeu({ ablageSession: { link_sitzung: sitzungAusFremdemLeben(), ...ausweisAblage() } });
+  await link.anlaufPruefen();
+  const verwaist = (await protokollbuch.lesen()).filter((e) => e.cmd === "disconnect");
+  assert.equal(verwaist.length, 1, "Auch die verwaiste Sitzung wird gebucht.");
+  assert.equal(verwaist[0].ergebnis, "verloren");
+});
+
+test("Das Buch: ein Aufruf ins Leere erfindet kein Sitzungsende", async () => {
+  /* Die Kehrseite von N3. Der Not-Aus darf gedrückt werden, wenn nichts läuft
+     — und dann steht auch nichts im Buch. Eine Zeile ohne Sitzung wäre eine
+     Behauptung über etwas, das nie stattgefunden hat. */
+  weltNeu();
+  await link.trennen("notbremse");
+  await link.trennen("nutzer");
+  assert.deepEqual(await protokollbuch.lesen(), [], "Kein Ende, keine Zeile.");
 });
 
 test("Der 30-Sekunden-Wecker räumt das Protokollbuch mit auf, und es bleibt bei einem Wecker", async () => {
@@ -820,8 +1318,13 @@ test("§6 `rekorder:start` aus der Seitenleiste geht an den Tab, mit Selektor vo
   assert.equal(eingespielt.length, 1, "Eingespielt wird genau einmal, nachdem niemand geantwortet hat.");
   assert.deepEqual(
     eingespielt[0].auftrag.files,
-    ["src/content/selektor.js", "src/content/rekorder.js"],
-    "Die Reihenfolge ist verbindlich: `selektor.js` schreibt, was `rekorder.js` braucht.",
+    /* Geändert am 14.08.2026, und begründet: `geheim.js` steht seit Festlegung
+       F4 an erster Stelle. Ohne sie sagt `rekorder.js` mit `geheim_fehlt` ab,
+       der Teach-Modus startet gar nicht (rekorder.test.mjs R35) — der alte
+       Erwartungswert hat die Fassung gemessen, in der der Teach-Modus im
+       Betrieb tot war. */
+    ["src/content/geheim.js", "src/content/selektor.js", "src/content/rekorder.js"],
+    "Die Reihenfolge ist verbindlich: `geheim.js` vor `selektor.js` vor `rekorder.js`.",
   );
 });
 
@@ -910,23 +1413,71 @@ test("§6 `werkbank:spielen` kann ein Inhaltsskript nicht absetzen", async () =>
   );
 });
 
-test("§6 `werkbank:spielen` geht durch dieselbe Befehlsschleife, nicht durch eine zweite Tür", async () => {
+test("§6 `werkbank:spielen` sagt ohne Verbindung vorher, was fehlt", async () => {
   /*
-   * Ohne laufende Sitzung führt der Ausführer nichts aus — und weil die
-   * Wiedergabe denselben Weg nimmt, gilt das auch für sie. Ein Knopf in der
-   * Seitenleiste, der ohne Sitzung abspielt, wäre genau die zweite Tür, die
-   * §7.3 verbietet.
+   * Befund M11 vom 14.08.2026: Ohne Cloud-Sitzung reichte `ablaufSpielen` `{}`
+   * weiter und gab die Antwort der Befehlsschleife zurück, „Die Browsersitzung
+   * ist beendet". Der Satz sprach von einer Sitzung, die es nie gegeben hatte,
+   * und der Knopf konnte in dieser Lage baulich nie etwas tun. Der Vertrag
+   * lässt zwei Wege zu: wirklich abspielen oder vorher ehrlich sagen, was
+   * fehlt. Gebaut ist der zweite.
+   *
+   * Die eigentliche Messung steht unten am Buch: Jede Fernaktion, die die
+   * Befehlsschleife ERREICHT, bekommt dort ihre Zeile (§8.3), auch die
+   * abgelehnte. Bleibt das Buch leer, war der Weg schon davor zu Ende — und
+   * genau das soll er sein.
    */
   weltNeu();
   await link.trennen("nutzer");
   const antwort = await anWorker({ typ: "werkbank:spielen", id: "wf_test", params: {} });
-  assert.equal(antwort.ok, false, "Ohne Sitzung wird nichts abgespielt.");
-  assert.equal(
-    antwort.kennung,
-    "session_beendet",
-    "Und die Absage kommt aus der Befehlsschleife, nicht aus einer eigenen Zählung daneben.",
+
+  assert.equal(antwort.ok, false, "Ohne Verbindung wird nichts abgespielt.");
+
+  /* Zuerst die Sache selbst, dann erst die Beschriftung: Der Versuch hat gar
+     nicht stattgefunden. Jede Fernaktion, die die Befehlsschleife erreicht,
+     bekommt dort ihre Zeile, auch die abgelehnte. */
+  assert.deepEqual(
+    await protokollbuch.lesen(),
+    [],
+    "Die Befehlsschleife wurde gar nicht erst bemüht: Sie bucht jede Antwort, auch die abgelehnte.",
   );
+  assert.equal(
+    welt.spur.filter((e) => e.wohin === "seite").length,
+    0,
+    "Und an keine Seite ist etwas gegangen.",
+  );
+
+  assert.equal(antwort.kennung, "keine_sitzung", "Die Absage benennt, was wirklich fehlt.");
   assert.ok(antwort.klartext, "Der Mensch bekommt einen Satz, keine Nummer.");
+  assert.ok(
+    !/beendet/i.test(antwort.klartext),
+    "Und der Satz redet nicht von einer Sitzung, die es nie gab.",
+  );
+  assert.ok(
+    !antwort.klartext.includes(" — "),
+    "Kommas statt Gedankenstrichen, der Satz wird vorgelesen.",
+  );
+  assert.match(antwort.klartext, /verbinde/i, "Er nennt den Weg, der weiterführt.");
+});
+
+test("§6 `werkbank:spielen` geht mit Verbindung durch dieselbe Befehlsschleife, nicht durch eine zweite Tür", async () => {
+  /*
+   * Die andere Hälfte: Was durchkommt, nimmt denselben Weg wie ein
+   * Agentenbefehl. Ein Knopf in der Seitenleiste mit eigenem Ausführungspfad
+   * wäre genau die zweite Tür, die §7.3 verbietet. Gemessen wird an der Zeile,
+   * die ausschliesslich die Befehlsschleife schreibt.
+   */
+  weltNeu();
+  await sitzungAufbauen({ agent: null, code: "s-spielen", stufe: "write" });
+
+  const antwort = await anWorker({ typ: "werkbank:spielen", id: "wf_gibtsnicht", params: {} });
+  assert.equal(antwort.ok, false, "Einen Ablauf, den es nicht gibt, spielt niemand ab.");
+  assert.ok(antwort.klartext, "Und auch hier ein Satz, keine Nummer.");
+
+  const eintraege = await protokollbuch.lesen();
+  assert.equal(eintraege.length, 1, "Die Wiedergabe ist eine Fernaktion und bekommt ihre Zeile.");
+  assert.equal(eintraege[0].cmd, "run_workflow", "Geschrieben hat sie die Befehlsschleife.");
+  assert.equal(eintraege[0].agent, "", "Ohne Agent: hier hat ein Mensch gedrückt, kein Agent gesteuert.");
 });
 
 test("§6 `buch:lesen` verrät einem Inhaltsskript nichts", async () => {

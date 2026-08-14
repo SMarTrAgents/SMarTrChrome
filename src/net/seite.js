@@ -20,6 +20,15 @@
  *  3. **Kein Fehler wird geworfen.** Jede Funktion hier gibt ein Ergebnis
  *     zurück, das der Aufrufer in eine Antwort verwandeln kann. Der Ausführer
  *     darf keinen Weg haben, auf dem er stumm endet.
+ *  4. **Nach dem Not-Aus verlässt nichts mehr die Erweiterung in Richtung
+ *     Seite.** Befund vom 14.08.2026 (B3): `anSeite` kannte kein
+ *     Abbruchsignal. Gewann der Not-Aus das Rennen im Ausführer, lief der
+ *     Verlierer weiter — gemessen wurde ein `overlay:klicken`, das 16996 ms
+ *     NACH dem Kappen an die Seite ging, während der Agent längst
+ *     `session_beendet` gelesen hatte. Ein Abbruch, der die Antwort abbricht,
+ *     aber nicht die Handlung, ist kein Abbruch, sondern eine Vertuschung.
+ *     Deshalb nimmt jede Funktion hier ein `AbortSignal` (Festlegung F1) und
+ *     fragt es VOR dem Absenden, nicht nur danach.
  */
 
 import { istGesperrterUrsprung } from "./rechte.js";
@@ -30,8 +39,16 @@ import { istGesperrterUrsprung } from "./rechte.js";
    Die Reihenfolge ist verbindlich. `overlay.js` findet beim Start vor, was vor
    ihm steht; ein Inhaltsskript kann `src/net/*.js` nicht importieren, und genau
    daran ist die Verdeckungswache am 11.08.2026 gescheitert — sie lag in einem
-   Modul, das im Klickweg niemand rufen konnte. */
+   Modul, das im Klickweg niemand rufen konnte.
+
+   `geheim.js` steht ganz vorn (Festlegung F4 vom 14.08.2026). Bis dahin
+   trugen `overlay.js` und `rekorder.js` je eine eigene Abschrift derselben
+   Geheimfeld-Erkennung; zwei Abschriften einer Sicherheitszusage sind schon
+   dreimal auseinandergelaufen, und hier hinge an der Abweichung, ob ein
+   Passwort mitgeschrieben wird. Eine Quelle, und sie muss stehen, bevor
+   irgendjemand sie fragt. */
 const OVERLAY_DATEIEN = [
+  "src/content/geheim.js",
   "src/content/klickwache.js",
   "src/content/selektor.js",
   "src/content/overlay.js",
@@ -44,8 +61,18 @@ const OVERLAY_DATEIEN = [
    Erweiterung ohne Zeichen und ohne Wache in der Seite, wegen einer Datei, die
    für Klicken gar nicht gebraucht wird. Deshalb der zweite Anlauf mit dem
    Pflichtteil. Ein zweites Einspielen ist harmlos: `klickwache.js` schreibt
-   dieselbe Wache noch einmal, `overlay.js` bricht an seinem eigenen Riegel ab. */
-const PFLICHT_DATEIEN = ["src/content/klickwache.js", "src/content/overlay.js"];
+   dieselbe Wache noch einmal, `overlay.js` bricht an seinem eigenen Riegel ab.
+
+   `geheim.js` gehört ausdrücklich in den Pflichtteil und nicht in die Kür:
+   Ohne sie wüsste `overlay.js` nicht, welches Feld ein Geheimfeld ist, und
+   würde in ein Passwortfeld tippen. Das ist dieselbe harte Lesart wie bei der
+   Verdeckungswache, ohne Wache keine Bedienung — lieber gar nicht arbeiten
+   als ohne die Zusage arbeiten, die diese Datei trägt. */
+const PFLICHT_DATEIEN = [
+  "src/content/geheim.js",
+  "src/content/klickwache.js",
+  "src/content/overlay.js",
+];
 
 /** Die aktuelle Adresse eines Tabs — oder null, wenn es ihn nicht mehr gibt. */
 export async function tabAdresse(tabId) {
@@ -58,17 +85,40 @@ export async function tabAdresse(tabId) {
 }
 
 /**
- * Eine Nachricht an das Inhaltsskript, mit Frist.
+ * Eine Nachricht an das Inhaltsskript, mit Frist und Abbruchsignal.
  *
+ * Die Reihenfolge der beiden ersten Zeilen ist die ganze Zusage aus Punkt 4
+ * im Kopf dieser Datei: Ist das Signal schon gebrochen, wird gar nicht erst
+ * gesendet. Erst zu senden und danach das Ergebnis wegzuwerfen wäre die
+ * Fassung vom 14.08.2026 — der Agent las `session_beendet`, und die Seite
+ * bekam den Klick trotzdem.
+ *
+ * @param {number} tabId
+ * @param {object} nachricht
+ * @param {number} frist
+ * @param {{signal?: AbortSignal}} wahl  Festlegung F1
  * @returns {{ok:true, antwort:object} | {ok:false, fehler:string}}
  */
-export async function anSeite(tabId, nachricht, frist = 8000) {
+export async function anSeite(tabId, nachricht, frist = 8000, { signal = null } = {}) {
   if (!Number.isInteger(tabId)) return { ok: false, fehler: "tab_unbekannt" };
+  if (signal && signal.aborted === true) return { ok: false, fehler: "abgebrochen" };
 
   let uhr = null;
   const uhrenLauf = new Promise((fertig) => {
     uhr = setTimeout(() => fertig({ ok: false, fehler: "frist" }), Math.max(250, frist));
   });
+
+  /* Der Abbruch steht IM Rennen und nicht daneben. Ein Merkzeichen, das
+     irgendwer nach der Antwort der Seite abfragen müsste, wirkte erst, wenn
+     diese Seite antwortet — und eine hängende Seite antwortet nie. */
+  let horcher = null;
+  const abbruchLauf = signal
+    ? new Promise((fertig) => {
+        horcher = () => fertig({ ok: false, fehler: "abgebrochen" });
+        signal.addEventListener("abort", horcher, { once: true });
+      })
+    : null;
+
   const nachrichtenLauf = chrome.tabs
     .sendMessage(tabId, nachricht)
     .then((antwort) =>
@@ -78,10 +128,17 @@ export async function anSeite(tabId, nachricht, frist = 8000) {
     )
     .catch(() => ({ ok: false, fehler: "kein_empfaenger" }));
 
+  const laeufe = [nachrichtenLauf, uhrenLauf];
+  if (abbruchLauf) laeufe.push(abbruchLauf);
+
   try {
-    return await Promise.race([nachrichtenLauf, uhrenLauf]);
+    return await Promise.race(laeufe);
   } finally {
     if (uhr) clearTimeout(uhr);
+    /* Der Horcher muss weg, auch wenn niemand abgebrochen hat: Das Signal
+       lebt so lange wie die ganze Sitzung, und ein Horcher je Nachricht wäre
+       nach ein paar hundert Befehlen eine Liste, die niemand mehr leert. */
+    if (signal && horcher) signal.removeEventListener("abort", horcher);
   }
 }
 
@@ -91,7 +148,10 @@ export async function anSeite(tabId, nachricht, frist = 8000) {
  *
  * @returns {Promise<boolean>}
  */
-async function einspielen(tabId, dateien) {
+async function einspielen(tabId, dateien, signal) {
+  /* Auch das Einspielen ist ein Weg in die fremde Seite, und nach dem Not-Aus
+     geht dort nichts mehr hin (Befund vom 14.08.2026, B3). */
+  if (signal && signal.aborted === true) return false;
   try {
     await chrome.scripting.executeScript({
       target: { tabId, allFrames: false },
@@ -113,25 +173,26 @@ async function einspielen(tabId, dateien) {
  *
  * @returns {{ok:true, schonDa:boolean} | {ok:false, fehler:string}}
  */
-export async function overlaySicherstellen(tabId) {
+export async function overlaySicherstellen(tabId, { signal = null } = {}) {
+  if (signal && signal.aborted === true) return { ok: false, fehler: "abgebrochen" };
   const adresse = await tabAdresse(tabId);
   if (adresse === null) return { ok: false, fehler: "tab_gone" };
   if (istGesperrterUrsprung(adresse)) return { ok: false, fehler: "ursprung_gesperrt" };
 
-  const ping = await anSeite(tabId, { typ: "overlay:ping" }, 2000);
+  const ping = await anSeite(tabId, { typ: "overlay:ping" }, 2000, { signal });
   if (ping.ok && ping.antwort.ok) return { ok: true, schonDa: true };
 
-  if (!(await einspielen(tabId, OVERLAY_DATEIEN))) {
+  if (!(await einspielen(tabId, OVERLAY_DATEIEN, signal))) {
     /* Kein Recht für diesen Ursprung, Seite nicht einspielbar (Chrome Web
        Store, PDF-Betrachter, Fehlerseite) — oder eine Datei der Kür fehlt. Der
        Pflichtteil bekommt deshalb einen eigenen Anlauf; scheitert auch der,
        gilt für den Aufrufer dasselbe: hier kann nicht gearbeitet werden. */
-    if (!(await einspielen(tabId, PFLICHT_DATEIEN))) {
-      return { ok: false, fehler: "einspielen_fehlgeschlagen" };
+    if (!(await einspielen(tabId, PFLICHT_DATEIEN, signal))) {
+      return { ok: false, fehler: signal && signal.aborted === true ? "abgebrochen" : "einspielen_fehlgeschlagen" };
     }
   }
 
-  const nachPruefung = await anSeite(tabId, { typ: "overlay:ping" }, 2000);
+  const nachPruefung = await anSeite(tabId, { typ: "overlay:ping" }, 2000, { signal });
   if (nachPruefung.ok && nachPruefung.antwort.ok) return { ok: true, schonDa: false };
   return { ok: false, fehler: "einspielen_fehlgeschlagen" };
 }

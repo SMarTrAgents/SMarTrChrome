@@ -25,6 +25,7 @@ import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 
 const QUELLE = new URL("../content/selektor.js", import.meta.url);
+const GEHEIM_QUELLE = new URL("../content/geheim.js", import.meta.url);
 
 /* ------------------------------------------------------------------ *
  * Ein kleiner, echter Seitenbaum
@@ -382,13 +383,28 @@ export function seiteBauen(bauplan) {
  * ------------------------------------------------------------------ */
 
 let quelleZwischen = null;
+let geheimZwischen = null;
 
-export async function selektorLaden(dok) {
+/**
+ * Beide Inhaltsskripte starten, in der Reihenfolge, in der `net/seite.js` sie
+ * einspielt: `geheim.js` als ERSTE Datei (Festlegung F4 vom 14.08.2026),
+ * danach `selektor.js`.
+ *
+ * @param {object} dok der Seitenbaum
+ * @param {{ohneGeheim?: boolean}} angaben `ohneGeheim` ist die Gegenprobe:
+ *        Ohne die eine Quelle darf kein Text mit einer Ziffer in einen Anker.
+ */
+export async function selektorLaden(dok, { ohneGeheim = false } = {}) {
   if (!quelleZwischen) quelleZwischen = await readFile(QUELLE, "utf8");
+  if (!geheimZwischen) geheimZwischen = await readFile(GEHEIM_QUELLE, "utf8");
   const sandkasten = { console, document: dok, setTimeout, clearTimeout };
   sandkasten.window = sandkasten;
   sandkasten.globalThis = sandkasten;
   vm.createContext(sandkasten);
+  if (!ohneGeheim) {
+    vm.runInContext(geheimZwischen, sandkasten, { filename: "geheim.js" });
+    assert.ok(sandkasten.SMARTR_GEHEIM, "geheim.js muss globalThis.SMARTR_GEHEIM setzen");
+  }
   vm.runInContext(quelleZwischen, sandkasten, { filename: "selektor.js" });
   assert.ok(sandkasten.SMARTR_SELEKTOR, "selektor.js muss globalThis.SMARTR_SELEKTOR setzen");
   return sandkasten.SMARTR_SELEKTOR;
@@ -825,4 +841,201 @@ test("S20: eine Kennung mit Zufallsanteil wird nicht verankert", async () => {
   const schlecht = S.kaskadeBauen(seite.finden("schlecht"));
   assert.ok(!schlecht.some((a) => a.includes("ember1234")), `gewürfelte Kennung im Anker: ${schlecht}`);
   assert.ok(S.kaskadeBauen(seite.finden("gut")).includes("#kaufen"), "eine gepflegte Kennung dagegen schon");
+});
+
+/* ================================================================== *
+ * S21 bis S26 — Befund B6 vom 14.08.2026: der Einmalcode im Anker
+ *
+ * Gemessen wurde eine 2FA-Seite mit
+ * `<span class="otp-anzeige">849271</span>` und
+ * `<button class="kopieren" data-code="849271">Kopieren</button>`. Der Mensch
+ * klickt beides an, und der gespeicherte Ablauf enthält danach
+ * `selector_cascade: ["span.otp-anzeige","text=849271", …]` und
+ * `["[data-code=\"849271\"]", …]`. Der Textanker kannte KEINERLEI
+ * Geheimprüfung, und das Datenmerkmal liess reine Ziffernketten durch, weil
+ * `klasseZufaellig` Ziffernabschnitte als Ordnungszahlen überspringt.
+ * ================================================================== */
+
+function zweiFaktorSeite() {
+  return seiteBauen(
+    k("html", {}, [
+      k("body", {}, [
+        k("div", { class: "karte" }, [
+          k("h2", {}, "Ihr Einmalcode"),
+          k("span", { class: "otp-anzeige" }, "849271", "anzeige"),
+          k("button", { class: "kopieren", "data-code": "849271" }, "Kopieren", "kopieren"),
+          k("button", { class: "weiter" }, "Weiter", "weiter"),
+        ]),
+      ]),
+    ])
+  );
+}
+
+test("S21: der sichtbare Einmalcode wird kein Textanker", async () => {
+  const seite = zweiFaktorSeite();
+  const S = await selektorLaden(seite.dok);
+  const kaskade = S.kaskadeBauen(seite.finden("anzeige"));
+
+  assert.ok(kaskade.length >= 1, "ein Anker muss trotzdem entstehen");
+  assert.ok(
+    !kaskade.some((a) => a.includes("849271")),
+    `der Einmalcode steht im Anker: ${JSON.stringify(kaskade)}`
+  );
+  /* Und die Klasse trägt den Schritt weiter — es geht nicht um weniger Anker,
+     sondern um andere. */
+  assert.ok(kaskade.includes("span.otp-anzeige"), JSON.stringify(kaskade));
+
+  const erg = S.kaskadeAufloesen(kaskade, seite.dok);
+  assert.equal(erg.ok, true, "der Schritt bleibt abspielbar");
+  assert.equal(erg.el, seite.finden("anzeige"));
+});
+
+test("S22: derselbe Code in einem Datenmerkmal wird auch kein Anker", async () => {
+  const seite = zweiFaktorSeite();
+  const S = await selektorLaden(seite.dok);
+  const kaskade = S.kaskadeBauen(seite.finden("kopieren"));
+
+  assert.ok(
+    !kaskade.some((a) => a.includes("849271")),
+    `der Einmalcode steht im Anker: ${JSON.stringify(kaskade)}`
+  );
+  /* Gegenprobe im selben Prüfsatz: Der Text „Kopieren" ist harmlos und bleibt
+     als Anker stehen. Eine Prüfung, die alles verwirft, misst nichts. */
+  assert.ok(kaskade.includes("text=Kopieren"), JSON.stringify(kaskade));
+  assert.equal(S.kaskadeAufloesen(kaskade, seite.dok).el, seite.finden("kopieren"));
+});
+
+test("S23: die Zufallserkennung und die Geheimprüfung sind zwei Fragen", async () => {
+  const seite = zweiFaktorSeite();
+  const S = await selektorLaden(seite.dok);
+
+  /* Das war die Ursache: `klasseZufaellig` überspringt reine
+     Ziffernabschnitte ausdrücklich als Ordnungszahlen, und genau deshalb
+     hielt es „849271" für einen gepflegten Wert. Das ist für `col-md-6`
+     richtig und bleibt so. */
+  assert.equal(S.klasseZufaellig("849271").zufall, false,
+    "die Zufallsfrage beantwortet sich weiterhin so, und das ist kein Fehler");
+  /* Die zweite Frage ist die, die vorher niemand gestellt hat. */
+  assert.equal(S.textOffen("849271"), false, "ein sechsstelliger Code gehört in keinen Anker");
+  assert.equal(S.wertTaugt("849271"), false);
+
+  /* Und was harmlos ist, bleibt es. */
+  for (const gut of ["relist", "Erneut einstellen", "col-md-6", "btn-primary", "Seite 12"]) {
+    assert.equal(S.textOffen(gut), true, `„${gut}" muss durchgehen`);
+  }
+});
+
+test("S24: die Kartennummer erkennt die Prüfziffer, nicht die Länge", async () => {
+  const seite = zweiFaktorSeite();
+  const S = await selektorLaden(seite.dok);
+  /* Luhn-gültig, also eine Kartennummer, auch mit Zwischenräumen. */
+  assert.equal(S.textOffen("4111 1111 1111 1111"), false);
+  assert.equal(S.textOffen("4111111111111111"), false);
+});
+
+test("S25: ohne die eine Quelle wird nicht geraten, sondern verweigert", async () => {
+  /* Die Gegenprobe zu F4: Fehlt `geheim.js`, entscheidet `selektor.js` nicht
+     selbst, sondern lässt keinen Text mit einer Ziffer mehr in einen Anker.
+     Das kostet Anker. Anker kosten weniger als ein Code in `sa_workflows`. */
+  const seite = zweiFaktorSeite();
+  const S = await selektorLaden(seite.dok, { ohneGeheim: true });
+  assert.equal(S.textOffen("849271"), false);
+  const kaskade = S.kaskadeBauen(seite.finden("anzeige"));
+  assert.ok(!kaskade.some((a) => a.includes("849271")), JSON.stringify(kaskade));
+});
+
+/* ================================================================== *
+ * S26 bis S29 — Befund B7: die Kaskade prüft Identität, nicht Stellen
+ *
+ * Gemessen wurde `<input id="input-4f3a2b9c" name="artikelnummer"
+ * class="css-9k2j1h">`. Kennung und Klasse fielen zu Recht als Zufall heraus,
+ * `name` stand in keiner Kaskade, und gespeichert wurde
+ * `["input:nth-of-type(1)", "/html[1]/…/input[1]"]`. Die Seite bekommt ein
+ * Feld `titel` davor, `kaskadeAufloesen` antwortet `ok:true`, getroffen wird
+ * `name=titel`, und die Artikelnummer landet im Titelfeld.
+ * ================================================================== */
+
+function formularseite(mitTitel = false) {
+  const felder = [];
+  if (mitTitel) felder.push(k("input", { name: "titel", class: "css-7h3k2p" }, [], "titel"));
+  felder.push(
+    k("input", { id: "input-4f3a2b9c", name: "artikelnummer", class: "css-9k2j1h" }, [], "artikelnr")
+  );
+  return seiteBauen(k("html", {}, [k("body", {}, [k("div", { class: "css-2b8f1a" }, felder)])]));
+}
+
+test("S26: der `name` eines Feldes steht in der Kaskade", async () => {
+  const seite = formularseite();
+  const S = await selektorLaden(seite.dok);
+  const kaskade = S.kaskadeBauen(seite.finden("artikelnr"));
+
+  assert.ok(
+    kaskade.includes('input[name="artikelnummer"]') || kaskade.includes('[name="artikelnummer"]'),
+    `der name gehört in die Kaskade, bekommen: ${JSON.stringify(kaskade)}`
+  );
+  /* Und zwar VOR den Ankern, die nur Stellen zählen. */
+  const nameStelle = kaskade.findIndex((a) => a.includes('name="artikelnummer"'));
+  const xpfadStelle = kaskade.findIndex((a) => a.startsWith("/"));
+  assert.ok(nameStelle >= 0 && nameStelle < xpfadStelle, JSON.stringify(kaskade));
+});
+
+test("S27: ein Anker aus Elementname und Stelle allein entsteht nicht mehr", async () => {
+  const seite = formularseite();
+  const S = await selektorLaden(seite.dok);
+  const kaskade = S.kaskadeBauen(seite.finden("artikelnr"));
+
+  /* Der XPath darf es, er steht als letzter Ausweg ganz unten und die
+     Identität hält ab F3 der Ausführer dagegen. Ein CSS-Anker darf es nicht,
+     er stünde weit oben. */
+  for (const anker of kaskade) {
+    if (anker.startsWith("/") || anker.startsWith("text=")) continue;
+    assert.ok(
+      S.pfadTraegtMerkmal(anker),
+      `„${anker}" nennt kein Merkmal, sondern nur eine Stelle: ${JSON.stringify(kaskade)}`
+    );
+  }
+  assert.ok(!kaskade.includes("input:nth-of-type(1)"), JSON.stringify(kaskade));
+});
+
+test("S28: ein eingeschobenes Feld führt den Ablauf nicht ins falsche Feld", async () => {
+  /* Der gemessene Fall, in voller Länge: aufgezeichnet auf der alten Seite,
+     abgespielt auf der neuen. */
+  const alt = formularseite();
+  const S1 = await selektorLaden(alt.dok);
+  const kaskade = S1.kaskadeBauen(alt.finden("artikelnr"));
+
+  const neu = formularseite(true);
+  const S2 = await selektorLaden(neu.dok);
+  const erg = S2.kaskadeAufloesen(kaskade, neu.dok);
+
+  assert.equal(erg.ok, true, `der Schritt muss weiter tragen: ${JSON.stringify(kaskade)}`);
+  assert.equal(
+    erg.el,
+    neu.finden("artikelnr"),
+    `getroffen wurde „${erg.el && erg.el.getAttribute("name")}" statt der Artikelnummer`
+  );
+  assert.notEqual(erg.el, neu.finden("titel"), "das Titelfeld ist das falsche Feld");
+});
+
+test("S29: bricht auch der `name`, wird nicht geraten, sondern gemeldet", async () => {
+  /* Die Gegenprobe zu S28: Ein Anker, der nur noch die Stelle zählt, darf
+     nicht als Erfolg durchgehen — deshalb steht der XPath ganz unten und
+     deshalb verlangt F3 den Identitätsvergleich beim Ausführer. Hier wird
+     gemessen, was diese Datei allein leisten kann: Ohne den `name` bleibt nur
+     der XPath, und der meldet wenigstens, welcher Anker getragen hat. */
+  const alt = formularseite();
+  const S1 = await selektorLaden(alt.dok);
+  const kaskade = S1.kaskadeBauen(alt.finden("artikelnr"));
+
+  const neu = formularseite(true);
+  neu.finden("artikelnr").removeAttribute("name");
+  const S2 = await selektorLaden(neu.dok);
+  const erg = S2.kaskadeAufloesen(kaskade, neu.dok);
+
+  assert.equal(erg.ok, true, "der XPath trifft immer etwas, notfalls das Falsche");
+  assert.ok(erg.anker.startsWith("/"), `getragen hat: ${erg.anker}`);
+  assert.ok(
+    erg.stelle === kaskade.length - 1,
+    "und die Antwort sagt, dass der schwächste Anker getragen hat"
+  );
 });

@@ -51,6 +51,11 @@ const OBERFLAECHE_JS = [
   "src/panel/startseite.js",
   "src/panel/werkbank.js",
   "src/content/overlay.js",
+  /* Befund M10 vom 14.08.2026: `net/link.js` fehlte in dieser Liste. Der
+     Symboltitel und die Systemmeldung aus §8.4 standen darin als deutsche
+     Literale, und 733 grüne Prüfsätze haben es nicht bemerkt, weil niemand
+     hinsah. Die Datei ist nur zum Teil Oberfläche, siehe `PROTOKOLLRUFE`. */
+  "src/net/link.js",
 ];
 const OBERFLAECHE_HTML = ["src/panel/panel.html"];
 
@@ -159,6 +164,20 @@ function literalLesen(text, von) {
  * Merkmalstabelle in panel.js. In jedem dieser Fälle folgt auf den Schlüssel
  * unmittelbar sein deutscher Satz.
  */
+/*
+ * Die Rufe, deren erster Wert ein Code für die Maschine ist, kein Schlüssel.
+ *
+ * `absage(` steht seit dem Bestand hier (werkbank.js). Am 14.08.2026 kamen
+ * `absageRahmen(` und `new NetzFehler(` aus `net/link.js` dazu: Beide tragen
+ * einen Fehlercode und den deutschen Protokollsatz, der laut §12 deutsch
+ * bleibt, weil 372 Prüfsätze ihn woertlich messen.
+ */
+const PROTOKOLLRUFE = [
+  /absage\(\s*$/,
+  /absageRahmen\(\s*[A-Za-z_$][\w$]*\s*,\s*$/,
+  /new\s+NetzFehler\(\s*$/,
+];
+
 function paareAusJs(rohquelle) {
   const quelle = ohneKommentare(rohquelle);
   const gefunden = [];
@@ -167,10 +186,13 @@ function paareAusJs(rohquelle) {
   while ((treffer = muster.exec(quelle)) !== null) {
     const schluessel = treffer[1];
     if (!SCHLUESSELFORM.test(schluessel)) continue;
-    /* `absage(code, satz, hinweis)` in werkbank.js sieht wie ein Paar aus, ist
-       aber keines: Der erste Wert ist ein Maschinencode für den Aufrufer und
-       kein Katalogschlüssel. */
-    if (quelle.slice(Math.max(0, treffer.index - 7), treffer.index) === "absage(") continue;
+    /* Nicht jedes Paar `"wort", "Satz"` ist ein Katalogeintrag. Diese Rufe
+       tragen einen MASCHINENCODE an erster Stelle und einen Satz, der nach
+       §12 ausdrücklich deutsch bleibt, weil er an den Agenten geht und nicht
+       an einen Menschen. Stünden sie hier drin, würde L2 rot an genau den
+       Sätzen, die niemand übersetzen darf. */
+    const davor = quelle.slice(Math.max(0, treffer.index - 60), treffer.index);
+    if (PROTOKOLLRUFE.some((form) => form.test(davor))) continue;
     const text = literalLesen(quelle, treffer.index + treffer[0].length);
     if (text === null) continue;
     gefunden.push({ schluessel, text });

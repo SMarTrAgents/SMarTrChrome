@@ -61,6 +61,10 @@ const {
   einschleusungVerdacht,
   paramsPruefen,
   frageZusatz,
+  /* Reparaturen vom 14.08.2026: `eigen` ist der Riegel gegen Schlüssel aus
+     `Object.prototype` (H2), `stufeReicht` misst mit ihm. */
+  eigen,
+  stufeReicht,
 } = await import("../net/befehle.js");
 
 /* ------------------------------------------------------------------ *
@@ -624,17 +628,54 @@ test("K5 — datei: die Bauform zählt, und die Wörter zählen auch", () => {
   assert.equal(klassenBestimmen("click", {}, { name: "Weiter", rolle: "button" }, NEUTRAL).hart, null);
 });
 
-test("K6 — berechtigung: nur, wenn beide Hälften dastehen", () => {
-  const beide = klassenBestimmen("click", {}, { name: "Kamera zulassen", rolle: "button" }, NEUTRAL);
-  assert.equal(beide.hart, "berechtigung");
-  assert.ok(beide.klassen.includes("berechtigung"));
+test("K6 — berechtigung: das Berechtigungswort allein genügt, eine zweite Liste ist kein Schalter", () => {
+  /*
+   * Geändert am 14.08.2026, Befund M1, und die Änderung ist der Kern des
+   * Fundes. Vorher hiess dieser Satz „nur, wenn beide Hälften dastehen": Die
+   * Klasse entstand ausschliesslich, wenn ein Wort aus `WORTE_BERECHTIGUNG`
+   * UND eines aus `WORTE_ZULASSEN` dastand. Diese zweite Liste kannte
+   * „zulassen, erlauben, gestatten, zustimmen, allow, grant, enable" und
+   * nicht „aktivieren, einschalten, freigeben". „Kamera aktivieren" ergab
+   * damit `klassen=[bedienen]` und `fragen=false`.
+   *
+   * Repariert wurde nicht das fehlende Wort, sondern die Bauform: `HART`
+   * heisst „nie abschaltbar, auch in der Automatik", und eine Bedingung aus
+   * einer Wortliste ist ein Schalter. Wer sein Wort nicht in der Liste
+   * findet, hätte die Wache aus. Eine harte Klasse darf keine zweite Liste
+   * als Bedingung haben.
+   */
+  for (const name of [
+    "Kamera zulassen", "Kamera aktivieren", "Mikrofon einschalten",
+    "Standort freigeben", "Benachrichtigungen erlauben", "Kamera",
+    "camera", "microphone access",
+  ]) {
+    const befund = klassenBestimmen("click", {}, { name, rolle: "button" }, NEUTRAL);
+    assert.equal(befund.hart, "berechtigung", `„${name}" ergab ${befund.hart}`);
+  }
 
-  /* Gegentest, und der Grund für die zweite Wortliste: „Kamera" steht auf
-     jeder Produktseite eines Elektronikhändlers. */
-  const nurEine = klassenBestimmen("click", {}, { name: "Kamera Sony Alpha", rolle: "link" }, NEUTRAL);
-  assert.ok(!nurEine.klassen.includes("berechtigung"));
+  /* Der Gegentest, und er misst jetzt das Richtige: Es ist die
+     BERECHTIGUNGS-Liste, die entscheidet, und nicht irgendein Zustimmungswort.
+     „Cookies zulassen" ist keine Browser-Berechtigung. */
   const nurAndere = klassenBestimmen("click", {}, { name: "Cookies zulassen", rolle: "button" }, NEUTRAL);
   assert.ok(!nurAndere.klassen.includes("berechtigung"));
+  const gewoehnlich = klassenBestimmen("click", {}, { name: "Weiter", rolle: "button" }, NEUTRAL);
+  assert.ok(!gewoehnlich.klassen.includes("berechtigung"));
+
+  /* Der Preis, und er wird hier ausdrücklich festgehalten statt beklagt: Ein
+     Elektronikhändler, der eine Kamera verkauft, kostet eine Rückfrage. Das
+     ist die erlaubte Richtung — ein Fehlalarm kostet eine Frage, ein
+     übersehener Treffer kostet die Kamera. */
+  const fehlalarm = klassenBestimmen("click", {}, { name: "Kamera Sony Alpha", rolle: "link" }, NEUTRAL);
+  assert.equal(fehlalarm.hart, "berechtigung",
+    "der bewusst in Kauf genommene Fehlalarm ist keiner mehr — dann fehlt auch der echte Treffer");
+
+  /* Und die zweite Liste lebt weiter, nur an ihrem richtigen Platz: Sie
+     schärft den Grund, den der Mensch vorgelesen bekommt. */
+  const mitHalbsatz = klassenBestimmen("click", {}, { name: "Kamera zulassen", rolle: "button" }, NEUTRAL);
+  assert.ok(mitHalbsatz.grund.includes("zulassen"), mitHalbsatz.grund);
+  assert.ok(WORTE_ZULASSEN.includes("aktivieren") && WORTE_ZULASSEN.includes("einschalten")
+    && WORTE_ZULASSEN.includes("freigeben"),
+    "die Lücke, an der der Fund hing, ist auch als Wortliste geschlossen");
 });
 
 test("K7 — captcha: am Ziel und an der Adresse", () => {
@@ -1065,4 +1106,116 @@ test("R4 — Die Frage sagt dem Menschen, WELCHER Ablauf abgespielt wird", () =>
   const ohne = frageZusatz("run_workflow", { id: "wf_x" });
   assert.ok(ohne.includes("wf_x"), ohne);
   assert.equal(frageZusatz("run_workflow", null), "");
+});
+
+/* ------------------------------------------------------------------ *
+ * Die Abnahme vom 14.08.2026 — die Funde an den reinen Entscheidungen
+ * ------------------------------------------------------------------ */
+
+test("H1 — eine Sicherheitsprüfung kürzt ihren Eingang nicht", () => {
+  /*
+   * Der schwerste der drei „hoch"-Funde. `flachmachen(roh, grenze = 400)`
+   * benutzte `saeubern`, und das kürzt in der MITTE: Kopf und Fuss bleiben,
+   * die Mitte fällt weg. Steht das Erkennungswort in der Mitte einer langen
+   * Adresse, verschwindet die harte Klasse.
+   *
+   * Gemessen wurde: Klick auf „Weiter" unter `https://shop.de/kasse/bezahlen`
+   * ergab eine Rückfrage. Derselbe Klick unter
+   * `https://shop.de/<250 a>/kasse/<250 a>` (523 Zeichen) ergab KEINE, und
+   * `overlay:klicken` wurde wirklich abgesetzt.
+   *
+   * Damit bestimmte die besuchte Seite selbst, ob eine als nie abschaltbar
+   * zugesagte Wache greift: Es genügte eine lange Adresse.
+   */
+  const fuellung = "a".repeat(250);
+  const kurz = { url: "https://shop.example/kasse/bezahlen", titel: "" };
+  const lang = { url: `https://shop.example/${fuellung}/kasse/${fuellung}`, titel: "" };
+  assert.ok(lang.url.length > 500, "die Adresse muss die alte Grenze wirklich überschreiten");
+
+  const ziel = { name: "Weiter", rolle: "button" };
+  assert.equal(klassenBestimmen("click", {}, ziel, kurz).hart, "zahlung", "die kurze Adresse zuerst");
+  assert.equal(klassenBestimmen("click", {}, ziel, lang).hart, "zahlung",
+    "in der langen Adresse verschwand das Wort aus der Mitte");
+
+  /* Dasselbe für die anderen adressgestützten harten Klassen. */
+  const mitte = (wort) => ({ url: `https://shop.example/${fuellung}/${wort}/${fuellung}`, titel: "" });
+  assert.equal(klassenBestimmen("click", {}, ziel, mitte("download")).klassen.includes("datei"), true);
+  assert.equal(klassenBestimmen("click", {}, ziel, mitte("recaptcha")).klassen.includes("captcha"), true);
+
+  /* Die Gegenprobe: Eine lange Adresse OHNE Erkennungswort trägt weiterhin
+     keine harte Klasse. Ohne sie wäre dieser Satz auch über einer Fassung
+     grün, die bei jeder langen Adresse fragt. */
+  const harmlos = { url: `https://shop.example/${fuellung}/liste/${fuellung}`, titel: "" };
+  assert.equal(klassenBestimmen("click", {}, ziel, harmlos).hart, null);
+
+  /* Und der Elementname darf ebenfalls nicht gekürzt werden, bevor er
+     gemessen wird — dieselbe Bauform, andere Quelle. */
+  const langerName = { name: `${"b".repeat(250)} Kasse ${"b".repeat(250)}`, rolle: "button" };
+  assert.equal(klassenBestimmen("click", {}, langerName, { url: "https://shop.example/seite" }).hart, "zahlung");
+});
+
+test("B1 — der Klassifizierer misst die Zieladresse eines Ortswechsels", () => {
+  /* `kopf.ziel` ist neu und trägt, wohin dieser Schritt führt. Ohne es mass
+     `navigate` die Seite, die verlassen wird. */
+  const her = { url: "https://shop.example/artikel/12345", titel: "" };
+  assert.equal(klassenBestimmen("navigate", {}, null, her).hart, null, "die Herkunft ist harmlos");
+
+  const faelle = {
+    "https://shop.example/order/confirm?buy=1": "zahlung",
+    "https://shop.example/kasse/bezahlen": "zahlung",
+    "https://shop.example/konto/loeschen?bestaetigen=1": "unwiderruflich",
+    "https://shop.example/download/rechnung.exe": "datei",
+  };
+  for (const [ziel, klasse] of Object.entries(faelle)) {
+    const befund = klassenBestimmen("navigate", {}, null, { ...her, ziel });
+    assert.equal(befund.hart, klasse, `${ziel} ergab ${befund.hart}`);
+  }
+
+  /* Die Gegenprobe: Ein harmloses Ziel bleibt harmlos, sonst fragte jeder
+     Ortswechsel. */
+  assert.equal(klassenBestimmen("navigate", {}, null, { ...her, ziel: "https://shop.example/liste" }).hart, null);
+
+  /* Und die Herkunft wird weiter gemessen: Eine Reparatur, die eine Messung
+     wegnimmt, um eine andere zu ergänzen, ist keine. */
+  const vonDerKasse = { url: "https://shop.example/kasse/bezahlen", titel: "", ziel: "https://shop.example/liste" };
+  assert.equal(klassenBestimmen("navigate", {}, null, vonDerKasse).hart, "zahlung");
+});
+
+test("H2 — ein Schlüssel aus Object.prototype ist kein Eintrag", () => {
+  /* Das Muster hinter dem Fund: `TABELLE[schluessel]` über einem gewöhnlichen
+     Objektliteral findet `constructor`, `toString`, `valueOf`, `__proto__`
+     und `hasOwnProperty` — und jede davon ist wahr, also greift kein
+     `|| Voreinstellung` dahinter. */
+  const tabelle = { a: 1 };
+  for (const boese of ["constructor", "toString", "valueOf", "__proto__", "hasOwnProperty", "isPrototypeOf"]) {
+    assert.equal(eigen(tabelle, boese), undefined, boese);
+    assert.equal(eigen(tabelle, boese) || "vorgabe", "vorgabe",
+      `bei „${boese}" griff die Voreinstellung nicht`);
+  }
+  assert.equal(eigen(tabelle, "a"), 1, "der echte Eintrag wird weiterhin gefunden");
+  assert.equal(eigen(null, "a"), undefined);
+  assert.equal(eigen(tabelle, 7), undefined, "ein Schlüssel, der keine Zeichenkette ist, findet nichts");
+});
+
+test("H2 — die Stufenprüfung lässt keinen geerbten Befehl und keine geerbte Stufe durch", () => {
+  /*
+   * Ehrlich gemessen am 14.08.2026: Dieser Satz bleibt AUCH ohne `eigen`
+   * grün. `stufeReicht("write", "constructor")` fand die geerbte Funktion,
+   * las dann `RANG[undefined]` und scheiterte am Zahlenvergleich; und
+   * `RANG["constructor"]` ist eine Funktion, die `>= 1` nicht übersteht. Die
+   * Zusage war also erfüllt, aber aus Zufall.
+   *
+   * Er steht trotzdem hier, und zwar genau deshalb: Ein Zufall ist keine
+   * Prüfung, und die nächste Zeile, die `RANG[...] || 0` schreibt, dreht ihn
+   * um. Was hier gemessen wird, ist ab jetzt eine Absicht.
+   */
+  for (const boese of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
+    assert.equal(stufeReicht("write", boese), false, `Befehl „${boese}"`);
+    assert.equal(stufeReicht(boese, "readPage"), false, `Stufe „${boese}"`);
+  }
+  /* Die Gegenprobe: Die echten Werte reichen weiterhin, und die echte
+     Einschränkung greift weiterhin. */
+  assert.equal(stufeReicht("read", "readPage"), true);
+  assert.equal(stufeReicht("write", "click"), true);
+  assert.equal(stufeReicht("read", "click"), false);
 });

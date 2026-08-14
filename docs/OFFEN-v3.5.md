@@ -8,8 +8,15 @@ den Befund vom 11.08.2026: An dem Tag lagen 18 grüne Prüfsätze über einer Wa
 die im ausgelieferten Klickweg niemand rief. Grün heisst gemessen, nicht
 eingebaut, und der Unterschied gehört aufgeschrieben.
 
-**Der Stand in einem Satz:** 733 Prüfsätze sind grün, und nichts davon ist
+**Der Stand in einem Satz:** 809 Prüfsätze sind grün, und nichts davon ist
 ausgeliefert.
+
+**Nachtrag 14.08.2026, nachmittags.** Über den 733 grünen Prüfsätzen des
+Vormittags fand eine Gegenlesung 31 Befunde, davon neun Blocker, und keiner
+davon war rot geworden. Vier Gebiete haben repariert, danach war die
+Verzahnungsprüfung an drei Stellen rot — an genau den Nähten zwischen ihnen.
+Was seither geschlossen ist, steht in `CHANGELOG.md`; was hier steht, ist
+weiterhin offen.
 
 ---
 
@@ -114,7 +121,15 @@ wird vom Relay zu niedrig gebucht, bindend ist dann der Deckel der Erweiterung.
 ### 3.4 Die Miniaturbilder werden nirgends angezeigt
 Der Weg von der Seite bis in die Ablage ist gebaut und gemessen (V-h), die
 Werkbank zeigt zu einem Ablauf aber kein Bild. Die Bilder werden also derzeit
-aufgenommen, gespeichert und beim Browserstart ungenutzt wieder gelöscht.
+aufgenommen, gespeichert und ungenutzt wieder gelöscht.
+
+**Nachtrag 14.08.2026 (Befund M3), das Wegräumen ist repariert.** Bis dahin
+geschah es nur bei `onStartup` und `onInstalled`; wer den Browser tagelang
+offen lässt, sammelte die Bilder mehrerer Aufzeichnungen an, bis zu 60 JPEGs
+des ganzen sichtbaren Tabs und 4 MiB. Jetzt räumt `background/worker.js` bei
+`rekorder:start` und `rekorder:stop` mit auf, dazu kommt eine Verfallszeit von
+zwei Stunden im Bildweg selbst. Gemessen in `verzahnung.test.mjs` V-i3. Offen
+bleibt allein die Anzeige.
 
 ### 3.5 Das Schrittlimit hat kein Bedienelement
 Der Deckel auf `GRENZEN.schritteDeckel` (500) ist gebaut und gemessen
@@ -125,9 +140,21 @@ heute nur den Modus und nie eine Grenze. Der Weg ist offen, der Knopf fehlt.
 `worker.js` beantwortet `werkbank:schreiben` und `werkbank:loeschen`, und
 niemand sendet sie: `src/panel/werkbank.js` schreibt über die Modulimporte
 direkt in `chrome.storage.local`. Beide Wege funktionieren und sind gemessen,
-aber Vertrag §6 meint den Weg über den Dienstarbeiter. Entweder die Werkbank
-stellt um, oder §6 nennt die zwei Nachrichten als Ersatzweg. Dasselbe gilt für
-`rekorder:ping`, das `rekorder.js` beantwortet und niemand sendet.
+und beide gehen durch dieselbe Prüfung `workflowPruefen` in
+`src/net/werkstatt.js` — es sind zwei Aufrufer einer Regel, nicht zwei Regeln.
+Vertrag §6 nennt sie seit dem 14.08.2026 ausdrücklich als zweiten Weg, damit
+Vertrag und Code dasselbe sagen. Ob die Werkbank umstellt, bleibt offen.
+
+**Erledigt am 14.08.2026, nachmittags:** `rekorder:ping` hatte hier ebenfalls
+gestanden. Es hat seit Befund H6 einen Absender, nämlich `rekorderNachziehen`
+in `background/worker.js` — die Stelle, die den Aufzeichner nach einem
+Seitenwechsel nachzieht. Gemessen in `bruecke.test.mjs`.
+
+**Und die Gattung dazu ist jetzt gemessen:** `verzahnung.test.mjs` V-k legt
+jeden `overlay:`-Namen, den der Auslieferungsstand losschickt, den ECHTEN
+Hörern von `overlay.js` und des Dienstarbeiters vor. Ein Name ohne Empfänger
+wird damit rot, statt sich als sauber gemeldeter `workflow_step_failed` zu
+tarnen. Genau so ist `overlay:kaskade` durch 733 grüne Prüfsätze gekommen.
 
 ### 3.7 Was der Rekorder nicht sieht
 - Nur der oberste Rahmen wird aufgezeichnet, `worker.js` spielt mit

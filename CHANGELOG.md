@@ -103,6 +103,32 @@ lokal, der Relay ist lokal geändert und nicht neu gestartet. Siehe
 - **Der Aufnahmerest wird beim Browserstart weggeräumt,** ausdrücklich nicht bei
   jedem Start des Dienstarbeiters: Manifest V3 beendet den im Leerlauf, und eine
   laufende Aufzeichnung wäre sonst nach dreissig Sekunden weg.
+- **Der Not-Aus beendet jetzt zwei Dinge statt einem.** Bis dahin kappte er die
+  Browsersteuerung, der laufende Cloud-Auftrag lief weiter. Er wird jetzt beim
+  Server mit gestoppt, und der Wecker, der das Abholen nach einem Neustart des
+  Dienstarbeiters wieder aufgenommen hätte, wird weggeräumt. Das merkt ein
+  Mensch, deshalb steht es hier: Nach dem Stopp kommt auch keine Antwort aus dem
+  Gespräch mehr nach.
+- **Das Zeichen im Tab kommt jetzt vom Dienstarbeiter selbst.** Vorher schickte
+  es allein die Seitenleiste. War sie zu, blieb im Tab der grüne Rahmen stehen,
+  obwohl nichts mehr lief. Sie darf es weiterhin zusätzlich tun, sie ist nur
+  nicht mehr der einzige Weg.
+- **„Abspielen" sagt ohne Verbindung vorher ab.** Der Knopf in der Werkbank
+  konnte ohne Sitzung baulich nichts tun und antwortete trotzdem mit einem Satz
+  über eine beendete Sitzung, die es nie gegeben hatte. Jetzt sagt er es vorher,
+  mit der Kennung `keine_sitzung`, und nennt den Weg zur Verbindung.
+- **Neuer Ablageschlüssel `sa_rekorder_tab`** in `chrome.storage.session`. Er
+  hält fest, in welchem Tab die laufende Aufzeichnung begonnen hat. Ohne ihn
+  hätte die Wiederaufnahme nach einem Seitenwechsel in jedem Tab gegriffen, in
+  dem gerade eine Seite lädt, und aus einer Reparatur wäre ein Mitschnitt
+  geworden. Er stirbt mit dem Browser.
+- **Die Bilder einer Aufzeichnung werden beim Start und beim Ende der Aufnahme
+  weggeräumt,** nicht mehr nur beim Browserstart. Wer den Browser tagelang offen
+  lässt, sammelte sonst die Bilder mehrerer Aufnahmen an, und eine neue Aufnahme
+  konnte Bilder der vorigen erben.
+- **Der Symboltitel und die Systemmeldung kommen aus dem Sprachkatalog.** Sie
+  standen als deutsche Sätze fest im Quelltext; wer die Erweiterung auf Englisch
+  benutzt, las und hörte dort weiter Deutsch.
 
 ### Was nicht geht
 
@@ -156,10 +182,20 @@ Der wichtigste Abschnitt. Vollständig mit Datum und Ursache in
 
 ### Prüfung
 
-733 Prüfsätze, 733 grün, gemessen am 14.08.2026 mit
-`cd src && node --test "pruefung/*.test.mjs"`. Davon sind 361 neu, verteilt auf
-neun Gebiete. Die 372 Prüfsätze der Vorfassung bleiben grün, drei Erwartungen
-darin wurden mit Begründung nachgezogen.
+809 Prüfsätze, 809 grün, gemessen am 14.08.2026 mit
+`cd src && node --test "pruefung/*.test.mjs"`. Die 372 Prüfsätze der Vorfassung
+bleiben grün; die Erwartungen, die nachgezogen wurden, tragen ihre Begründung
+an Ort und Stelle.
+
+Zur Zahl gehört eine Einordnung, sonst ist sie eine Beruhigung statt einer
+Aussage: Am Vormittag des 14.08.2026 standen hier 733 grüne Prüfsätze, und eine
+Gegenlesung fand danach 31 Befunde, davon neun Blocker. Keiner davon war rot
+geworden. Die Naht zwischen den Gebieten war nirgends gemessen — jedes Gebiet
+prüfte sich selbst gegen eine Attrappe des Nachbarn. Die Datei
+`src/pruefung/verzahnung.test.mjs` ist die Antwort darauf: Sie lässt die echten
+Inhaltsskripte, den echten Nachrichtenhörer des Dienstarbeiters und die echte
+Ablage miteinander laufen. Eine Zahl grüner Prüfsätze sagt nichts darüber, ob
+sie das Richtige messen.
 
 Der Relay hat seine eigene Prüfung, `server/test_connect.py`, dort sind 366 von
 366 grün, davon 43 neu. Er liegt in einem anderen Baum und läuft nicht mit.

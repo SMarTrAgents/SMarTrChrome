@@ -401,6 +401,22 @@ export function aufbauen(wurzel, dienste = {}) {
     const tab = stand && stand.tab ? stand.tab : null;
     const agent = stand && typeof stand.agent === "string" ? saeubern(stand.agent, 40) : "";
 
+    /*
+     * Läuft eine Sitzung, geht die Tabliste, und die Statuskarte bleibt.
+     *
+     * Befund Abnahme 14.08.2026 (M7): Bis dahin deckte die Seitenleiste die
+     * GANZE Startseite zu, sobald eine Sitzung lief. Damit war der Zweig
+     * darunter zwar gemessen, aber in genau dem Augenblick unsichtbar, in dem
+     * er etwas zu sagen hatte, „Am Werk: …" eingeschlossen. Jetzt bleibt die
+     * Startseite stehen, und was in dieser Lage nicht gilt, fällt hier weg:
+     * Die Liste ist der Weg zu einem ZWEITEN Antrag, und den gibt es bei
+     * laufender Sitzung nicht, der Weg führt über Stopp. Weggelassen und
+     * nicht ausgegraut, wie überall in dieser Datei.
+     */
+    listeKopf.hidden = verbunden;
+    liste.hidden = verbunden;
+    if (verbunden) hinweisSetzen(null, "");
+
     punkt.className = verbunden ? "sa-punkt an" : "sa-punkt";
     if (verbunden) {
       beschriften(standWort, "start_stand_verbunden", "Verbunden mit");
@@ -431,6 +447,7 @@ export function aufbauen(wurzel, dienste = {}) {
     ok: true,
     wurzel,
     liste,
+    listeKopf,
     hinweis,
     standKarte,
     trennKnopf,

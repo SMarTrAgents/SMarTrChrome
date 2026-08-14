@@ -40,9 +40,16 @@ let welt = attrappeSetzen();
 const { MODUS_ABLAGE, KLICK_ABSAGEN } = await import("../net/befehle.js");
 const { MATRIX_ABLAGE } = await import("../net/matrix.js");
 const { BUCH_ABLAGE } = await import("../net/protokollbuch.js");
-const { WERKSTATT_ABLAGE } = await import("../net/werkstatt.js");
+const {
+  WERKSTATT_ABLAGE,
+  REKORDER_ABLAGE: WERKSTATT_REKORDER_ABLAGE,
+  REKORDER_TAB_ABLAGE,
+} = await import("../net/werkstatt.js");
 const ausfuehrer = await import("../net/ausfuehrer.js");
 const link = await import("../net/link.js");
+/* Für V-c: Der Not-Aus hat seit dem 14.08.2026 eine Cloud-Hälfte (F2), und die
+   ist nur über den echten Botengang messbar. */
+const chat = await import("../net/chat.js");
 
 /* Der Dienstarbeiter wird EINMAL geladen; sein Nachrichtenhörer wird dabei
    angemeldet. Gemessen wird der Hörer, den die Erweiterung wirklich anmeldet,
@@ -51,9 +58,29 @@ await import("../background/worker.js");
 const workerHoerer = welt.chrome.runtime.onMessage._zuhoerer[0];
 assert.equal(typeof workerHoerer, "function", "Der Dienstarbeiter meldet einen Nachrichtenhörer an.");
 
+/* Befund vom 14.08.2026 (Naht zwischen den Gebieten): Dieser Sandkasten spielte
+   drei Inhaltsskripte ein, `net/seite.js` spielt vier. `geheim.js` fehlte, und
+   damit mass diese Datei eine Erweiterung, die es nicht gibt: `overlay.js`
+   fällt ohne die eine Quelle für Geheimfelder absichtlich hart zurück und
+   hält JEDES Feld für geheim (Festlegung F4). V-b und V-d sind genau daran
+   rot geworden. Sie steht hier wie dort an erster Stelle. */
+const GEHEIM_QUELLE = await readFile(new URL("../content/geheim.js", import.meta.url), "utf8");
 const WACHE_QUELLE = await readFile(new URL("../content/klickwache.js", import.meta.url), "utf8");
 const SELEKTOR_QUELLE = await readFile(new URL("../content/selektor.js", import.meta.url), "utf8");
 const OVERLAY_QUELLE = await readFile(new URL("../content/overlay.js", import.meta.url), "utf8");
+const REKORDER_QUELLE = await readFile(new URL("../content/rekorder.js", import.meta.url), "utf8");
+
+/* Die Inhaltsskripte unter GENAU dem Namen, unter dem `net/seite.js` und
+   `background/worker.js` sie einspielen. Der Umweg über diese Tabelle ist die
+   Naht, um die es geht: Ein Prüfsatz kann damit die Liste nehmen, die der
+   Dienstarbeiter WIRKLICH an Chrome gibt, statt eine daneben zu erfinden. */
+const INHALTSSKRIPTE = new Map([
+  ["src/content/geheim.js", GEHEIM_QUELLE],
+  ["src/content/klickwache.js", WACHE_QUELLE],
+  ["src/content/selektor.js", SELEKTOR_QUELLE],
+  ["src/content/overlay.js", OVERLAY_QUELLE],
+  ["src/content/rekorder.js", REKORDER_QUELLE],
+]);
 
 const HOST = "laden.example";
 const ADRESSE = `https://${HOST}/warenkorb`;
@@ -194,9 +221,9 @@ function knoten(tag, {
     shadowRoot: null,
     childNodes: text ? [{ nodeType: 3, nodeValue: text }] : [],
     __form: form,
-    /* Der Rekorder liest die Datenmerkmale ueber `el.attributes` (selektor.js,
-       `datenMerkmale`). Ohne diese Liste haette ein `data-testid` in der
-       Kaskade nie gestanden, und der staerkste Anker waere in dieser Pruefung
+    /* Der Rekorder liest die Datenmerkmale über `el.attributes` (selektor.js,
+       `datenMerkmale`). Ohne diese Liste hätte ein `data-testid` in der
+       Kaskade nie gestanden, und der stärkste Anker wäre in dieser Prüfung
        gar nicht messbar gewesen. */
     get attributes() {
       return Object.entries(merkmale).map(([name, value]) => ({ name, value: String(value) }));
@@ -265,15 +292,23 @@ function formular(felder = []) {
   return f;
 }
 
+/* Was `net/seite.js` in OVERLAY_DATEIEN führt, in derselben Reihenfolge. */
+const STANDARD_DATEIEN = [
+  "src/content/geheim.js",
+  "src/content/klickwache.js",
+  "src/content/selektor.js",
+  "src/content/overlay.js",
+];
+
 /**
- * Der Sandkasten mit den DREI echten Inhaltsskripten.
+ * Der Sandkasten mit den VIER echten Inhaltsskripten.
  *
  * Die Reihenfolge ist die aus `net/seite.js` und sie ist verbindlich:
- * Wache, Selektor, Overlay. Wer sie hier umstellt, misst eine Erweiterung,
- * die es nicht gibt.
+ * Geheim, Wache, Selektor, Overlay. Wer sie hier umstellt, misst eine
+ * Erweiterung, die es nicht gibt.
  */
-function seiteLaden(elemente) {
-  const zustand = { scrollY: 0, angehaengt: [], hoerer: [] };
+function seiteLaden(elemente, dateien = STANDARD_DATEIEN) {
+  const zustand = { scrollY: 0, angehaengt: [], hoerer: [], takte: [] };
 
   const document = {
     title: "Warenkorb",
@@ -402,6 +437,19 @@ function seiteLaden(elemente) {
     console,
     setTimeout,
     clearTimeout,
+    /* Der Arbeitszeiger (`overlay:arbeitszeiger`) läuft auf einem Takt. Bis
+       zum 14.08.2026 fehlten diese beiden hier, und der Sandkasten stuerzte an
+       genau der Nachricht mit „setInterval is not defined“, kein Prüfsatz hat
+       sie je geschickt. `unref` hängt den Takt vom Prozess ab: Ein Prüflauf,
+       der wegen eines vergessenen Weckers nicht endet, sagt niemandem, was
+       kaputt ist. */
+    setInterval: (fn, ms) => {
+      const h = setInterval(fn, ms);
+      if (typeof h.unref === "function") h.unref();
+      zustand.takte.push(h);
+      return h;
+    },
+    clearInterval: (h) => clearInterval(h),
     document,
     innerHeight: 900,
     innerWidth: 1280,
@@ -456,6 +504,15 @@ function seiteLaden(elemente) {
           return undefined;
         },
       },
+      /* `content/rekorder.js` legt die laufende Aufzeichnung in
+         `chrome.storage.local` ab (§7.2) — ein Inhaltsskript sieht diese
+         Schnittstelle wirklich. Sie zeigt bewusst auf DIESELBE Ablage wie der
+         Dienstarbeiter: Der Sinn von `sa_rekorder` ist ja gerade, dass beide
+         Seiten denselben Stand lesen. Sonst mässe ein Prüfsatz zwei Welten,
+         die es im Browser nur einmal gibt. */
+      get storage() {
+        return welt && welt.chrome ? welt.chrome.storage : undefined;
+      },
     },
   };
   sandbox.window = sandbox;
@@ -470,20 +527,45 @@ function seiteLaden(elemente) {
   for (const el of elemente) el.ownerDocument = document;
 
   vm.createContext(sandbox);
-  vm.runInContext(WACHE_QUELLE, sandbox, { filename: "klickwache.js" });
-  assert.ok(sandbox.SMARTR_KLICKWACHE, "klickwache.js muss sich an globalThis hängen");
-  vm.runInContext(SELEKTOR_QUELLE, sandbox, { filename: "selektor.js" });
-  assert.ok(sandbox.SMARTR_SELEKTOR, "selektor.js muss sich an globalThis hängen");
-  vm.runInContext(OVERLAY_QUELLE, sandbox, { filename: "overlay.js" });
-  const hoerer = sandbox.chrome.runtime.__hoerer;
-  assert.ok(hoerer, "overlay.js muss einen Nachrichtenhörer anmelden");
+
+  /* Einspielen, Datei für Datei, in der Reihenfolge der Liste. Die Liste
+     kommt von aussen: Wer sie fest hierher schriebe, könnte nie messen, was
+     der Dienstarbeiter WIRKLICH einspielt. */
+  const eingespielt = [];
+  const einspielen = (dateien) => {
+    for (const datei of dateien || []) {
+      if (eingespielt.includes(datei)) continue;
+      const quelle = INHALTSSKRIPTE.get(datei);
+      assert.ok(quelle, `unbekanntes Inhaltsskript: ${datei}`);
+      eingespielt.push(datei);
+      vm.runInContext(quelle, sandbox, { filename: datei });
+    }
+  };
+  einspielen(dateien);
+
+  /* Jede eingespielte Datei muss sich auch wirklich angehaengt haben. Ohne
+     diese Zusicherungen bliebe ein Sandkasten grün, in dem gar nichts
+     geladen ist, und das ist die Bauform, gegen die es diese ganze Datei
+     gibt. */
+  const zusagen = {
+    "src/content/geheim.js": () => assert.ok(sandbox.SMARTR_GEHEIM, "geheim.js muss sich an globalThis hängen"),
+    "src/content/klickwache.js": () => assert.ok(sandbox.SMARTR_KLICKWACHE, "klickwache.js muss sich an globalThis hängen"),
+    "src/content/selektor.js": () => assert.ok(sandbox.SMARTR_SELEKTOR, "selektor.js muss sich an globalThis hängen"),
+    "src/content/overlay.js": () => assert.ok(sandbox.chrome.runtime.__hoerer, "overlay.js muss einen Nachrichtenhörer anmelden"),
+  };
+  for (const datei of eingespielt) if (zusagen[datei]) zusagen[datei]();
 
   /* Genau der Weg, den `net/seite.js` nimmt: eine Nachricht hinein, eine
      Antwort heraus, über Chrome kopiert. Der Umweg über JSON bildet den
      structured clone nach und stellt nebenbei sicher, dass in der Antwort
      nichts steht, was die Leitung gar nicht überstünde. */
-  const fragen = (nachricht) =>
-    new Promise((fertig) => {
+  const fragen = (nachricht) => {
+    const hoerer = sandbox.chrome.runtime.__hoerer;
+    /* Kein Hörer heisst in Chrome: „Receiving end does not exist." Genau das
+       ist die Lage, in der der Dienstarbeiter einspielt, also wird sie hier
+       auch so gemeldet und nicht mit einer stillen `undefined` verdeckt. */
+    if (!hoerer) throw new Error("Could not establish connection. Receiving end does not exist.");
+    return new Promise((fertig) => {
       let kam = false;
       const weiter = hoerer(nachricht, null, (a) => {
         kam = true;
@@ -491,8 +573,9 @@ function seiteLaden(elemente) {
       });
       if (weiter !== true && !kam) fertig(undefined);
     });
+  };
 
-  return { fragen, sandbox, zustand, elemente };
+  return { fragen, sandbox, zustand, elemente, einspielen, eingespielt };
 }
 
 /* ================================================================== *
@@ -750,62 +833,163 @@ test(`V-b: Im Modus auto laufen readPage, scroll und click ohne Rückfrage, „J
  * c) laufAbbrechen kappt, ohne auf eine Netzantwort zu warten
  * ================================================================== */
 
-test("V-c: laufAbbrechen beendet lokale und Cloud-Aktionen, ohne auf eine Antwort zu warten", async () => {
+test("V-c: Der Not-Aus mitten im Klickweg — danach geht nichts mehr an die Seite und nichts mehr ans Gateway", async () => {
   /*
-   * Die Zusage aus §5: Zwischen dem Ereignis und dem Zustand „nichts läuft
-   * mehr" liegt keine Netzrunde. Gemessen wird sie an einem Befehl, der in
-   * einer HÄNGENDEN Seite steckt — dem Fall, für den es die Notbremse gibt.
+   * Befund B3 vom 14.08.2026 — und zugleich der Grund, warum die Fassung
+   * dieses Prüfsatzes vom Vormittag ihn NICHT gemessen hat.
    *
-   * `laufBeenden` (der Bestand) hätte diesen Befehl bis zu seiner Frist
-   * weiterlaufen lassen. Deshalb misst dieser Satz nicht, DASS abgebrochen
-   * wird, sondern WANN.
+   * Sie nahm `readPage`. Dort ist der hängende Aufruf schon der letzte des
+   * Befehls: Danach kann baulich nichts mehr an die Seite gehen, und der
+   * Prüfsatz wäre auch ohne jede Reparatur grün geblieben. Das ist genau die
+   * Sorte, von der es hier 733 gab.
+   *
+   * `click` ist der Fall, an dem es hängt, weil er ZWEI Griffe in die Seite
+   * hat: erst `overlay:zeiger`, dann `overlay:klicken`. Gemessen wurde am
+   * 14.08.2026 ein `overlay:klicken`, das 16996 ms NACH dem Kappen an die
+   * Seite ging, während der Agent längst `session_beendet` gelesen hatte. Eine
+   * Notbremse, die die Antwort abbricht, aber nicht die Handlung, ist keine,
+   * sondern eine Vertuschung.
+   *
+   * Deshalb antwortet die Seite hier auf `overlay:zeiger` erst nach 250 ms:
+   * Der Not-Aus fällt genau in dieses Fenster, und was danach noch aus der
+   * Erweiterung herauskommt, steht in der Spur.
+   *
+   * Ausgelöst wird über den ECHTEN Weg aus dem Tab (`notbremse` vom Schild)
+   * und nicht über `laufAbbrechen()` von Hand, weil Festlegung F2 genau dort
+   * hängt: Der Dienstarbeiter kappt selbst, auch bei geschlossener
+   * Seitenleiste.
    */
-  const knopf = knoten("button", { text: "Weiter" });
+  const knopf = knoten("button", {
+    text: "Weiter",
+    rect: { left: 100, top: 200, width: 200, height: 50 },
+  });
   const stand = weltMitSeite([knopf]);
 
-  /* Eine Seite, die genau bei der ARBEIT hängenbleibt.
-     Der Rahmen steht, das Zeichen steht, der Zeiger steht — und dann kommt
-     nichts mehr. Das ist die Lage, für die es die Notbremse gibt: nicht ein
-     toter Tab (den erkennt `wacheStellen`), sondern ein Skript der fremden
-     Seite, das die Antwort verschluckt. */
-  welt = attrappeSetzen({
-    tab: { ...TAB },
-    seiteAntwortet: (n) => (n.typ === "overlay:baum" ? new Promise(() => {}) : stand.seite.fragen(n)),
-    panelAntwortet: () => ({ ja: true }),
-  });
-  ausfuehrer.zaehlerNeu();
+  /* Das Gateway. Der Botengang wird nie fertig, abgefragt wird alle zwei
+     Sekunden — das ist der Netzverkehr, der nach dem Not-Aus aufhören muss. */
+  const rufe = [];
+  const alterFetch = globalThis.fetch;
+  globalThis.fetch = async (adresse, angaben) => {
+    const weg = String(adresse);
+    rufe.push(weg);
+    const antwort = (daten) => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => "application/json" },
+      async json() {
+        return daten;
+      },
+    });
+    if (weg.includes("/api/v1/chat/message")) return antwort({ task_id: "t-1", context_id: "c-1" });
+    if (weg.includes("/api/v1/chat/poll/")) return antwort({ status: "processing", steps: [] });
+    return antwort({});
+  };
+  const amGateway = (stueck) => rufe.filter((w) => w.includes(stueck)).length;
 
-  const laufend = ausfuehrer.befehlAusfuehren(
-    { id: "vc-1", cmd: "readPage", reason: "Ich lese die Seite." },
-    stand.sitzung
-  );
-  await runden(2);
+  try {
+    await chat.chatAbbrechen().catch(() => {});
 
-  const vorher = Date.now();
-  ausfuehrer.laufAbbrechen();
-  const nachher = Date.now();
+    /* Die Seite hängt genau EINEN Griff lang. Alles andere antwortet sofort,
+       sonst käme der Klickweg gar nicht erst bis zum Zeiger. */
+    welt = attrappeSetzen({
+      tab: { ...TAB },
+      seiteAntwortet: (n) =>
+        n.typ === "overlay:zeiger"
+          ? new Promise((f) => setTimeout(() => f(stand.seite.fragen(n)), 250))
+          : stand.seite.fragen(n),
+      panelAntwortet: (n) => (n.typ === "link:schritt-freigabe" ? { ja: true } : { ok: true }),
+    });
+    ausfuehrer.zaehlerNeu();
 
-  /* 1. Das Kappen selbst ist synchron. Es gibt hier nichts abzuwarten, also
-        wird auch auf nichts gewartet. */
-  assert.ok(nachher - vorher < 50, `laufAbbrechen brauchte ${nachher - vorher} ms`);
+    const start = await chat.chatStarten({ text: "Was steht hier?", ausweis: "ausweis" });
+    assert.equal(start.ok, true, "Vorbedingung: der Botengang in der Cloud läuft");
+    await runden(10);
+    assert.ok(amGateway("/chat/poll/") >= 1, "Vorbedingung: es wird wirklich abgefragt");
 
-  /* 2. Der wartende Befehl bekommt eine Antwort, und zwar sofort — obwohl die
-        Seite weiterhin schweigt und seine eigene Frist noch lange läuft. */
-  const ergebnis = await Promise.race([
-    laufend,
-    new Promise((f) => setTimeout(() => f({ zuSpaet: true }), 1500)),
-  ]);
-  assert.ok(!ergebnis.zuSpaet, "der wartende Befehl hängt weiter, statt beantwortet zu werden");
-  assert.equal(ergebnis.success, false);
-  assert.equal(ergebnis.error.code, "session_beendet");
+    const ziel = await wahrnehmen(stand, "Weiter");
+    const laufend = ausfuehrer.befehlAusfuehren(
+      {
+        id: "vc-1",
+        cmd: "click",
+        reason: "Ich gehe einen Schritt weiter.",
+        ref: ziel.ref,
+        snapshotEpoch: ziel.epoche,
+      },
+      stand.sitzung
+    );
 
-  /* 3. Die Warteschlange ist leer: Was danach kommt, wird gar nicht erst
-        ausgeführt, sondern beantwortet. */
-  const danach = await ausfuehrer.befehlAusfuehren(
-    { id: "vc-2", cmd: "readPage", reason: "Ich lese noch einmal." },
-    stand.sitzung
-  );
-  assert.equal(danach.error.code, "session_beendet");
+    /* Erst ziehen, wenn der Zeiger wirklich unterwegs ist. Ein Not-Aus vor dem
+       ersten Griff misst das Fenster nicht, um das es geht. */
+    for (let i = 0; i < 40 && !anDieSeite(welt.spur, "overlay:zeiger"); i += 1) await runden(2);
+    assert.ok(anDieSeite(welt.spur, "overlay:zeiger"), "Vorbedingung: der Zeiger ist unterwegs");
+
+    const abHier = welt.spur.length;
+    const vorher = Date.now();
+    await anWorker(
+      { typ: "notbremse", quelle: "schild" },
+      { id: welt.chrome.runtime.id, tab: { id: 7 }, url: ADRESSE }
+    );
+
+    /* 1. Der wartende Befehl bekommt eine Antwort, und zwar sofort. */
+    const ergebnis = await Promise.race([
+      laufend,
+      new Promise((f) => setTimeout(() => f({ zuSpaet: true }), 1500)),
+    ]);
+    assert.ok(!ergebnis.zuSpaet, "der wartende Befehl hängt weiter, statt beantwortet zu werden");
+    assert.equal(ergebnis.success, false);
+    assert.equal(ergebnis.error.code, "session_beendet");
+    assert.ok(Date.now() - vorher < 1000, "und zwar ohne auf eine Netzrunde zu warten");
+
+    /* 2. Der eigentliche Befund: Die hängende Antwort kommt bei 250 ms an,
+          also NACH dem Kappen. Ab da darf kein Griff mehr in die Seite gehen.
+          Gewartet wird über das Fenster hinaus, sonst misst der Satz nur, dass
+          die Erweiterung langsam ist. */
+    await new Promise((f) => setTimeout(f, 700));
+    await runden(10);
+
+    const nachher = welt.spur.slice(abHier).filter((e) => e.wohin === "seite");
+    const gearbeitet = nachher.filter((e) => e.nachricht.typ !== "overlay:gestoppt");
+    assert.deepEqual(
+      gearbeitet.map((e) => e.nachricht.typ),
+      [],
+      `nach dem Not-Aus ging noch etwas an die Seite: ${JSON.stringify(gearbeitet.map((e) => e.nachricht.typ))}`
+    );
+    assert.equal(
+      welt.spur.filter((e) => e.wohin === "seite" && e.nachricht.typ === "overlay:klicken").length,
+      0,
+      "und `overlay:klicken` hat die Erweiterung nie verlassen"
+    );
+    assert.equal(knopf.__klicks, 0, "geklickt wurde nichts, auch nicht verspätet");
+
+    /* 3. Und das eine, das sehr wohl gehen muss: das Zeichen im Tab (F2). */
+    assert.ok(
+      nachher.some((e) => e.nachricht.typ === "overlay:gestoppt"),
+      "im Tab muss „gestoppt“ stehen, auch bei geschlossener Seitenleiste"
+    );
+
+    /* 4. Die Cloud-Hälfte derselben Zusage: keine weitere Abfrage. Der Takt
+          liegt bei zwei Sekunden, also wird hier wirklich gewartet — eine
+          kürzere Frist misst nichts. */
+    const abfragenNachher = amGateway("/chat/poll/");
+    assert.equal(amGateway("/chat/cancel"), 1, "der Auftrag wird beim Server gestoppt, genau einmal");
+    await new Promise((f) => setTimeout(f, 2300));
+    assert.equal(
+      amGateway("/chat/poll/"),
+      abfragenNachher,
+      "nach dem Not-Aus kommt keine einzige Abfrage mehr"
+    );
+
+    /* 5. Die Warteschlange ist leer: Was danach kommt, wird gar nicht erst
+          ausgeführt, sondern beantwortet. */
+    const danach = await ausfuehrer.befehlAusfuehren(
+      { id: "vc-2", cmd: "readPage", reason: "Ich lese noch einmal." },
+      stand.sitzung
+    );
+    assert.equal(danach.error.code, "session_beendet");
+  } finally {
+    await chat.chatAbbrechen().catch(() => {});
+    globalThis.fetch = alterFetch;
+  }
 });
 
 test("V-c2: Der Not-Aus der Brücke kappt VOR dem Widerruf beim Relay", async () => {
@@ -1314,6 +1498,113 @@ test("V-e2: Die drei Zeichen einer Cloud-Sitzung stehen, und sie gehen zusammen 
   }
 });
 
+/*
+ * Eine echte Cloud-Sitzung aufbauen, über den echten Handschlag.
+ *
+ * Sie steht hier als Werkzeug, weil zwei Prüfsätze sie brauchen und weil ein
+ * nachgebauter Sitzungssatz genau das messen würde, was diese Datei nicht
+ * messen will: eine Sitzung, die es so nie gegeben hat. Der Agentenname kommt
+ * dabei aus dem `auth_ok` des Relays und damit von aussen, wie im Betrieb.
+ */
+async function cloudSitzungAufbauen({ agent = "SMarTrCEO", tabId = 7 } = {}) {
+  const draehte = [];
+  class DrahtAttrappe {
+    static OPEN = 1;
+    constructor(adresse, unterprotokolle) {
+      this.adresse = adresse;
+      this.angeboten = unterprotokolle;
+      this.protocol = "";
+      this.readyState = 0;
+      this.gesendet = [];
+      draehte.push(this);
+    }
+    send(text) {
+      this.gesendet.push(JSON.parse(text));
+    }
+    close() {
+      this.readyState = 3;
+    }
+  }
+  const altesWs = globalThis.WebSocket;
+  const alterFetch = globalThis.fetch;
+  globalThis.WebSocket = DrahtAttrappe;
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    headers: { get: () => "application/json" },
+    async json() {
+      return {};
+    },
+  });
+
+  try {
+    const laeuft = link.verbinden({ ticket: "einweg-ticket", ausweis: "ausweis", tabId });
+    const draht = draehte[draehte.length - 1];
+    draht.readyState = 1;
+    draht.protocol = "smartrlink.v2";
+    if (draht.onopen) draht.onopen();
+    const rahmen = {
+      type: "auth_ok",
+      code: "verzahnung-agent",
+      access: "write",
+      allow: [HOST],
+      mode: "tab",
+      step_mode: "assist",
+      expiry: 1800,
+    };
+    if (agent !== null) rahmen.agent = agent;
+    if (draht.onmessage) draht.onmessage({ data: JSON.stringify(rahmen) });
+    await laeuft;
+    return draht;
+  } finally {
+    globalThis.WebSocket = altesWs;
+    globalThis.fetch = alterFetch;
+  }
+}
+
+test("V-e4: `link:zustand?` bringt den Agentennamen zurück, und nur einen von der Positivliste", async () => {
+  /*
+   * Befund H5 vom 14.08.2026: Die Seitenleiste holt sich beim Wiederöffnen
+   * ihren Zustand mit `link:zustand?`. Der Agentenname stand nicht in der
+   * Antwort, und `link.js` sendet `link:cloud-sitzung` nur beim START einer
+   * Sitzung — den hat eine geschlossene Seitenleiste nie gehört. Ergebnis:
+   * Die Dauerzeile aus §8.4 blieb nach dem Wiederöffnen weg, still, ohne
+   * dass irgendetwas rot geworden wäre.
+   *
+   * Gemessen wird über den echten Nachrichtenhörer des Dienstarbeiters,
+   * nicht an `link.zustand()` — die Naht liegt genau dazwischen.
+   */
+  welt = attrappeSetzen({ tab: { ...TAB } });
+  await cloudSitzungAufbauen({ agent: "SMarTrCEO" });
+
+  const stand = await anWorker({ typ: "link:zustand?" });
+  assert.equal(stand.verbunden, true, "Vorbedingung: die Sitzung läuft");
+  assert.equal(stand.tabId, 7, "und sie sagt, an welchem Tab sie hängt");
+  assert.equal(stand.agent, "SMarTrCEO", "und WER steuert, sonst fehlt die Dauerzeile aus §8.4");
+
+  await link.trennen("nutzer").catch(() => {});
+
+  /*
+   * Und die andere Hälfte, die das Feld erst tragbar macht: Der Name kommt
+   * vom Relay, also von aussen. Was nicht auf der Positivliste AGENTEN steht,
+   * ist kein Agent — dann bleibt das Feld weg, und die Seitenleiste behauptet
+   * lieber nichts, als eine Fernsteuerung zu benennen, die diese Erweiterung
+   * nicht belegen kann.
+   */
+  welt = attrappeSetzen({ tab: { ...TAB } });
+  await cloudSitzungAufbauen({ agent: "Buchhaltung" });
+
+  const fremd = await anWorker({ typ: "link:zustand?" });
+  assert.equal(fremd.verbunden, true, "die Sitzung läuft trotzdem, hier wird nichts gesperrt");
+  assert.equal(
+    Object.hasOwn(fremd, "agent"),
+    false,
+    `ein Name ausserhalb der Positivliste darf gar nicht erst mitkommen: ${JSON.stringify(fremd.agent)}`
+  );
+
+  await link.trennen("nutzer").catch(() => {});
+});
+
 /* ================================================================== *
  * f) Ein unbekannter Agent kommt nicht durch
  * ================================================================== */
@@ -1406,7 +1697,7 @@ test("V-g: `key` und `dblclick` werden benannt abgelehnt, nie stillschweigend al
   const stand = weltMitSeite([knopf], { ablageLocal: { [WERKSTATT_ABLAGE]: [] } });
 
   /* Jeder Schritt traegt genau die Felder, die `SCHRITT_FELDER` ihm zugesteht.
-     Ein Schritt mit einem fremden Feld faellt schon beim Lesen aus der Ablage
+     Ein Schritt mit einem fremden Feld fällt schon beim Lesen aus der Ablage
      durch, und dann maesse dieser Satz die Feldpruefung statt der fehlenden
      Ausfuehrung. */
   for (const [typ, felder] of [
@@ -1564,10 +1855,149 @@ test("V-i: Läuft schon eine Agentensitzung, wird der Rekorder trotzdem eingespi
   );
   assert.deepEqual(
     eingespielt[0].auftrag.files,
-    ["src/content/selektor.js", "src/content/rekorder.js"],
-    "und zwar Selektor vor Rekorder, die Reihenfolge ist verbindlich"
+    /* Geändert am 14.08.2026 mit Begründung: `geheim.js` steht seit Festlegung
+       F4 an erster Stelle. Der alte Erwartungswert hat die Fassung gemessen,
+       in der `rekorder.js` beim Start mit `geheim_fehlt` absagte und der
+       Teach-Modus im Betrieb gar nicht erst lief. */
+    ["src/content/geheim.js", "src/content/selektor.js", "src/content/rekorder.js"],
+    "und zwar Geheim vor Selektor vor Rekorder, die Reihenfolge ist verbindlich"
   );
   assert.ok(antwort, "und der Knopf bekommt in jedem Fall eine Antwort");
+});
+
+/* ================================================================== *
+ * i2) Der Teach-Modus läuft wirklich an, mit genau den Dateien, die der
+ *     Dienstarbeiter nennt
+ * ================================================================== */
+
+test("V-i2: `rekorder:start` startet die Aufnahme wirklich, mit der Dateiliste des Dienstarbeiters", async () => {
+  /*
+   * Befund vom 14.08.2026, Naht zwischen Brücke und Inhaltsskript: In
+   * `background/worker.js` stand `REKORDER_DATEIEN = [selektor, rekorder]`,
+   * während `net/seite.js` `geheim.js` längst als erste Datei führte. Der
+   * Teach-Modus war damit im Betrieb tot: `content/rekorder.js` sagt in
+   * `starten()` mit `geheim_fehlt` ab, weil eine Aufnahme ohne
+   * Geheimerkennung Passwörter mitschreiben würde (Festlegung F4).
+   *
+   * V-i daneben misst die Liste als Liste. Das genuegt nicht: Eine Liste ist
+   * eine Behauptung, und eine Behauptung über eine Sicherheitszusage ist
+   * genau die Bauform, die am 11.08.2026 achtzehn gruene Prüfsätze über
+   * einer nie gerufenen Wache erzeugt hat. Dieser Satz spielt deshalb GENAU
+   * die Dateien in den Sandkasten, die der Dienstarbeiter an Chrome gibt, und
+   * fragt danach die Aufnahme selbst, ob sie läuft.
+   */
+  const knopf = knoten("button", { text: "Weiter" });
+
+  /* Ein leerer Tab: kein Inhaltsskript, so wie vor dem ersten Einspielen. */
+  const seite = seiteLaden([knopf], []);
+
+  welt = attrappeSetzen({
+    tab: { ...TAB },
+    seiteAntwortet: (n) => {
+      /* Was der Dienstarbeiter bis hierher eingespielt hat, wird wirklich
+         eingespielt — nicht mehr und nicht weniger. Das ist der ganze Sinn
+         dieses Satzes: Die Liste kommt aus dem Produktivweg, nicht von hier. */
+      for (const e of welt.spur) {
+        if (e.wohin === "executeScript") seite.einspielen(e.auftrag.files);
+      }
+      return seite.fragen(n);
+    },
+  });
+
+  const antwort = await anWorker({ typ: "rekorder:start", tabId: 7 });
+
+  assert.ok(antwort, "der Knopf bekommt in jedem Fall eine Antwort");
+  assert.equal(
+    antwort.ok,
+    true,
+    `die Aufnahme muss wirklich anlaufen: ${JSON.stringify(antwort)}`
+  );
+  assert.equal(antwort.laeuft, true, "und sie sagt selbst, dass sie läuft");
+
+  /* Und die Gegenprobe zur Gegenprobe: Der Sandkasten hat wirklich etwas
+     geladen, es ist nicht nur niemand da, der widerspricht. */
+  assert.ok(
+    seite.eingespielt.includes("src/content/geheim.js"),
+    `der Dienstarbeiter hat geheim.js nicht eingespielt: ${JSON.stringify(seite.eingespielt)}`
+  );
+  assert.ok(seite.sandbox.SMARTR_GEHEIM, "geheim.js hängt in der Seite");
+  assert.ok(seite.sandbox.SMARTR_REKORDER, "und der Aufzeichner auch");
+
+  /* Die Aufnahme hält ihren Stand in `sa_rekorder` (§7.2). Ohne diesen
+     Eintrag wüsste die Neueinspielung nach einem Seitenwechsel nichts von
+     ihr, und der Mensch verloere alles, was hinter dem ersten Klick liegt. */
+  const abgelegt = await welt.chrome.storage.local.get(WERKSTATT_REKORDER_ABLAGE);
+  assert.equal(
+    abgelegt[WERKSTATT_REKORDER_ABLAGE] && abgelegt[WERKSTATT_REKORDER_ABLAGE].laeuft,
+    true,
+    "und sie steht in der Ablage, damit sie einen Seitenwechsel übersteht"
+  );
+
+  /* Und der Tab dazu (Befund H6). Zwei Ablagen für eine Aufzeichnung sind
+     schon eine zu viel, aber solange es sie gibt, müssen beide stehen. */
+  const tabAblage = await welt.chrome.storage.session.get(REKORDER_TAB_ABLAGE);
+  assert.equal(tabAblage[REKORDER_TAB_ABLAGE], 7, "der Aufnahmetab ist gemerkt");
+});
+
+/* ================================================================== *
+ * i3) Der Bildvorrat gehört zu GENAU EINER Aufzeichnung
+ * ================================================================== */
+
+test("V-i3: `rekorder:stop` und `rekorder:start` räumen den Bildvorrat weg", async () => {
+  /*
+   * Befund M3 vom 14.08.2026, nur zur Hälfte repariert und deshalb hier
+   * nachgezogen: `sa_rekorder_bilder` wurde ausschliesslich bei `onStartup`
+   * und `onInstalled` geleert. Wer den Browser tagelang offen laesst — und das
+   * ist der Alltag — sammelte die Bilder mehrerer Aufzeichnungen an, bis zu 60
+   * JPEGs des ganzen sichtbaren Tabs und 4 MiB. `content/rekorder.js` räumt
+   * seine eigene Ablage `sa_rekorder` in `stoppen()` längst weg; nur die
+   * Bilder blieben liegen.
+   *
+   * Beim START ist es die schwerere Hälfte: Eine neue Aufnahme, die Bilder
+   * der vorigen erbt, schriebe sie als `s1.webp` in einen Ablauf, in dem sie
+   * nie aufgenommen wurden. Der Mensch saehe beim Abspielen ein Bild einer
+   * fremden Seite und hätte keinen Weg, das zu bemerken.
+   *
+   * Gemessen über den echten Nachrichtenhörer des Dienstarbeiters und die
+   * echte Ablage — im Gebiet des Ausfuehrers war das Ende einer Aufnahme gar
+   * nicht sichtbar, deshalb konnte es dort nur eine Verfallszeit geben.
+   */
+  const alterVorrat = {
+    version: 1,
+    bilder: {
+      "s1.webp": { datenUrl: "data:image/jpeg;base64,QUJD", zeit: Date.now() },
+    },
+  };
+
+  for (const typ of ["rekorder:stop", "rekorder:start"]) {
+    const knopf = knoten("button", { text: "Weiter" });
+    const seite = seiteLaden([knopf], []);
+
+    welt = attrappeSetzen({
+      tab: { ...TAB },
+      ablageLocal: { [ausfuehrer.REKORDER_BILD_ABLAGE]: alterVorrat },
+      seiteAntwortet: (n) => {
+        for (const e of welt.spur) {
+          if (e.wohin === "executeScript") seite.einspielen(e.auftrag.files);
+        }
+        return seite.fragen(n);
+      },
+    });
+
+    /* Vorbedingung: Es liegt wirklich etwas da, sonst misst der Satz nichts. */
+    const vorher = await welt.chrome.storage.local.get(ausfuehrer.REKORDER_BILD_ABLAGE);
+    assert.ok(vorher[ausfuehrer.REKORDER_BILD_ABLAGE], `${typ}: Vorbedingung, der alte Vorrat liegt da`);
+
+    await anWorker({ typ, tabId: 7 });
+    await runden(10);
+
+    const nachher = await welt.chrome.storage.local.get(ausfuehrer.REKORDER_BILD_ABLAGE);
+    assert.equal(
+      nachher[ausfuehrer.REKORDER_BILD_ABLAGE],
+      undefined,
+      `${typ}: der Bildvorrat der vorigen Aufzeichnung muss weg sein`
+    );
+  }
 });
 
 /* ================================================================== *
@@ -1612,5 +2042,72 @@ test("V-j: Ein bearbeitbarer Bereich mit Geheiminhalt gibt seinen Text nicht als
   assert.ok(
     ergebnis.data.snapshot.text.includes("Anmelden"),
     "und die Gegenprobe: gewöhnliche Beschriftungen stehen weiterhin drin"
+  );
+});
+
+/* ================================================================== *
+ * k) Jede Nachricht an die Seite hat wirklich einen Empfänger
+ *
+ * Befund vom 14.08.2026: `overlay:kaskade` und `rekorder:bild` hatten je einen
+ * Absender und keinen Empfänger. Beim ersten hiess das: KEIN aufgezeichneter
+ * Ablauf mit `click`, `input`, `select` oder `scroll` war abspielbar. Der
+ * Ausfuehrer meldete dabei sauber `workflow_step_failed` nach §7.4, jedes
+ * Gebiet war für sich grün, und niemand hat es bemerkt.
+ *
+ * Diese Luecke ist keine Sorte, die ein Prüfsatz je Befehl findet: Sie liegt
+ * genau zwischen zwei Dateien. Deshalb wird hier NICHT ein Befehl gemessen,
+ * sondern die Naht als Ganzes — jeder Nachrichtenname, den der
+ * Auslieferungsstand an eine Seite schickt, wird dem ECHTEN Hörer von
+ * `overlay.js` vorgelegt.
+ *
+ * Der Quelltext liefert dabei nur die KANDIDATEN. Gemessen wird die Antwort
+ * des wirklichen Hoerers, und das ist der Unterschied zu einer Textsuche.
+ * ================================================================== */
+
+test("V-k: Jeder `overlay:`-Name aus dem Auslieferungsstand hat wirklich einen Empfänger", async () => {
+  const absender = ["net/ausfuehrer.js", "net/seite.js", "background/worker.js", "panel/panel.js"];
+  const namen = new Set();
+  for (const pfad of absender) {
+    const quelle = await readFile(new URL(`../${pfad}`, import.meta.url), "utf8");
+    for (const treffer of quelle.matchAll(/typ:\s*"(overlay:[a-z-]+)"/g)) namen.add(treffer[1]);
+  }
+
+  /* Ohne diese zwei Zeilen bliebe der Satz grün, sobald das Einlesen kaputt
+     ist: Eine leere Menge besteht jede Prüfung. */
+  assert.ok(namen.size >= 10, `zu wenige Namen gefunden, das Einlesen ist kaputt: ${namen.size}`);
+  assert.ok(namen.has("overlay:kaskade"), "der Name aus dem Befund muss in der Menge sein");
+
+  const knopf = knoten("button", { text: "Weiter", rect: { left: 100, top: 200, width: 150, height: 40 } });
+  const seite = seiteLaden([knopf]);
+  welt = attrappeSetzen({ tab: { ...TAB }, seiteAntwortet: (n) => seite.fragen(n) });
+
+  const ohneEmpfaenger = [];
+  for (const typ of [...namen].sort()) {
+    /* Die Nutzlast ist absichtlich dünn: Gemessen wird, ob der Name
+       ueberhaupt ankommt, nicht ob der Schritt gelingt. Eine Absage wie
+       `element_not_found` ist ein Empfänger, `unbekannte_nachricht` ist
+       keiner. */
+    const nutzlast = { typ, tabId: 7, ref: "e1", epoche: "x", kaskade: ["#gibtesnicht"] };
+
+    const inDerSeite = await seite.fragen(nutzlast);
+    const seiteKennt = inDerSeite !== undefined && !(inDerSeite && inDerSeite.fehler === "unbekannte_nachricht");
+    if (seiteKennt) continue;
+
+    /* Nicht jeder Name mit diesem Präfix geht in die Seite: `overlay:einspielen`
+       ist eine Bitte an den Dienstarbeiter, das Overlay einzuspielen, und wird
+       dort beantwortet. Das Präfix ist an dieser einen Stelle irreführend,
+       der Weg ist es nicht. Gemessen wird deshalb an BEIDEN echten Hörern. */
+    const beimDienst = await anWorker(nutzlast);
+    const dienstKennt = beimDienst !== undefined && !(beimDienst && beimDienst.error === "unbekannt");
+    if (dienstKennt) continue;
+
+    ohneEmpfaenger.push(typ);
+  }
+
+  assert.deepEqual(
+    ohneEmpfaenger,
+    [],
+    `Diese Namen schickt der Auslieferungsstand los, und weder overlay.js noch `
+      + `der Dienstarbeiter kennen sie: ${ohneEmpfaenger.join(", ")}`
   );
 });
