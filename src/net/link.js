@@ -15,7 +15,9 @@
  *      Worker.
  *   2. Ein Wecker alle 30 Sekunden als Netz darunter. Er baut die Verbindung
  *      NICHT wieder auf. Er stellt nur fest, ob sie noch steht — und beendet
- *      die Sitzung sauber, wenn nicht.
+ *      die Sitzung sauber, wenn nicht. Er führt außerdem die Zeitrechnung
+ *      der Sitzung fort, siehe den Block „Die Frist einer Sitzung" weiter
+ *      unten.
  *
  * Punkt 2 ist der wichtige. Stilles Wiederverbinden wäre bequem und wäre
  * genau der Bruch der Vorgabe „jede Sitzung neu über SMarTrLink": Der Nutzer
@@ -182,13 +184,160 @@ async function sitzungLesen() {
   return sitzung;
 }
 
+/* ------------------------------------------------------------------ *
+ * Die Frist einer Sitzung — uhrunabhängig gerechnet
+ *
+ * Bis zum 11.08.2026 hing das Ende einer Sitzung allein an `Date.now()`. Das
+ * ist die Uhr des Rechners, und die kann jeder verstellen: zwei Stunden
+ * zurück, und die Sitzung lief zwei Stunden länger. Sprang die Uhr vor, etwa
+ * bei der Zeitumstellung, nach einem NTP-Sprung oder beim Aufwachen aus dem
+ * Ruhezustand, endete sie zu früh oder blieb in einem halben Zustand hängen.
+ *
+ * Führend ist deshalb jetzt eine DAUER, gemessen mit `performance.now()`.
+ * Diese Uhr zählt seit dem Start des Dienstprozesses aufwärts und lässt sich
+ * nicht zurückstellen.
+ *
+ * `expires_at` vom Server bleibt eine ZWEITE Grenze. Sie wird beim
+ * Sitzungsbeginn EINMAL in eine Dauer umgerechnet und mit der ersten
+ * zusammengelegt: Es gilt die kürzere von beiden, was zuerst abläuft, beendet
+ * die Sitzung. Der Server kann damit verkürzen, verlängern kann er nie. Und
+ * weil aus `expires_at` sofort eine Dauer wird, wirkt ein späterer Sprung der
+ * Uhr auch auf diese zweite Grenze nicht mehr.
+ *
+ * Der Dienstarbeiter in MV3 schläft ein. Wacht er wieder auf, beginnt
+ * `performance.now()` bei null, und der Anker aus dem vorigen Leben passt
+ * nicht mehr dazu. Deshalb steht im Sitzungssatz, WELCHES Leben den Anker
+ * gesetzt hat:
+ *
+ *   - Gleiches Leben: `performance.now()` ist genau und allein zuständig.
+ *     Eine Uhr, die währenddessen springt, ändert daran nichts.
+ *   - Anderes Leben: Es gilt der GRÖSSERE der beiden gemessenen Verbräuche,
+ *     also die Laufzeit dieses Prozesses und der Abstand auf der Wanduhr. So
+ *     geht der Schlaf nicht als geschenkte Zeit durch, und eine zurückgestellte
+ *     Uhr schenkt trotzdem nichts.
+ *
+ * Der Wecker (alle 30 Sekunden, derselbe, der die Leitung prüft) schreibt den
+ * Verbrauch fest und setzt den Anker neu. Was einmal verbraucht ist, liegt
+ * damit in der Ablage und überlebt das Ende des Dienstprozesses.
+ * ------------------------------------------------------------------ */
+
+/* Die Kennung dieses Dienstprozesses. Sie liegt im Modul, nicht in der
+   Ablage — stirbt der Prozess, ist sie weg, und genau daran erkennt der
+   nächste Prozess, dass der Anker nicht ihm gehört. */
+const LEBEN = `${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}`;
+export const LEBEN_KENNUNG = LEBEN;
+
+/* Die uhrunabhängige Messung. Fehlt `performance` (sehr alte Umgebung oder
+   Prüfstand), bleibt nur die Wanduhr — dann ist die Sicherung schwächer, aber
+   die Sitzung läuft nicht ohne jede Frist weiter. */
+function monoton() {
+  const p = globalThis.performance;
+  if (p && typeof p.now === "function") return p.now();
+  return Date.now();
+}
+
+/*
+ * Aus `expiry` (Sekunden) und `expires_at` (Zeitpunkt) wird EINE Dauer in
+ * Millisekunden. Führend ist `expiry`; `expires_at` darf nur kürzen.
+ * Ergebnis 0 heißt: keine gültige Frist, die Sitzung wird nicht angenommen.
+ */
+export function dauerBestimmen({ expiry, expires_at } = {}, jetzt = Date.now()) {
+  const sekunden = Number(expiry);
+  const ausDauer = Number.isFinite(sekunden) && sekunden > 0 ? sekunden * 1000 : 0;
+  const gemeldet = expires_at ? Date.parse(expires_at) : NaN;
+  const ausServer = Number.isFinite(gemeldet) ? gemeldet - jetzt : null;
+
+  let budget = ausDauer;
+  if (ausServer !== null) {
+    /* Nennt der Server nur `expires_at`, ist das die einzige Angabe. Nennt er
+       beides, gilt die kürzere — nie die längere. */
+    budget = budget > 0 ? Math.min(budget, ausServer) : ausServer;
+  }
+  return budget > 0 ? Math.floor(budget) : 0;
+}
+
+/* Ein frischer Anker: Der bisherige Verbrauch wird festgeschrieben, ab hier
+   wird wieder monoton weitergezählt. */
+export function ankerNeu(verbraucht = 0, jetzt = Date.now(), mono = monoton()) {
+  return {
+    verbrauchtMs: Math.max(0, Math.round(Number(verbraucht) || 0)),
+    ankerMonoton: mono,
+    ankerUhr: jetzt,
+    ankerLeben: LEBEN,
+  };
+}
+
+/* Wie lang die Sitzung insgesamt laufen darf. Sitzungssätze aus der Zeit vor
+   dieser Runde kennen `budgetMs` nicht; für sie wird die Dauer aus den alten
+   Feldern hergeleitet, damit sie nicht plötzlich ohne Frist dastehen. */
+export function budgetVon(sitzungssatz) {
+  if (!sitzungssatz) return 0;
+  const budget = Number(sitzungssatz.budgetMs);
+  if (Number.isFinite(budget) && budget > 0) return budget;
+  const ende = Number(sitzungssatz.endetUm);
+  const start = Number(sitzungssatz.begonnenUm);
+  if (Number.isFinite(ende) && Number.isFinite(start) && ende > start) return ende - start;
+  if (Number.isFinite(ende)) return Math.max(0, ende - Date.now());
+  return 0;
+}
+
+/*
+ * Wie viel der Dauer verbraucht ist. Siehe den Block oben: Im selben Leben
+ * zählt allein die monotone Uhr, nach einem Wechsel des Dienstprozesses der
+ * größere der beiden Verbräuche.
+ */
+export function verbrauchMessen(sitzungssatz, jetzt = Date.now(), mono = monoton()) {
+  if (!sitzungssatz) return 0;
+  const gesammelt = Math.max(0, Number(sitzungssatz.verbrauchtMs) || 0);
+  const anker = Number(sitzungssatz.ankerMonoton);
+  const gleichesLeben = sitzungssatz.ankerLeben === LEBEN && Number.isFinite(anker);
+
+  if (gleichesLeben) return gesammelt + Math.max(0, mono - anker);
+
+  /* Anderer Dienstprozess: `mono` zählt erst seit dem Start DIESES Prozesses
+     und ist damit eine Untergrenze für die verstrichene Zeit. Die Wanduhr
+     kennt den ganzen Abstand, lässt sich aber verstellen. Der größere der
+     beiden Werte nimmt beiden Seiten den Vorteil. */
+  const ankerUhr = Number.isFinite(Number(sitzungssatz.ankerUhr))
+    ? Number(sitzungssatz.ankerUhr)
+    : Number(sitzungssatz.begonnenUm);
+  const nachUhr = Number.isFinite(ankerUhr) ? Math.max(0, jetzt - ankerUhr) : 0;
+  const seitProzessstart = Math.max(0, mono);
+  return gesammelt + Math.max(seitProzessstart, nachUhr);
+}
+
+/* Was von der Dauer noch übrig ist, in Millisekunden. */
+export function restMs(sitzungssatz, jetzt = Date.now(), mono = monoton()) {
+  if (!sitzungssatz) return 0;
+  return Math.max(0, budgetVon(sitzungssatz) - verbrauchMessen(sitzungssatz, jetzt, mono));
+}
+
+export function fristAbgelaufen(sitzungssatz, jetzt = Date.now(), mono = monoton()) {
+  if (!sitzungssatz) return false;
+  return restMs(sitzungssatz, jetzt, mono) <= 0;
+}
+
+/*
+ * Der Sitzungssatz, wie ihn die Seitenleiste und der Ausführer brauchen: mit
+ * einem `endetUm`, das aus der uhrunabhängigen Restzeit hergeleitet ist.
+ *
+ * Beide rechnen `endetUm - Date.now()`, um eine Restzeit anzuzeigen. Stünde
+ * dort weiter der beim Aufbau berechnete Zeitpunkt, zeigte die Karte nach
+ * einem Sprung der Uhr eine Restzeit an, die es nicht gibt — und eine
+ * Restzeit, die nicht stimmt, ist schlimmer als gar keine.
+ */
+export function sitzungMitFrist(sitzungssatz, jetzt = Date.now(), mono = monoton()) {
+  if (!sitzungssatz) return sitzungssatz;
+  return { ...sitzungssatz, endetUm: jetzt + restMs(sitzungssatz, jetzt, mono) };
+}
+
 /* Der öffentliche Blick auf den Zustand — für die Seitenleiste, wenn sie
    neu aufgeht und wissen muss, ob gerade etwas läuft. */
 export async function zustand() {
   const gespeichert = await sitzungLesen();
   if (!gespeichert) return { verbunden: false };
   const offen = !!draht && draht.readyState === WebSocket.OPEN;
-  return { ...gespeichert, verbunden: offen, unbeaufsichtigt };
+  return { ...sitzungMitFrist(gespeichert), verbunden: offen, unbeaufsichtigt };
 }
 
 /*
@@ -366,7 +515,7 @@ async function sitzungBeenden(grund, text, { ausweis = null, widerrufen = true }
  * VERBOTEN. Der Relay nimmt sie aus dem signierten Ticket; eine Behauptung der
  * Erweiterung wäre keine Tatsache — und der Relay quittiert sie mit 4400.
  */
-export function verbinden({ ticket, ausweis, ursprungMuster = null, tabId = null }) {
+export function verbinden({ ticket, ausweis, ursprungMuster = null, tabId = null, fortsetzung = null }) {
   return new Promise((fertig, fehlgeschlagen) => {
     if (draht) {
       fehlgeschlagen(
@@ -465,19 +614,19 @@ export function verbinden({ ticket, ausweis, ursprungMuster = null, tabId = null
       }
 
       if (rahmen.type === "auth_ok" && !erledigt) {
-        const dauer = Number(rahmen.expiry) || 0;
-        const gemeldet = rahmen.expires_at ? Date.parse(rahmen.expires_at) : NaN;
-        const endetUm = Number.isFinite(gemeldet)
-          ? gemeldet
-          : dauer > 0
-            ? Date.now() + dauer * 1000
-            : 0;
+        const jetzt = Date.now();
+        /* Führend ist die Dauer, `expires_at` darf nur kürzen. Ab hier ist die
+           Wanduhr aus der Rechnung heraus: Der Rest der Sitzung wird monoton
+           gemessen. */
+        const budget = dauerBestimmen(rahmen, jetzt);
 
         /* Eine Sitzung ohne Ende nehmen wir nicht an. Der Bestand erlaubt sie
            (duration 0), die Vorgabe verbietet sie. Im Zweifel die strengere
            Variante — also auflegen. Die Prüfung steht vor `erledigt`, damit
-           die Ablehnung den Aufrufer auch wirklich erreicht. */
-        if (!endetUm || endetUm <= Date.now()) {
+           die Ablehnung den Aufrufer auch wirklich erreicht. Ein `expires_at`
+           in der Vergangenheit fällt hier ebenfalls heraus, weil daraus keine
+           Dauer größer null wird. */
+        if (!budget) {
           beenden(
             new NetzFehler(
               "ohne_ende",
@@ -485,6 +634,34 @@ export function verbinden({ ticket, ausweis, ursprungMuster = null, tabId = null
             )
           );
           return;
+        }
+
+        /*
+         * Verlängern oder nur die Leitung tauschen?
+         *
+         * Die Rechnung darf NUR dann bei null anfangen, wenn der Mensch
+         * wirklich verlängert hat. Woran das zu erkennen ist: Ein
+         * vollständiger Freigabeweg mit frischem Einweg-Ticket führt beim
+         * Relay zu einer NEUEN Sitzung, also zu einem neuen `code`. Meldet der
+         * Relay denselben `code` wie die laufende Sitzung, ist nichts neu
+         * bewilligt worden — dann läuft die alte Rechnung weiter, und der
+         * Server kann die Sitzung auch auf diesem Weg nicht verlängern.
+         */
+        const neuerCode = String(rahmen.code || "");
+        const weiter =
+          !!fortsetzung && !!fortsetzung.code && String(fortsetzung.code) === neuerCode;
+
+        let verbraucht = 0;
+        let budgetMs = budget;
+        let begonnenUm = jetzt;
+        if (weiter) {
+          verbraucht = Math.max(0, Number(fortsetzung.verbrauchtMs) || 0);
+          const alterRest = Math.max(0, (Number(fortsetzung.budgetMs) || 0) - verbraucht);
+          /* Die kürzere der beiden Restzeiten gewinnt, damit ein erneuter
+             Handschlag auf derselben Sitzung nichts hinzugewinnen kann. */
+          budgetMs = verbraucht + Math.min(budget, alterRest);
+          const alterStart = Number(fortsetzung.begonnenUm);
+          if (Number.isFinite(alterStart)) begonnenUm = alterStart;
         }
 
         erledigt = true;
@@ -497,14 +674,22 @@ export function verbinden({ ticket, ausweis, ursprungMuster = null, tabId = null
            flach: `allow`, `mode`, `step_mode` — ein `scope` als Adressliste
            gibt es nicht mehr. */
         await sitzungSchreiben({
-          code: String(rahmen.code || ""),
+          code: neuerCode,
           stufe: rahmen.access === "write" ? "write" : "read",
           bereich: Array.isArray(rahmen.allow) ? rahmen.allow.map(String) : [],
           modus: rahmen.mode === "domains" ? "domains" : "tab",
           schrittmodus: rahmen.step_mode === "auto" ? "auto" : "confirm_each",
-          endetUm,
+          /* Die führende Größe: eine Dauer, keine Uhrzeit. */
+          budgetMs,
+          /* …und der Anker, ab dem monoton weitergezählt wird. */
+          ...ankerNeu(verbraucht, jetzt),
+          /* `endetUm` bleibt für die Anzeige erhalten (Seitenleiste und
+             Ausführer rechnen damit die Restzeit aus). Es wird aus der Dauer
+             hergeleitet und bei jedem Weckerschlag nachgeführt, ist also
+             Ergebnis der Rechnung und nicht mehr ihre Grundlage. */
+          endetUm: jetzt + (budgetMs - verbraucht),
           leerlaufSekunden: Number(rahmen.idle_timeout) || 0,
-          begonnenUm: Date.now(),
+          begonnenUm,
           ursprungMuster,
           /* Der Tab, auf dem gearbeitet werden darf. Er steht hier und nicht
              nur in der Seitenleiste, weil der Ausführer im Hintergrunddienst
@@ -568,9 +753,29 @@ export function verbinden({ ticket, ausweis, ursprungMuster = null, tabId = null
        * nicht dazu führen, dass der Agent ins Leere wartet.
        */
       const laufende = await sitzungLesen();
+
+      /* Die Frist gilt auch zwischen zwei Weckerschlägen. Ist die Dauer
+         verbraucht, wird nichts mehr ausgeführt — der Agent bekommt trotzdem
+         seine Antwort, sonst wartet er bis zur Frist des Relays ins Leere. */
+      if (laufende && fristAbgelaufen(laufende)) {
+        senden({
+          type: "result",
+          id: typeof rahmen.id === "string" ? rahmen.id : "",
+          cmd: typeof rahmen.cmd === "string" ? rahmen.cmd.slice(0, 40) : "",
+          success: false,
+          error: {
+            code: "frist_abgelaufen",
+            message: "Die vereinbarte Zeit ist um. Die Verbindung ist beendet.",
+            retryable: false,
+          },
+        });
+        await trennen("abgelaufen");
+        return;
+      }
+
       let ergebnis;
       try {
-        ergebnis = await befehlAusfuehren(rahmen, laufende || {});
+        ergebnis = await befehlAusfuehren(rahmen, laufende ? sitzungMitFrist(laufende) : {});
       } catch (fehler) {
         ergebnis = {
           type: "result",
@@ -657,12 +862,25 @@ export async function verlaengernMit({ ticket, ausweis }) {
   await Promise.resolve(chrome.alarms.clear(WECKER)).catch(() => {});
   draht = null;
 
+  /* Der Stand der Rechnung reist mit. Er wird NUR dann weiterverwendet, wenn
+     der Relay dieselbe Sitzung meldet (siehe `auth_ok`): Dann ist die Leitung
+     getauscht und sonst nichts. Hat der Mensch dagegen wirklich verlängert,
+     kommt eine neue Sitzung mit neuem `code` zurück, und die Rechnung beginnt
+     zu Recht von vorn. */
+  const uebergabe = {
+    code: alt.code ? String(alt.code) : null,
+    budgetMs: budgetVon(alt),
+    verbrauchtMs: verbrauchMessen(alt),
+    begonnenUm: Number(alt.begonnenUm),
+  };
+
   try {
     const neu = await verbinden({
       ticket,
       ausweis,
       ursprungMuster: alt.ursprungMuster || null,
       tabId: Number.isInteger(alt.tabId) ? alt.tabId : null,
+      fortsetzung: uebergabe,
     });
     try {
       alterDraht.close(1000, "verlaengert");
@@ -715,6 +933,18 @@ export async function trennen(grund = "nutzer", ausweis = null) {
  * Er baut nichts wieder auf. Findet er eine gespeicherte Sitzung ohne
  * stehende Verbindung vor, dann ist der Service Worker zwischendurch beendet
  * worden — und damit ist die Befugnis erloschen, nicht nur die Leitung.
+ *
+ * Die Frist wird ZUERST geprüft, vor der Leitung. Zwei Gründe: Eine Sitzung,
+ * deren Zeit um ist, soll das auch so heißen und nicht als „abgerissen"
+ * erklärt werden. Und der Verbrauch muss auch dann gerechnet werden, wenn die
+ * Leitung ohnehin schon weg ist, sonst hinge das Ergebnis davon ab, welcher
+ * der beiden Fälle zufällig zuerst eintritt.
+ *
+ * Er ist zugleich die Stelle, an der der Verbrauch festgeschrieben wird: Bei
+ * jedem Schlag wandert die bis dahin verbrauchte Dauer in die Ablage und der
+ * monotone Anker wird neu gesetzt. Schläft der Dienstprozess danach ein, ist
+ * höchstens die Zeit seit dem letzten Schlag ungenau, und auch die wird beim
+ * Aufwachen über die Wanduhr nachgeholt.
  */
 export async function wacheLaufen() {
   const gespeichert = await sitzungLesen();
@@ -724,6 +954,16 @@ export async function wacheLaufen() {
     } catch (_) {
       /* Kein Wecker da. */
     }
+    return;
+  }
+
+  const jetzt = Date.now();
+  const mono = monoton();
+  const verbraucht = verbrauchMessen(gespeichert, jetzt, mono);
+  const rest = Math.max(0, budgetVon(gespeichert) - verbraucht);
+
+  if (rest <= 0) {
+    await trennen("abgelaufen");
     return;
   }
 
@@ -738,9 +978,12 @@ export async function wacheLaufen() {
     return;
   }
 
-  if (Date.now() >= gespeichert.endetUm) {
-    await trennen("abgelaufen");
-  }
+  /* Verbrauch festschreiben, Anker neu setzen, Anzeigezeit nachführen. */
+  await sitzungSchreiben({
+    ...gespeichert,
+    ...ankerNeu(verbraucht, jetzt, mono),
+    endetUm: jetzt + rest,
+  });
 }
 
 export const WECKER_NAME = WECKER;

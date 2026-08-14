@@ -382,6 +382,57 @@ const VERSTECKT_IM_HTML = new Set(
 assert.ok(VERSTECKT_IM_HTML.has("dialog"), "Gegenprobe: der Dialog ist im HTML verborgen");
 assert.ok(!VERSTECKT_IM_HTML.has("leer"), "Gegenprobe: der Leerzustand ist es nicht");
 
+/*
+ * Was in welcher Karte steht — Ueberschrift und Inhalt, aus panel.html gelesen.
+ *
+ * Warum das hier stehen muss: Die Nachbildung kannte bisher nur lose
+ * Einzelelemente ohne jede Verwandtschaft. Damit war die Frage „steht der Fokus
+ * noch in dieser Karte?" unbeantwortbar, und die Ueberschrift, auf die die
+ * Seitenleiste ihn beim Kartenwechsel setzt, gab es ueberhaupt nicht. Ein
+ * Pruefsatz haette dann nur die Attrappe gemessen und nicht die Seitenleiste.
+ */
+const KARTE_IM_HTML = new Map();
+for (const t of html.matchAll(/<section id="([^"]+)"[^>]*>([\s\S]*?)<\/section>/g)) {
+  const kopf = /<h2([^>]*)>([\s\S]*?)<\/h2>/.exec(t[2]);
+  KARTE_IM_HTML.set(t[1], {
+    /* Ueberschriften MIT Kennung entstehen ohnehin als eigenes Element; nur
+       die namenlosen muss die Nachbildung selbst anlegen. */
+    ueberschrift: kopf && !/\sid="/.test(kopf[1]) ? kopf[2].trim() : null,
+    kinder: [...t[2].matchAll(/\sid="([^"]+)"/g)].map((k) => k[1]),
+  });
+}
+const H2_KENNUNGEN = new Set([...html.matchAll(/<h2 id="([^"]+)"/g)].map((t) => t[1]));
+
+/*
+ * Welches Element eine Kennung in panel.html wirklich ist.
+ *
+ * Die Nachbildung gab bisher jedem Element `div`. Damit war die Zusage „ein
+ * Knopf braucht kein tabindex und darf deshalb nicht aus der Tabulatorreihe
+ * fallen" unpruefbar, denn ein div braucht sehr wohl eines — der Pruefsatz
+ * haette den Unterschied gar nicht sehen koennen, um den es geht.
+ */
+const TAG_IM_HTML = new Map(
+  [...html.matchAll(/<([a-zA-Z][a-zA-Z0-9]*)(?=[\s>])[^>]*?\sid="([^"]+)"/g)].map((t) => [
+    t[2],
+    t[1],
+  ])
+);
+assert.equal(TAG_IM_HTML.get("freigabe-nein"), "button", "Gegenprobe: Ablehnen ist ein Knopf");
+assert.equal(TAG_IM_HTML.get("eingabe"), "textarea", "Gegenprobe: das Eingabefeld ist ein Textfeld");
+assert.equal(TAG_IM_HTML.get("erklaer-titel"), "h2", "Gegenprobe: die Erklaerung hat eine Ueberschrift");
+assert.equal(TAG_IM_HTML.get("sitzungsleiste"), "div", "Gegenprobe: die Sitzungsleiste ist keiner von beiden");
+
+assert.equal(
+  KARTE_IM_HTML.get("dialog")?.ueberschrift,
+  "Verbindung über SMarTrLink",
+  "Gegenprobe: die Ueberschrift der Dialogkarte kommt aus panel.html"
+);
+assert.ok(
+  KARTE_IM_HTML.get("freigabe")?.kinder.includes("freigabe-nein"),
+  "Gegenprobe: der Ablehnen-Knopf steht wirklich in der Freigabekarte"
+);
+assert.ok(H2_KENNUNGEN.has("erklaer-titel"), "Gegenprobe: die Erklaerkarte hat eine benannte Ueberschrift");
+
 /* Steuerzeichen, Nullbreiten und Schreibrichtungsmarken — der billigste Weg,
    ein Protokoll oder einen Vorleser etwas anderes sagen zu lassen, als dasteht.
    Aus Zahlen gebaut, damit in dieser Datei kein einziges davon wirklich steht. */
@@ -397,7 +448,7 @@ const steuerzeichenDrin = (text) =>
 /* Wo der Fokus gerade steht. Der Browser fuehrt das als document.activeElement,
    die Nachbildung fuehrt es hier, damit Pruefsaetze die Fokusfuehrung wirklich
    messen koennen statt sie nur zu behaupten. */
-const fokusStand = { aktiv: null };
+const fokusStand = { aktiv: null, koerper: null };
 
 function knoten(tag = "div", id = "") {
   const el = {
@@ -410,7 +461,7 @@ function knoten(tag = "div", id = "") {
     attribute: {},
     zuhoerer: new Map(),
     hidden: false,
-    disabled: false,
+    _disabled: false,
     value: "",
     placeholder: "",
     className: "",
@@ -435,18 +486,26 @@ function knoten(tag = "div", id = "") {
       el.kinder.length = 0;
       for (const t of teile) el.kinder.push(t);
     },
-    /* Sucht in den eigenen Kindern nach einer Klasse. Vorher gab diese Stelle
-       ausnahmslos null zurueck, damit fand `menueOeffnen` nie einen Menuepunkt
-       und die ganze Fokusfuehrung des Menues war unpruefbar. Mehr als die
-       Klassensuche kann die Nachbildung weiterhin nicht, und das ist Absicht:
-       ein unbekannter Selektor bleibt null statt still etwas Falsches zu
-       liefern. */
+    /* Sucht in den eigenen Kindern nach einer Klasse oder nach einem Element
+       dieses Namens. Vorher gab diese Stelle ausnahmslos null zurueck, damit
+       fand `menueOeffnen` nie einen Menuepunkt und die ganze Fokusfuehrung des
+       Menues war unpruefbar; seit dem 11.08.2026 sucht die Seitenleiste dazu
+       die Ueberschrift ihrer Karten (`querySelector("h2")`), und ohne diesen
+       Zweig faende sie sie nie. Mehr als diese zwei Formen kann die
+       Nachbildung weiterhin nicht, und das ist Absicht: ein unbekannter
+       Selektor bleibt null statt still etwas Falsches zu liefern. */
     querySelector: (wahl) => {
       const w = String(wahl || "");
-      if (!w.startsWith(".")) return null;
-      const klasse = w.slice(1);
+      const nachKlasse = w.startsWith(".");
+      const nachNamen = /^[a-z][a-z0-9]*$/.test(w);
+      if (!nachKlasse && !nachNamen) return null;
+      const passt = (k) =>
+        nachKlasse
+          ? String(k.className || "").split(/\s+/).includes(w.slice(1))
+          : String(k.tagName || "").toUpperCase() === w.toUpperCase();
       for (const k of el.kinder) {
-        if (String(k.className || "").split(/\s+/).includes(klasse)) return k;
+        if (typeof k === "string") continue;
+        if (passt(k)) return k;
         const tiefer = typeof k.querySelector === "function" ? k.querySelector(w) : null;
         if (tiefer) return tiefer;
       }
@@ -486,6 +545,19 @@ function knoten(tag = "div", id = "") {
   Object.defineProperty(el, "childElementCount", {
     get: () => el.kinder.filter((k) => typeof k !== "string").length,
   });
+  /* Ein abgeschaltetes Element haelt den Fokus nicht — der Browser gibt ihn in
+     dem Augenblick an den Seitenkoerper zurueck. Genau das passiert dem
+     Beispielauftrag: Er schaltet seinen eigenen Knopf ab, waehrend der Mensch
+     darauf steht. Ohne diesen Nachbau bliebe der Fokus in der Nachbildung
+     seelenruhig auf einem toten Knopf liegen, und die Zusage „danach steht er
+     wieder auf dem Knopf" waere nicht zu messen. */
+  Object.defineProperty(el, "disabled", {
+    get: () => el._disabled,
+    set(an) {
+      el._disabled = !!an;
+      if (el._disabled && fokusStand.aktiv === el) fokusStand.aktiv = fokusStand.koerper;
+    },
+  });
   return el;
 }
 
@@ -502,6 +574,7 @@ const ANHANG = `
 ;globalThis.__seitenleiste = {
   zustand, sitzungAnzeigen, agentenBindung, beenden, schrittZeigen, antwortfristMs,
   chatWartenZeigen, PLATZHALTER_TAB, PLATZHALTER_GESPRAECH, setzeZustand,
+  kennwortZeigen,
 };
 `;
 
@@ -592,13 +665,25 @@ async function panelStarten({
   }
   assert.ok(radioFelder.length >= 6, "panel.html muss Dauer- und Stufenauswahl tragen");
 
+  /* Der Seitenkoerper. Im Browser liegt der Fokus beim Laden auf ihm, und
+     „auf `body`" ist die ganze Krankheit, um die es bei der Fokusfuehrung geht.
+     Ohne ihn stuende hier `null`, und ein Pruefsatz haette nichts, wogegen er
+     „nicht auf body" messen koennte. */
+  const koerper = knoten("body");
+  fokusStand.aktiv = koerper;
+  fokusStand.koerper = koerper;
+
   const doc = {
+    body: koerper,
     getElementById(id) {
       assert.ok(IDS_IM_HTML.has(id), `panel.html kennt kein Element mit der Kennung „${id}"`);
       if (!elemente.has(id)) {
-        const neu = knoten("div", id);
+        const neu = knoten(TAG_IM_HTML.get(id) || "div", id);
         /* Der Ausgangszustand kommt aus panel.html, nicht aus der Attrappe. */
         neu.hidden = VERSTECKT_IM_HTML.has(id);
+        /* Erst ablegen, dann fuellen: Die Kinder holen sich ihre Geschwister
+           ueber denselben Weg, und ohne diese Reihenfolge liefe er im Kreis. */
+        elemente.set(id, neu);
         /* Das Menue traegt in panel.html Menuepunkte. Ohne sie kann kein
            Pruefsatz sehen, wohin der Fokus beim Oeffnen wandert. */
         if (id === "menue") {
@@ -606,7 +691,17 @@ async function panelStarten({
           punkt.className = "menue-punkt";
           neu.appendChild(punkt);
         }
-        elemente.set(id, neu);
+        /* Eine Karte bekommt ihre Ueberschrift und ihren Inhalt, so wie sie in
+           panel.html darin stehen. */
+        const karte = KARTE_IM_HTML.get(id);
+        if (karte) {
+          if (karte.ueberschrift) {
+            const kopf = knoten("h2");
+            kopf.textContent = karte.ueberschrift;
+            neu.appendChild(kopf);
+          }
+          for (const kind of karte.kinder) neu.appendChild(doc.getElementById(kind));
+        }
       }
       return elemente.get(id);
     },
@@ -816,6 +911,10 @@ async function panelStarten({
     f: inneres,
     el,
     gesprochen,
+    /* Wo der Fokus wirklich steht — und der Seitenkoerper zum Vergleich, denn
+       „auf body" ist der Befund, gegen den hier gemessen wird. */
+    fokus: () => doc.activeElement,
+    koerper,
     /* Was auf diesem Gerät gemerkt ist — der Stand NACH allem, was der Test
        ausgelöst hat. */
     ablage,
@@ -2314,4 +2413,304 @@ test("S6 — Die Leiste meldet nur noch, ob jemand zusieht", async (t) => {
     7,
     "samt Tab — ohne ihn wüsste der Dienst nicht, welche Arbeit unbeaufsichtigt ist"
   );
+});
+
+/* ================================================================== *
+ * Fokusfuehrung (Befund 10.08.2026, panel.js)
+ *
+ * Der Befund: Beim Kartenwechsel wurde der Fokus nirgends gesetzt, er fiel auf
+ * `body`. Fuer den Inhaber ist Vorlesen der Haupt-Bedienweg, und ein Fokus auf
+ * `body` heisst dort: Der Vorleser sagt nichts, der Mensch weiss nicht, dass
+ * sich etwas geaendert hat, und muss sich mit der Tabulatortaste neu durch die
+ * ganze Leiste arbeiten.
+ *
+ * Alle Saetze hier werden GEFAHREN. Eine Textsuche nach „focus()" belegt
+ * nichts: Sie bliebe auch dann gruen, wenn der Aufruf ein verstecktes Element
+ * traefe, wenn er auf der falschen Karte landete oder wenn er dem Menschen den
+ * Fokus mitten im Satz aus dem Eingabefeld risse. Gemessen wird deshalb, WO
+ * der Fokus danach wirklich steht, und zwar namentlich.
+ *
+ * Jeder Satz ist gegen die halbe Aenderung geprueft: Nimmt man die jeweilige
+ * Sicherung heraus, wird genau er rot (Mutationsprobe im Bericht).
+ * ================================================================== */
+
+test("F1 — Der Kartenwechsel setzt den Fokus auf die Ueberschrift, nicht auf body", async (t) => {
+  const p = await panelStarten();
+  t.after(p.aufraeumen);
+
+  /* Beim Oeffnen wird nichts angefasst: Niemand hat um die Leiste gebeten,
+     und ein Fokussprung beim Laden waere ein Ueberfall. */
+  assert.equal(p.fokus(), p.koerper, "Vorbedingung: beim Start liegt der Fokus auf body");
+
+  await p.klick("verbinden-start");
+  assert.equal(p.el("app").dataset.state, "dialog", "Vorbedingung: die Dialogkarte steht");
+
+  const kopf = p.el("dialog").querySelector("h2");
+  assert.ok(kopf, "Gegenprobe: die Dialogkarte hat wirklich eine Ueberschrift");
+  assert.notEqual(p.fokus(), p.koerper, "auf body sagt der Vorleser nichts");
+  assert.equal(p.fokus(), kopf, "der Fokus steht auf der Ueberschrift der neuen Karte");
+  assert.equal(
+    p.fokus().textContent,
+    "Verbindung über SMarTrLink",
+    "und zwar auf der, die zur gezeigten Karte gehoert"
+  );
+  assert.equal(
+    kopf.getAttribute("tabindex"),
+    "-1",
+    "eine Ueberschrift nimmt den Fokus nur mit tabindex an; -1 haelt sie aus der Tabulatorreihe heraus"
+  );
+
+  /* Zurueck in den Ruhezustand: Mit der Karte verschwindet der Knopf, den der
+     Mensch gerade gedrueckt hat. Bleibt der Fokus dort, faellt er auf body. */
+  await p.klick("dialog-abbrechen");
+  assert.equal(p.el("app").dataset.state, "bereit", "Vorbedingung: der Ruhezustand steht");
+  assert.notEqual(p.fokus(), p.koerper);
+  assert.equal(
+    p.fokus(),
+    p.el("verbinden-start"),
+    "im Ruhezustand steht er auf dem Weg zur Verbindung, dem naechsten Schritt"
+  );
+});
+
+test("F2 — Auch Anmeldung und Erklaerung sagen, wo der Mensch gelandet ist", async (t) => {
+  /* Ohne Ausweis fuehrt schon der Start in die Anmeldekarte. */
+  const ohne = await panelStarten({ ausweis: null });
+  t.after(ohne.aufraeumen);
+  assert.equal(ohne.el("app").dataset.state, "anmeldung", "Vorbedingung: die Anmeldekarte steht");
+  assert.notEqual(ohne.fokus(), ohne.koerper);
+  assert.equal(ohne.fokus().textContent, "Zuerst anmelden");
+
+  /* Die Erklaerkarte kommt auf einem gesperrten Ursprung (DRAHTFORMAT §7.3).
+     Ihre Ueberschrift traegt eine Kennung, sie ist also namentlich pruefbar —
+     und ihr Text wechselt mit der Lage, steht hier also nicht fest. */
+  const gesperrt = await panelStarten({
+    tab: { id: 9, url: "https://cloud.smartragents.ai/chat", title: "Cloud" },
+  });
+  t.after(gesperrt.aufraeumen);
+
+  await gesperrt.klick("verbinden-start");
+  assert.equal(gesperrt.el("app").dataset.state, "erklaerung", "Vorbedingung: die Erklaerkarte steht");
+  assert.equal(gesperrt.fokus(), gesperrt.el("erklaer-titel"), "der Fokus steht auf ihrer Ueberschrift");
+  assert.equal(
+    gesperrt.fokus().textContent,
+    erklaerungen.SPERRE.cloud.titel,
+    "und die traegt die Ueberschrift GENAU dieser Lage"
+  );
+
+  await gesperrt.klick("erklaer-zurueck");
+  assert.equal(gesperrt.fokus(), gesperrt.el("verbinden-start"), "der Zurueck-Knopf nimmt den Fokus mit");
+});
+
+test("F3 — Die Kennwortkarte holt den Fokus zu sich", async (t) => {
+  const p = await panelStarten();
+  t.after(p.aufraeumen);
+
+  /* Genau der Rueckruf, mit dem der Freigabeweg die Karte aufmacht. */
+  p.f.kennwortZeigen({
+    kennwort: "AB12CD",
+    buchstabiert: "Anton Berta eins zwei Caesar Dora",
+    ansage: "Anton Berta eins zwei Caesar Dora",
+    adresse: "https://cloud.smartragents.ai/freigabe/xyz",
+  });
+
+  assert.equal(p.el("app").dataset.state, "kennwort", "Vorbedingung: die Kennwortkarte steht");
+  assert.notEqual(p.fokus(), p.koerper);
+  assert.equal(p.fokus().textContent, "Kennwort für die Freigabe");
+});
+
+test("F4 — Die Freigabekarte gibt den Fokus zurueck, wo er herkam", async (t) => {
+  const p = await panelStarten();
+  t.after(p.aufraeumen);
+  await p.sitzungHerstellen();
+
+  /* Der Mensch steht auf dem Beispielauftrag, als der Agent fragt. Die Karte
+     ist der einzige Teil der Leiste, der ungefragt dazwischentritt. */
+  p.el("vorschlag").focus();
+  const antwort = p.frageStellen({
+    typ: "link:schritt-freigabe",
+    frage: "Für dich klicken?",
+    quelle: "Zur Kasse",
+    cmd: "click",
+    id: "f4",
+  });
+
+  assert.equal(p.fokus(), p.el("freigabe-nein"), "vorausgewaehlt UND fokussiert ist Ablehnen");
+  assert.equal(
+    p.el("freigabe-nein").getAttribute("tabindex"),
+    null,
+    "ein Knopf braucht kein tabindex und darf dadurch nicht aus der Tabulatorreihe fallen"
+  );
+
+  await p.klick("freigabe-ja");
+  assert.deepEqual(await antwort, { ja: true });
+  assert.equal(p.el("freigabe").hidden, true, "Vorbedingung: die Karte ist weg");
+  assert.notEqual(p.fokus(), p.koerper, "ohne Rueckgabe faellt der Fokus mit der Karte auf body");
+  assert.equal(
+    p.fokus(),
+    p.el("vorschlag"),
+    "er kehrt an die Stelle zurueck, an der der Mensch stand"
+  );
+
+  /* Und beim Stopp mitten in einer offenen Frage genauso: Dort raeumt beenden()
+     die Karte weg, nicht freigabeSchliessen(). */
+  p.el("vorschlag").focus();
+  const zweite = p.frageStellen({
+    typ: "link:schritt-freigabe",
+    frage: "Noch einmal klicken?",
+    cmd: "click",
+    id: "f4b",
+  });
+  assert.equal(p.fokus(), p.el("freigabe-nein"), "Vorbedingung: die Frage hat den Fokus");
+  await p.klick("stopp");
+  assert.equal((await zweite).ja, false);
+  assert.notEqual(p.fokus(), p.koerper, "auch das Beenden laesst den Fokus nicht auf body liegen");
+});
+
+test("F5 — Wer tippt, behaelt den Fokus — und erfaehrt es trotzdem", async (t) => {
+  const p = await panelStarten();
+  t.after(p.aufraeumen);
+  await p.sitzungHerstellen();
+
+  /* Der Mensch schreibt gerade eine Frage. */
+  p.el("eingabe").focus();
+
+  const antwort = p.frageStellen({
+    typ: "link:schritt-freigabe",
+    frage: "Für dich klicken?",
+    quelle: "Zur Kasse",
+    cmd: "click",
+    id: "f5",
+  });
+  assert.equal(
+    p.fokus(),
+    p.el("eingabe"),
+    "die Freigabekarte reisst den Fokus nicht aus dem Eingabefeld; die Eingabetaste wuerde sonst ablehnen"
+  );
+  assert.equal(p.el("freigabe").hidden, false, "verschwiegen wird sie deshalb nicht");
+  assert.match(
+    p.el("ansage").textContent,
+    /Freigeben oder ablehnen\?/,
+    "und sie steht in der Ansagezone, wo der Vorleser sie findet"
+  );
+
+  await p.klick("freigabe-nein");
+  await antwort;
+  assert.equal(p.fokus(), p.el("eingabe"), "auch beim Schliessen bleibt der Fokus beim Menschen");
+
+  /* Dasselbe beim Kartenwechsel: Waehrend des Tippens laeuft die Anmeldung ab,
+     die Anmeldekarte kommt von selbst. */
+  p.melden({ typ: "chat:antwort", ok: false, kennung: "anmeldung", klartext: "abgelaufen" });
+  await new Promise((f) => setTimeout(f, 0));
+  assert.equal(p.el("app").dataset.state, "anmeldung", "Vorbedingung: die Anmeldekarte kam von selbst");
+  assert.equal(p.fokus(), p.el("eingabe"), "sie nimmt dem Tippenden den Fokus nicht weg");
+  assert.match(
+    p.el("ansage").textContent,
+    /Anmeldung gilt nicht mehr/,
+    "dafuer sagt es die Ansagezone — verschwiegen wird der Wechsel nie"
+  );
+});
+
+test("F6 — Sitzungsstart und Sitzungsende lassen den Fokus nicht auf body", async (t) => {
+  const p = await panelStarten({ workerAntworten: { "link:verbinden": sitzungAntwort() } });
+  t.after(p.aufraeumen);
+
+  await p.klick("verbinden-start");
+  await p.klick("verbinden");
+  assert.equal(p.el("app").dataset.state, "aktiv", "Vorbedingung: die Sitzung laeuft");
+  assert.notEqual(p.fokus(), p.koerper);
+  assert.equal(
+    p.fokus(),
+    p.el("sitzungsleiste"),
+    "die Sitzungsleiste traegt Stufe, Restzeit und die Notbremse — dorthin gehoert der Fokus"
+  );
+  assert.equal(p.el("sitzungsleiste").getAttribute("tabindex"), "-1");
+
+  await p.klick("stopp");
+  await warteAufZustand(p, "bereit");
+  assert.notEqual(p.fokus(), p.koerper, "mit der Sitzungsleiste verschwindet der Stopp-Knopf samt Fokus");
+  assert.equal(p.fokus(), p.el("verbinden-start"));
+});
+
+test("F7 — Eine Stoerung steht in genau EINER Vorlesezone", async (t) => {
+  /* Die Zusage: Was einmal passiert, wird einmal gesagt. `#stoerung` traegt
+     role="alert" und ist damit selbst schon eine Vorlesezone, und zwar die
+     dringlichste im Dokument. Derselbe Satz zusaetzlich in `#ansage`
+     (role="status") heisst: Der Bildschirmleser liest ihn zweimal. Genau
+     dieser Fund ist bei den Sprechblasen schon einmal ausgebaut worden. */
+  assert.match(html, /id="stoerung"[^>]*role="alert"/, "Gegenprobe: die Stoerungszeile spricht selbst");
+  assert.match(html, /id="ansage"[^>]*aria-live="polite"/, "Gegenprobe: die Ansagezone auch");
+
+  const p = await panelStarten({ bindFehler: true });
+  t.after(p.aufraeumen);
+  await p.sitzungHerstellen();
+  p.el("ansage").textContent = "";
+  p.spurLeeren();
+
+  await p.f.agentenBindung();
+
+  const satz = p.el("stoerung").textContent;
+  assert.match(satz, /dem Agenten nicht übergeben/, "Vorbedingung: die Stoerung steht sichtbar da");
+  assert.equal(p.el("stoerung").hidden, false);
+  assert.equal(p.el("ansage").textContent, "", "die zweite Vorlesezone bleibt leer");
+  assert.equal(
+    p.gesprochen.filter((s) => s === satz).length,
+    1,
+    "gesprochen wird der Satz genau einmal, nicht zweimal und nicht keinmal"
+  );
+  assert.equal(p.zustand.letzteRede, satz, "und der 🔊-Knopf kennt ihn weiterhin");
+
+  /* Gegenprobe, damit oben nicht bloss „die Ansagezone ist tot" gemessen wird:
+     Was KEINE eigene Vorlesezone hat, steht sehr wohl weiter darin. */
+  await p.klick("modus-smartr");
+  assert.equal(p.el("ansage").textContent, "SMarTr Modus.");
+});
+
+test("F8 — Die Restzeit tickt nicht in einer Vorlesezone", async (t) => {
+  /* Die Sitzungsleiste ist eine Vorlesezone, und tick() schreibt jede Sekunde
+     eine neue Zahl hinein. Ohne Deckel liest ein Bildschirmleser im
+     Sekundentakt die Uhr vor und uebertoent damit genau das, worauf es
+     ankommt: die Freigabefrage und jede Ansage. Dieselbe Entscheidung ist bei
+     der Antwortuhr der Freigabekarte schon getroffen (panel.html,
+     aria-live="off" an #freigabe-rest). */
+  assert.match(html, /id="sitzungsleiste"[^>]*role="status"/, "Gegenprobe: die Leiste spricht von selbst");
+
+  const p = await panelStarten();
+  t.after(p.aufraeumen);
+  assert.equal(
+    p.el("rest").getAttribute("aria-live"),
+    "off",
+    "die Uhr in der Sitzungsleiste darf nicht im Sekundentakt vorgelesen werden"
+  );
+
+  /* Die Warnungen bleiben: Still ist die Uhr, nicht die Sitzung. */
+  await p.sitzungHerstellen({ endetUm: Date.now() + 61000 });
+  await new Promise((f) => setTimeout(f, 1100));
+  assert.match(
+    p.gesprochen.join(" "),
+    /Noch eine Minute/,
+    "die Minutenwarnung kommt weiterhin als eigene Ansage"
+  );
+});
+
+test("F9 — Der Beispielauftrag holt den Fokus zurueck, den er selbst verloren hat", async (t) => {
+  const p = await panelStarten();
+  t.after(p.aufraeumen);
+  await p.sitzungHerstellen();
+
+  /* Der Mensch drueckt den Knopf, steht also darauf. */
+  p.el("vorschlag").focus();
+  const lauf = p.klick("vorschlag");
+  await new Promise((f) => setTimeout(f, 0));
+
+  /* Der Auftrag schaltet den Knopf ab, solange er laeuft — und ein
+     abgeschaltetes Element haelt den Fokus nicht. */
+  assert.equal(p.el("vorschlag").disabled, true, "Vorbedingung: der Knopf ist abgeschaltet");
+  assert.equal(p.fokus(), p.el("freigabe-nein"), "die erste Frage steht und hat den Fokus");
+
+  await p.klick("freigabe-nein");
+  await lauf;
+
+  assert.equal(p.el("vorschlag").disabled, false, "Vorbedingung: der Auftrag ist zu Ende");
+  assert.notEqual(p.fokus(), p.koerper, "sonst bleibt der Fokus auf body liegen und der Vorleser schweigt");
+  assert.equal(p.fokus(), p.el("vorschlag"), "er steht wieder auf dem Knopf, den der Mensch gedrueckt hat");
 });

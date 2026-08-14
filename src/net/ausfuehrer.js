@@ -275,6 +275,116 @@ async function freigabeFragen({ frage, quelle, cmd, id, frist }) {
 }
 
 /* --------------------------------------------------------------------- *
+ * Die Wache: Wo steht der Tab JETZT?
+ *
+ * Befund vom 11.08.2026, Stufe HOCH. Schritt 6 der Befehlsschleife prüft den
+ * Bereich an der Adresse, auf der der Tab steht — aber das ist die Adresse VOR
+ * der Rückfrage beim Menschen. Zwischen der Freigabe und der Ausführung liegen
+ * Sekunden bis Minuten Menschenzeit, und in dieser Zeit kann der Tab woanders
+ * stehen: Die Seite leitet sich selbst weiter (meta refresh, `location`, ein
+ * abgeschicktes Formular, ein Zeitgeber), oder der Mensch wechselt selbst.
+ * Danach wurde der Tab weiterbenutzt, als hätte niemand hingesehen.
+ *
+ * Am teuersten bei `screenshot`: `captureVisibleTab` nimmt den GANZEN
+ * sichtbaren Tab auf, es gibt keinen Ausschnitt, und das Bild geht an die
+ * Cloud. Freigegeben war der Warenkorb, aufgenommen wurde das Onlinebanking.
+ * Aber es ist kein Sonderfall des Bildes: Jeder Weg, auf dem Seiteninhalt nach
+ * draußen geht, hat dieselbe Lücke.
+ *
+ * Deshalb steht die Prüfung hier EINMAL und wird an den vier Stellen gerufen,
+ * an denen wirklich etwas den Tab verlässt:
+ *
+ *   1. In der Befehlsschleife, direkt nach dem Ja und vor allem Übrigen. Damit
+ *      hängt kein einziger der dreizehn Befehle mehr an der alten Messung —
+ *      auch der Arbeitszeiger fährt dann nicht mehr über eine fremde Seite.
+ *   2. In `wahrnehmenGesichert`, also vor JEDER Wahrnehmung. Das schließt den
+ *      Fall, den die Schleife nicht sehen kann: Der Schritt selbst (ein Klick,
+ *      ein abgeschicktes Formular) bringt die Seite erst zum Wechseln, und die
+ *      Wahrnehmung danach läse die neue.
+ *   3. In `tuExtract` vor dem Ablesen — der einzige Weg, der Seitentext
+ *      ausliefert, ohne durch die Wahrnehmung zu gehen.
+ *   4. In `tuScreenshot` vor JEDER einzelnen Aufnahme, auch vor der zweiten der
+ *      Qualitätsleiter.
+ *
+ * Zwei Dinge, die die Wache ausdrücklich NICHT tut:
+ *
+ *  - Sie nennt die neue Adresse nirgends. Eine Absage, die „ich fotografiere
+ *    dein Onlinebanking nicht" sagt, hat gerade verraten, dass dort das
+ *    Onlinebanking steht. Die Ablehnung wäre dann selbst das Leck, das sie
+ *    verhindern soll. Sie geht auch nicht ins Protokoll der Seitenleiste.
+ *  - Sie verlangt den Vordergrund nur da, wo er technisch zählt. Seit 0.5.2
+ *    darf im Hintergrund gearbeitet werden; `captureVisibleTab` kann das aber
+ *    nicht, es nimmt immer den aktiven Tab des Fensters auf. Steht inzwischen
+ *    ein anderer Tab vorn, wäre das Bild von einer Seite, die nie freigegeben
+ *    wurde — dafür trägt nur der Bildweg `vordergrund: true`.
+ * --------------------------------------------------------------------- */
+
+/* Die Sätze stehen als Konstanten, weil sie an mehreren Stellen entstehen und
+   ein Prüfsatz sie WÖRTLICH misst. Sie werden auf der Agentenseite vorgelesen:
+   Kommas statt Gedankenstrichen. */
+const WACHE_TAB_WEG = "Der Tab, den ich steuern durfte, ist nicht mehr da.";
+const WACHE_ABGEWANDERT =
+  "Dieser Tab hat seit der Freigabe die Seite gewechselt. Ich arbeite hier nicht weiter, und ich sage auch nicht, wo er jetzt steht.";
+const WACHE_NICHT_VORN =
+  "Dieser Tab steht gerade nicht im Vordergrund. Ich fotografiere nicht, was ich nicht steuern darf.";
+
+/**
+ * Noch einmal hinsehen, bevor etwas geschieht.
+ *
+ * @param {{id:string, cmd:string, meta:Function}} ziel
+ * @param {number} tabId
+ * @param {object} sitzung
+ * @param {{vordergrund?:boolean}} wahl
+ * @returns {Promise<{ok:true, tab:object, adresse:string}|{ok:false, absage:object}>}
+ */
+async function wacheStellen(ziel, tabId, sitzung, { vordergrund = false } = {}) {
+  let tab = null;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch (_) {
+    tab = null;
+  }
+  if (!tab) {
+    return {
+      ok: false,
+      absage: misslungen(ziel.id, ziel.cmd, "tab_gone", WACHE_TAB_WEG, {
+        retryable: false,
+        hint: "Den Nutzer bitten, den Tab offen zu lassen, und eine neue Sitzung beginnen.",
+        m: ziel.meta(),
+      }),
+    };
+  }
+
+  const adresse = typeof tab.url === "string" ? tab.url : "";
+  if (!adresse || !bereichPasst(adresse, sitzung)) {
+    /* Auch diese Meldung trägt keine Adresse: Die Seitenleiste steht offen auf
+       dem Schirm, und das Protokoll wird vorgelesen. */
+    melden({ typ: "link:protokoll", text: "Der Tab hat die Seite gewechselt, ich arbeite hier nicht weiter." });
+    return {
+      ok: false,
+      absage: misslungen(ziel.id, ziel.cmd, "scope_violation_local", WACHE_ABGEWANDERT, {
+        retryable: false,
+        hint: "Den Nutzer bitten, den Tab auf eine freigegebene Seite zurückzubringen, danach den Schritt neu senden.",
+        m: ziel.meta(),
+      }),
+    };
+  }
+
+  if (vordergrund && tab.active !== true) {
+    return {
+      ok: false,
+      absage: misslungen(ziel.id, ziel.cmd, "tab_nicht_im_vordergrund", WACHE_NICHT_VORN, {
+        retryable: true,
+        hint: "Den Nutzer bitten, den Tab nach vorn zu holen — oder `readPage` nehmen, das geht auch im Hintergrund.",
+        m: ziel.meta(),
+      }),
+    };
+  }
+
+  return { ok: true, tab, adresse };
+}
+
+/* --------------------------------------------------------------------- *
  * Die einzelnen Befehle
  *
  * Die Lesebefehle verändern die Seite nicht; der Agentenzeiger und der grüne
@@ -345,13 +455,40 @@ async function wahrnehmen(tabId, kopf, frist, offscreen = false) {
   };
 }
 
+/**
+ * Wahrnehmen, aber vorher nachsehen, wo der Tab steht.
+ *
+ * Der Kopf kommt hier aus der Wache und nicht mehr aus `lage.kopf`: Ein Tab,
+ * der auf demselben Wirt eine andere Unterseite geöffnet hat, ist erlaubt —
+ * aber dann muss auch die Adresse im Textbaum die neue sein. Vorher trug die
+ * Wahrnehmung die Adresse VOR dem Schritt, und der Agent las eine Seite unter
+ * dem Namen einer anderen.
+ *
+ * Misslingt die Wache, kommt `ok: false` mit `ausserhalb: true` und dem
+ * fertigen Ablehnungsrahmen zurück. Wer die Wahrnehmung nur als Zugabe
+ * mitschickt (scroll, click, type, select, waitFor), lässt sie dann einfach
+ * weg: Der Schritt selbst hat stattgefunden, und ihn nachträglich als
+ * gescheitert zu melden wäre die schlimmere Falschaussage.
+ */
+async function wahrnehmenGesichert(lage, offscreen = false) {
+  const wache = await wacheStellen(lage, lage.tabId, lage.sitzung);
+  if (!wache.ok) {
+    return { ok: false, geantwortet: false, fehler: "bereich_verlassen", ausserhalb: true, absage: wache.absage };
+  }
+  const kopf = { url: wache.adresse, titel: (wache.tab && wache.tab.title) || "" };
+  return wahrnehmen(lage.tabId, kopf, lage.seitenfrist(), offscreen);
+}
+
 async function tuReadPage(rahmen, lage) {
   /* `includeOffscreen` ist der einzige Parameter, den diese Fassung von
      `readPage` kennt. `mode` reicht der Relay bewusst nicht durch (dasselbe
      Wort heißt in der Sitzung „tab|domains"), und ein Ausschnitt ist die
      Aufgabe von `extract` — beides wird in `parameterPruefen` benannt
      abgelehnt statt hier stillschweigend zur ganzen Seite. */
-  const w = await wahrnehmen(lage.tabId, lage.kopf, lage.seitenfrist(), lage.plan.offscreen === true);
+  const w = await wahrnehmenGesichert(lage, lage.plan.offscreen === true);
+  /* Hier ist die Wahrnehmung der Befehl selbst und keine Zugabe: Steht der Tab
+     nicht mehr im freigegebenen Bereich, geht die Ablehnung der Wache raus. */
+  if (w.ausserhalb) return w.absage;
   if (!w.ok) {
     return absageBenennen(lage, w.geantwortet === true, w.fehler, {
       /* `leer` heißt: Das Inhaltsskript hat es versucht und ist dabei
@@ -445,7 +582,7 @@ async function tuScroll(rahmen, lage) {
      der Regel eine neue Epoche, und der Agent soll dafür keinen zweiten Umlauf
      brauchen (spec-01 §5.2). Kommt sie nicht zustande, ist das Scrollen
      trotzdem gelungen — dann geht die Antwort ohne Wahrnehmung raus. */
-  const w = await wahrnehmen(lage.tabId, lage.kopf, lage.seitenfrist());
+  const w = await wahrnehmenGesichert(lage);
   const daten = {
     scrolledBy: Number(s.scrolledBy) || 0,
     atTop: !!s.atTop,
@@ -570,7 +707,7 @@ async function tuClick(rahmen, lage) {
      verändert. Nach einer Navigation ist das Inhaltsskript weg; dann geht die
      Antwort ohne Wahrnehmung raus, und der Agent ruft `readPage` selbst. */
   await new Promise((r) => setTimeout(r, 600));
-  const w = await wahrnehmen(lage.tabId, lage.kopf, lage.seitenfrist()).catch(() => ({ ok: false }));
+  const w = await wahrnehmenGesichert(lage).catch(() => ({ ok: false }));
   const daten = {
     clicked: { ref: ziel.ref, role: saeubern(ziel.rolle, 40), name: saeubern(ziel.name, GRENZEN.nameZeichen) },
   };
@@ -621,7 +758,7 @@ async function tuType(rahmen, lage) {
     });
   }
 
-  const w = await wahrnehmen(lage.tabId, lage.kopf, lage.seitenfrist()).catch(() => ({ ok: false }));
+  const w = await wahrnehmenGesichert(lage).catch(() => ({ ok: false }));
   /* Die Form stammt aus spec-01 §5.2 und ist genau die, die das Werkzeug auf
      der Agentenseite liest (`browser_tool.py::_erfolgstext`): `length` und
      `submitted` stehen NEBEN `typed`, nicht darin. Vorher lag `length` innen —
@@ -696,7 +833,7 @@ async function tuSelect(rahmen, lage) {
   }
 
   const a = antwort.antwort;
-  const w = await wahrnehmen(lage.tabId, lage.kopf, lage.seitenfrist()).catch(() => ({ ok: false }));
+  const w = await wahrnehmenGesichert(lage).catch(() => ({ ok: false }));
   const daten = {
     selected: {
       ref: plan.ref,
@@ -719,6 +856,11 @@ async function tuSelect(rahmen, lage) {
  */
 async function tuExtract(rahmen, lage) {
   const plan = lage.plan;
+  /* Der einzige Weg, der Seitentext ausliefert, ohne durch `wahrnehmen` zu
+     gehen — also braucht er die Wache selbst. Ohne sie läse `extract` die
+     Zeilen der Seite, auf die der Tab nach der Freigabe gewechselt ist. */
+  const wache = await wacheStellen(lage, lage.tabId, lage.sitzung);
+  if (!wache.ok) return wache.absage;
   const antwort = await anSeite(
     lage.tabId,
     {
@@ -861,7 +1003,7 @@ async function tuWaitFor(rahmen, lage) {
   }
 
   const erfuellt = antwort.antwort.erfuellt === true;
-  const w = await wahrnehmen(lage.tabId, lage.kopf, lage.seitenfrist()).catch(() => ({ ok: false }));
+  const w = await wahrnehmenGesichert(lage).catch(() => ({ ok: false }));
   const daten = {
     satisfied: erfuellt,
     waitedMs: Number(antwort.antwort.wartezeitMs) || 0,
@@ -889,6 +1031,11 @@ async function tuWaitFor(rahmen, lage) {
  *     den Tab, den wir übergeben. Steht unser Tab im Hintergrund, fotografiert
  *     der Aufruf eine fremde Seite, die nie freigegeben wurde. Das ist keine
  *     Randfrage, sondern der kürzeste Weg an der Bereichsprüfung vorbei.
+ *     Dieselbe Frage stellt sich für die Adresse: Der Bereich wurde vor der
+ *     Freigabe gemessen, aufgenommen wird nach ihr. Beides prüft jetzt
+ *     `wacheStellen`, unmittelbar vor jeder einzelnen Aufnahme — die Prüfung
+ *     steht bewusst NICHT mehr einmalig am Kopf dieser Funktion, weil zwischen
+ *     ihr und dem Auslöser sonst wieder eine Lücke läge.
  *  2. Ein Bild als Base64 sprengt den Rahmendeckel mühelos. Ein abgeschnittenes
  *     Bild ist aber kein Bild, sondern Datenmüll mit Erfolgsmeldung — also
  *     lieber eine ehrliche Absage.
@@ -897,26 +1044,6 @@ async function tuWaitFor(rahmen, lage) {
  *     einen Befehl später offen.
  */
 async function tuScreenshot(rahmen, lage) {
-  let tab = null;
-  try {
-    tab = await chrome.tabs.get(lage.tabId);
-  } catch (_) {
-    tab = null;
-  }
-  if (!tab) {
-    return misslungen(lage.id, lage.cmd, "tab_gone",
-      "Der Tab, den ich aufnehmen durfte, ist nicht mehr da.", { m: lage.meta() });
-  }
-  if (tab.active !== true) {
-    return misslungen(lage.id, lage.cmd, "tab_nicht_im_vordergrund",
-      "Dieser Tab steht gerade nicht im Vordergrund. Ich fotografiere nicht, was ich nicht steuern darf.",
-      {
-        retryable: true,
-        hint: "Den Nutzer bitten, den Tab nach vorn zu holen — oder `readPage` nehmen, das geht auch im Hintergrund.",
-        m: lage.meta(),
-      });
-  }
-
   /*
    * Die Leiter (Befund M7 vom 29.07.2026). Vorher gab es genau eine Stufe:
    * Qualität 40, Deckel 90 KiB Base64 ≈ 67 KiB JPEG. Ein Ausschnitt von
@@ -941,6 +1068,16 @@ async function tuScreenshot(rahmen, lage) {
   let qualitaet = stufen[stufen.length - 1];
 
   for (const stufe of stufen) {
+    /* IN der Schleife, nicht davor. Jede Runde ist eine eigene Aufnahme, und
+       zwischen zwei Aufnahmen liegt eine ganze Bildkodierung — Zeit genug für
+       eine Weiterleitung. Die Wache prüft hier zusätzlich den Vordergrund:
+       `captureVisibleTab` nimmt den aktiven Tab des Fensters auf, nicht den,
+       den wir übergeben. Steht inzwischen ein anderer vorn, wäre das Bild von
+       einer nie freigegebenen Seite. */
+    const wache = await wacheStellen(lage, lage.tabId, lage.sitzung, { vordergrund: true });
+    if (!wache.ok) return wache.absage;
+    const tab = wache.tab;
+
     let datenUrl = null;
     try {
       datenUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
@@ -1371,8 +1508,6 @@ async function einzeln(rahmen, sitzung, { id, cmd, begonnen, meineGeneration }) 
      jeder Neu-Einspielung wiederhergestellt. */
   await rahmenWiederAnschalten(tabId, overlay);
 
-  const kopf = { url: adresse, titel: await tabTitel(tabId) };
-
   /* 8. Die Parameter — geprüft, BEVOR gefragt wird.
         Zwei Gründe, und beide sind Befunde:
         (a) `scroll` machte aus einer fehlenden Richtung stillschweigend „nach
@@ -1511,6 +1646,17 @@ async function einzeln(rahmen, sitzung, { id, cmd, begonnen, meineGeneration }) 
     return misslungen(id, cmd, "session_beendet",
       "Die Browsersitzung wurde beendet, während ich gefragt habe.", { m: m() });
   }
+
+  /* 12. Die Wache. Schritt 6 hat den Bereich gemessen, BEVOR der Mensch
+         gefragt wurde — dazwischen liegt Menschenzeit, und in der kann der Tab
+         woanders stehen. Also noch einmal hinsehen, bevor irgendetwas
+         geschieht: vor dem Arbeitszeiger, vor der Ausführung, vor dem Bild.
+         Der Kopf für die Ausführung entsteht ebenfalls hier, damit Adresse und
+         Titel aus derselben Messung stammen wie die Erlaubnis und nicht aus
+         einer älteren. */
+  const wache = await wacheStellen({ id, cmd, meta: m }, tabId, sitzung);
+  if (!wache.ok) return wache.absage;
+  const kopf = { url: wache.adresse, titel: (wache.tab && wache.tab.title) || "" };
 
   melden({ typ: "link:protokoll", text: `${eintrag.tut}: ${grund}` });
 

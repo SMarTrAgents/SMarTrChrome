@@ -27,9 +27,10 @@
   const DUNKEL = "#030612";
   const CYAN = "#00d4ff";
   const ROT = "#ff5d73";
+  const GRAU = "#8b95a7";
 
-  const host = document.createElement("div");
-  host.id = "smartrchrome-host";
+  const WIRT_ID = "smartrchrome-host";
+
   /* Jede Deklaration mit !important, und display/visibility/opacity ausdrücklich
      dazu. Grund, im echten Chrome gemessen: Ohne !important genügte der Seite
      ein `#smartrchrome-host{display:none!important}` oder schlicht
@@ -39,13 +40,54 @@
      gibt. Ein Inline-Stil mit !important steht in der Autoren-Kaskade über
      jeder Regel aus einem Seiten-Stylesheet, auch über deren !important. Die
      Deckkraft des Rahmens wird davon nicht berührt, die steuert `data-an` im
-     Schattenbaum. */
-  host.style.cssText =
+     Schattenbaum.
+     Nachgezogen 11.08.2026: `transform:none` setzt die EINZELNEN
+     Transform-Eigenschaften nicht zurück — ein `scale:0` der Seite blieb
+     wirksam und schrumpfte das ganze Overlay auf nichts. Ebenso hatten
+     `clip`, `mask`, `mix-blend-mode`, `content-visibility` und eine Breite von
+     null freie Bahn; jede einzelne dieser Angaben macht das Zeichen unsichtbar,
+     ohne display, visibility oder opacity anzufassen. `animation` und
+     `transition` stehen dazu, damit die Seite die Deckkraft nicht an der
+     Kaskade vorbei wegfahren kann.
+     Nachgezogen 11.08.2026, zweiter Teil: Der Wirt legt sich seit dieser
+     Fassung selbst in den obersten Belag (siehe unten, `popover`). Das
+     Standard-Stylesheet des Browsers gibt JEDEM `[popover]` einen eigenen
+     Hintergrund (`background-color: Canvas`), einen Rahmen, Innenabstand und
+     `overflow:auto`. Ohne eigene Angabe malte der Wirt damit eine
+     undurchsichtige Fläche über die ganze Seite — das Zeichen wäre da, die
+     Seite darunter aber weg. Deshalb stehen Hintergrund und Überlauf
+     ausdrücklich hier.
+     Der Stil steht als Konstante, weil der Wächter ihn wieder herstellen muss,
+     wenn ein Seitenskript ihn überschreibt. */
+  const WIRT_STIL =
     "position:fixed !important;inset:0 !important;z-index:2147483647 !important;" +
+    "width:auto !important;height:auto !important;" +
+    "max-width:none !important;max-height:none !important;" +
     "pointer-events:none !important;border:0 !important;margin:0 !important;" +
     "padding:0 !important;display:block !important;visibility:visible !important;" +
-    "opacity:1 !important;clip-path:none !important;transform:none !important;" +
-    "filter:none !important;contain:none !important;";
+    "opacity:1 !important;clip-path:none !important;clip:auto !important;" +
+    "mask:none !important;transform:none !important;scale:none !important;" +
+    "rotate:none !important;translate:none !important;filter:none !important;" +
+    "mix-blend-mode:normal !important;content-visibility:visible !important;" +
+    "animation:none !important;transition:none !important;contain:none !important;";
+
+  /* Die Angaben, an denen der Wächter erkennt, ob der Stil noch steht. Bewusst
+     nur solche, deren Wert kein Browser umschreibt: Ein Vergleich auf den
+     ganzen cssText wäre nach der ersten Normalisierung durch Chrome („0" wird
+     „0px") dauerhaft ungleich — der Wächter würde endlos reparieren und die
+     Sitzung als Angriff beenden, obwohl niemand angreift. */
+  const WIRT_PFLICHT = [
+    ["display", "block"],
+    ["visibility", "visible"],
+    ["opacity", "1"],
+    ["position", "fixed"],
+    ["z-index", "2147483647"],
+    ["pointer-events", "none"],
+  ];
+
+  const host = document.createElement("div");
+  host.id = WIRT_ID;
+  host.style.cssText = WIRT_STIL;
   const root = host.attachShadow({ mode: "closed" });
 
   const stil = new CSSStyleSheet();
@@ -72,6 +114,18 @@
         inset 0 0 0 6px ${ROT},
         inset 0 0 0 10px rgba(3,6,18,.94);
     }
+    /* Tot heißt tot: Ein Overlay, das seine Erweiterung verloren hat, darf sich
+       nicht weiter als lebendes Versprechen ausgeben. Grau statt grün, und
+       gestrichelt am Schild, damit man es auch ohne Farbe unterscheidet.
+       Der Selektor trägt data-an ausdrücklich mit: Sonst ist er genauso
+       spezifisch wie die Atem-Regel weiter unten, die später steht und damit
+       gewinnen würde. Ein totes Overlay atmete dann weiter grün. */
+    .rahmen[data-an="1"][data-zustand="tot"] {
+      box-shadow:
+        inset 0 0 0 5px ${GRAU},
+        inset 0 0 0 9px rgba(3,6,18,.94);
+      animation: none;
+    }
     @media (prefers-reduced-motion: no-preference) {
       .rahmen[data-an="1"] { animation: atmen 2.4s ease-in-out infinite; }
       @keyframes atmen {
@@ -91,12 +145,14 @@
     }
     .schild[data-an="1"] { opacity: 1; }
     .schild[data-zustand="gestoppt"] { border-color: ${ROT}; }
+    .schild[data-zustand="tot"] { border-color: ${GRAU}; border-style: dashed; }
     .schild .punkt {
       width: 12px; height: 12px; border-radius: 50%;
       background: ${GRUEN}; box-shadow: 0 0 0 2px ${DUNKEL};
       flex: 0 0 auto;
     }
     .schild[data-zustand="gestoppt"] .punkt { background: ${ROT}; }
+    .schild[data-zustand="tot"] .punkt { background: ${GRAU}; }
 
     .zeiger {
       position: absolute; left: 0; top: 0;
@@ -124,6 +180,10 @@
     }
     @media (prefers-reduced-motion: no-preference) {
       .zeiger { transition: transform .32s cubic-bezier(.22,.61,.36,1); }
+      /* Beim Nachführen im Bildlauf muss der Zeiger sofort stehen, wo er
+         hingehört. Mit der Gleitbewegung liefe er dem Element hinterher und
+         zeigte währenddessen auf etwas anderes. */
+      .zeiger[data-folgt="1"] { transition: none; }
     }
 
     .fahne {
@@ -153,8 +213,27 @@
       border-radius: 50%; border: 3px solid ${CYAN};
       opacity: 0; pointer-events: none;
     }
+    /* Die Grundregel für den ausgelösten Puls steht AUSSERHALB jeder
+       Bewegungs-Abfrage. Bis 0.5.2 lag sie ausschließlich in
+       "prefers-reduced-motion: no-preference" — wer Bewegung abgestellt hat,
+       sah beim Klick also gar nichts, und das ist genau die Gruppe, die auf
+       eine ruhige, deutliche Anzeige angewiesen ist. Ohne Bewegung bleibt eine
+       kurze, stehende Hervorhebung stehen, bis das Skript sie nach 650 ms
+       wieder abschaltet. */
+    .puls[data-an="1"] {
+      opacity: 1;
+      width: 46px; height: 46px; margin: -23px 0 0 -23px;
+      border-width: 4px; background: rgba(0,212,255,.22);
+    }
     @media (prefers-reduced-motion: no-preference) {
-      .puls[data-an="1"] { animation: pulsRing .6s ease-out 1; }
+      /* Mit Bewegung übernimmt der aufgehende Ring. "forwards" hält ihn am
+         Ende auf unsichtbar, sonst blitzte die stehende Hervorhebung nach dem
+         Auslaufen noch einmal auf. */
+      .puls[data-an="1"] {
+        width: 18px; height: 18px; margin: -9px 0 0 -9px;
+        border-width: 3px; background: transparent;
+        animation: pulsRing .6s ease-out 1 forwards;
+      }
       @keyframes pulsRing {
         0%   { opacity: .95; transform: scale(1); }
         100% { opacity: 0;   transform: scale(3.6); }
@@ -182,6 +261,12 @@
 
   let gross = false;
 
+  /* Ist das Overlay tot, nimmt es keinen Befehl mehr an und gibt sich auch
+     nicht mehr als lebend aus. Tot wird es aus genau zwei Gründen: Die
+     Erweiterung hinter ihm ist weg, oder die Seite hat sein Zeichen so oft
+     entfernt, dass Weiterkämpfen eine unsichtbare Sitzung bedeuten würde. */
+  let overlayTot = false;
+
   /* Das Titel-Präfix ist das einzige Zeichen, das ein gesteuerter Tab auch im
      Hintergrund trägt (die Tab-Leiste kann eine Erweiterung nicht einfärben).
      Beste-Kraft: Seiten, die ihren Titel selbst laufend neu schreiben (SPAs),
@@ -200,9 +285,15 @@
   };
 
   const anzeigen = (an, text) => {
+    if (overlayTot) return;
     rahmen.setAttribute("data-an", an ? "1" : "0");
     schild.setAttribute("data-an", an ? "1" : "0");
     if (text) schild.querySelector(".text").textContent = text;
+    /* Der Wächter läuft genau so lange, wie das Zeichen etwas verspricht.
+       Ohne laufende Sitzung gibt es nichts zu bewachen, und kein fremdes Blatt
+       soll einen Beobachter mitschleppen, den niemand braucht. */
+    if (an) waechterStarten();
+    else waechterStoppen();
     if (an) {
       try {
         const jetzt = document.title || "";
@@ -216,6 +307,7 @@
       fahne.setAttribute("data-an", "0");
       ziel.setAttribute("data-an", "0");
       puls.setAttribute("data-an", "0");
+      zielBezug = null;
       if (titelVorher !== null) {
         try { document.title = titelVorher; } catch (_) {}
         titelVorher = null;
@@ -224,6 +316,8 @@
   };
 
   const gestoppt = () => {
+    if (overlayTot) return;
+    zielBezug = null;
     rahmen.setAttribute("data-zustand", "gestoppt");
     schild.setAttribute("data-zustand", "gestoppt");
     schild.querySelector(".text").textContent = "GESTOPPT, der Agent steuert nicht mehr";
@@ -236,6 +330,218 @@
       anzeigen(false);
     }, 2200);
   };
+
+  /* ------------------------------------------------------------------ *
+   * Der Wächter am Wirt.
+   *
+   * Der Stil mit !important hält das CSS der Seite auf. Gegen ein Skript der
+   * Seite hilft er nicht: `document.getElementById("smartrchrome-host")
+   * .remove()` nimmt den Knoten schlicht aus dem Baum, ein appendChild an eine
+   * andere Stelle verschiebt ihn aus dem Sichtfenster, und `host.style
+   * .display = "none"` überschreibt den Inline-Stil an derselben Stelle, an der
+   * er steht. In allen drei Fällen bediente der Agent weiter, nur eben
+   * unsichtbar — dasselbe gebrochene Versprechen wie beim CSS.
+   *
+   * Drei Fallen, an die dieser Wächter sich hält:
+   *
+   *   1. Keine Schleife mit sich selbst. Das Wiedereinsetzen erzeugt selbst
+   *      eine Änderung. Deshalb wird nie „auf eine Meldung hin repariert",
+   *      sondern immer erst der Ist-Zustand geprüft: Steht der Wirt richtig,
+   *      tut der Rückruf nichts, und die eigene Reparatur läuft nach genau
+   *      einem Durchgang aus.
+   *   2. Kein teurer Baumvergleich. Beobachtet werden nur die direkten Kinder
+   *      von <html> und die Attribute des einen eigenen Knotens. Die Meldungen
+   *      selbst werden gar nicht durchgesehen; die Prüfung sind sechs
+   *      Eigenschaftsabfragen mit fester Laufzeit, unabhängig von der Größe der
+   *      Seite.
+   *   3. Kein endloser Kampf. Wer dreimal kurz hintereinander das Zeichen
+   *      wegnimmt, greift an. Dann wird die Sitzung beendet, statt weiter zu
+   *      reparieren: Lieber keine Sitzung als eine unsichtbare.
+   * ------------------------------------------------------------------ */
+
+  const WAECHTER_GRENZE = 3;      // so viele Eingriffe
+  const WAECHTER_FENSTER = 4000;  // in so vielen Millisekunden sind ein Angriff
+
+  const ANGRIFF_SATZ =
+    "Diese Seite entfernt das Sichtzeichen immer wieder, deshalb ist die Sitzung jetzt beendet.";
+  const KONTEXT_SATZ =
+    "Die Verbindung zur Erweiterung ist weg, die Sitzung ist damit ohnehin beendet.";
+
+  let beobachter = null;
+  let eingriffe = [];
+
+  /* Wahr, wenn der Erweiterungskontext weg ist: Erweiterung neu geladen,
+     aktualisiert oder abgeschaltet. Danach wirft jeder Aufruf von
+     chrome.runtime, und zwar synchron. */
+  const kontextWeg = () => {
+    try {
+      return !(chrome && chrome.runtime && chrome.runtime.id);
+    } catch (_) {
+      return true;
+    }
+  };
+
+  const schildText = (text) => {
+    try {
+      const n = schild.querySelector(".text");
+      if (n) n.textContent = text;
+    } catch (_) {}
+  };
+
+  /* Das Overlay für tot erklären und das auch zeigen. Ein totes Overlay, das
+     weiter grün leuchtet, wäre die schlimmste aller Lagen: Der Mensch liest
+     „ich sehe alles" und niemand sieht mehr etwas. */
+  const totMelden = (satz) => {
+    /* Der erste Grund gewinnt. Eine später eintrudelnde Absage darf die
+       Erklärung, die der Mensch schon liest, nicht durch eine andere
+       ersetzen. */
+    if (overlayTot) return;
+    overlayTot = true;
+    waechterStoppen();
+    try {
+      if (arbeitsLauf) { clearInterval(arbeitsLauf); arbeitsLauf = null; }
+    } catch (_) {}
+    zielBezug = null;
+    try {
+      rahmen.setAttribute("data-an", "1");
+      rahmen.setAttribute("data-zustand", "tot");
+      schild.setAttribute("data-an", "1");
+      schild.setAttribute("data-zustand", "tot");
+      schildText(satz);
+      for (const el of [zeiger, fahne, ziel, puls]) el.setAttribute("data-an", "0");
+    } catch (_) {}
+    /* Der Titel gehört wieder der Seite: Das Präfix verspricht einen
+       gesteuerten Tab, und gesteuert wird hier nichts mehr. */
+    if (titelVorher !== null) {
+      try { document.title = titelVorher; } catch (_) {}
+      titelVorher = null;
+    }
+  };
+
+  /* Die Notbremse ziehen. Der Rückgabewert sagt, ob die Meldung den Dienst
+     überhaupt erreicht hat — still werfen darf dieser Weg nie. */
+  const notbremseSenden = (quelle) => {
+    if (kontextWeg()) return false;
+    try {
+      const p = chrome.runtime.sendMessage({ typ: "notbremse", quelle });
+      /* Chrome antwortet je nach Fassung mit einem Versprechen. Eine
+         abgewiesene Zusage ist derselbe Befund wie ein synchroner Wurf. */
+      if (p && typeof p.catch === "function") p.catch(() => totMelden(KONTEXT_SATZ));
+      return true;
+    } catch (_) {
+      return false;
+    }
+  };
+
+  /* Der Wirt sitzt falsch, wenn er aus dem Baum genommen oder verschoben
+     wurde. Beides ist eine Abfrage von Eigenschaften, keine Suche. */
+  const wirtSitztFalsch = () => {
+    try {
+      if (host.isConnected !== true) return true;
+      return host.parentNode !== document.documentElement;
+    } catch (_) {
+      return true;
+    }
+  };
+
+  const stilSitztFalsch = () => {
+    try {
+      const s = host.style;
+      if (!s || typeof s.getPropertyValue !== "function") return false;
+      for (const [eigenschaft, wert] of WIRT_PFLICHT) {
+        if (s.getPropertyValue(eigenschaft) !== wert) return true;
+        if (s.getPropertyPriority(eigenschaft) !== "important") return true;
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
+  };
+
+  /* Ein Eingriff der Seite. Zählt im rollenden Fenster mit und meldet, ob das
+     Maß voll ist. */
+  const eingriffZaehlen = () => {
+    const jetzt = performance.now();
+    eingriffe = eingriffe.filter((t) => jetzt - t < WAECHTER_FENSTER);
+    eingriffe.push(jetzt);
+    return eingriffe.length >= WAECHTER_GRENZE;
+  };
+
+  const sitzungBeenden = (satz) => {
+    notbremseSenden("overlay-entfernt");
+    totMelden(satz);
+  };
+
+  /* Der Rückruf. Sieht die Meldungen bewusst nicht an — er prüft den
+     Ist-Zustand und ist damit gegen seine eigenen Änderungen immun.
+     `heiltGerade` ist der zweite Riegel gegen die Schleife: Das
+     Wiedereinsetzen meldet sich beim selben Beobachter, und ohne Riegel würde
+     ein Wiedereinsetzen, das nicht greift, sich selbst endlos nachrufen. */
+  let heiltGerade = false;
+  const nachsehen = () => {
+    if (overlayTot || heiltGerade) return;
+    heiltGerade = true;
+    try {
+      heilen();
+    } finally {
+      heiltGerade = false;
+    }
+  };
+
+  const heilen = () => {
+    const weg = wirtSitztFalsch();
+    const entstellt = !weg && stilSitztFalsch();
+    if (!weg && !entstellt) return;
+
+    let wiederDa = true;
+    if (weg) {
+      try {
+        host.style.cssText = WIRT_STIL;
+        host.id = WIRT_ID;
+        document.documentElement.appendChild(host);
+      } catch (_) {}
+      wiederDa = !wirtSitztFalsch();
+    } else {
+      try { host.style.cssText = WIRT_STIL; } catch (_) {}
+      wiederDa = !stilSitztFalsch();
+    }
+
+    /* Zwei Gründe, jetzt Schluss zu machen: Das Maß ist voll, oder der Wirt
+       kommt gar nicht mehr zurück. Im zweiten Fall gibt es nichts mehr zu
+       reparieren, und eine Sitzung ohne Zeichen darf es nicht geben. Dass
+       dieser zweite Fall sofort greift und nicht erst beim dritten Mal, ist
+       Absicht: Ein Zeichen, das nicht wiederkommt, kommt auch beim dritten
+       Versuch nicht wieder. */
+    const volles = eingriffZaehlen();
+    if (!wiederDa || volles) sitzungBeenden(ANGRIFF_SATZ);
+  };
+
+  const waechterStarten = () => {
+    if (beobachter || overlayTot) return;
+    if (typeof MutationObserver !== "function") return;
+    try {
+      beobachter = new MutationObserver(nachsehen);
+      /* Nur die direkten Kinder von <html>: Der Wirt hängt dort, und dort
+         allein kann er verschwinden. Ohne `subtree` meldet der Beobachter
+         nichts von dem, was die Seite in ihrem Körper tut. */
+      beobachter.observe(document.documentElement, { childList: true });
+      /* Und die Attribute des eigenen Knotens, gegen `host.style.display =
+         "none"` aus einem Seitenskript. */
+      beobachter.observe(host, {
+        attributes: true,
+        attributeFilter: ["style", "id", "class"],
+      });
+    } catch (_) {
+      beobachter = null;
+    }
+  };
+
+  function waechterStoppen() {
+    if (!beobachter) return;
+    try { beobachter.disconnect(); } catch (_) {}
+    beobachter = null;
+    eingriffe = [];
+  }
 
   const zeigerAuf = (x, y, beschriftung) => {
     const versatz = gross ? 32 : 16;
@@ -300,6 +606,68 @@
     ziel.style.width = `${r.width}px`;
     ziel.style.height = `${r.height}px`;
     ziel.setAttribute("data-an", "1");
+  };
+
+  /* ------------------------------------------------------------------ *
+   * Dem Bildlauf folgen.
+   *
+   * Der Zielrahmen und der Zeiger stehen in Sichtfenster-Koordinaten, weil der
+   * Wirt fixiert ist. Genau deshalb zeigten sie bis 0.5.2 nach jedem Bildlauf
+   * auf die falsche Stelle: Das Element wandert mit dem Inhalt, der Rahmen
+   * blieb stehen. Der Mensch sah einen Rahmen um „Abmelden" und gab in
+   * Wahrheit „Bestellen" frei — eine Freigabe, die etwas anderes meint als
+   * das, was sie zeigt, ist keine.
+   *
+   * Gemerkt wird der Bildlaufstand zum Zeitpunkt der Anzeige; nachgeführt wird
+   * um genau die Differenz. Das ist kein Nachmessen am Element, sondern eine
+   * Subtraktion, und es kostet vier Schreibvorgänge ohne einen einzigen
+   * Layout-Lesevorgang.
+   * ------------------------------------------------------------------ */
+
+  let zielBezug = null;
+
+  const bildlaufstand = () => ({
+    x: Number(window.scrollX) || 0,
+    y: Number(window.scrollY) || 0,
+  });
+
+  const bezugMerken = (n) => {
+    zeiger.removeAttribute("data-folgt");
+    if (!n || !n.rect) { zielBezug = null; return; }
+    const s = bildlaufstand();
+    zielBezug = {
+      rect: { left: n.rect.left, top: n.rect.top, width: n.rect.width, height: n.rect.height },
+      x: Number(n.x),
+      y: Number(n.y),
+      beschriftung: n.beschriftung,
+      scrollX: s.x,
+      scrollY: s.y,
+      /* Der zuletzt angewandte Versatz. Er spart die Schreibvorgänge bei
+         Ereignissen ohne Bewegung, ohne die Rechnung zu verfälschen: Gerechnet
+         wird immer vom Bezugspunkt, nie Schritt für Schritt. Ein
+         Schritt-für-Schritt-Versatz liefe mit jeder Rundung weiter weg. */
+      dx: 0,
+      dy: 0,
+    };
+  };
+
+  const zielNachfuehren = () => {
+    if (!zielBezug || overlayTot) return;
+    const s = bildlaufstand();
+    const dx = s.x - zielBezug.scrollX;
+    const dy = s.y - zielBezug.scrollY;
+    if (dx === zielBezug.dx && dy === zielBezug.dy) return;
+    zielBezug.dx = dx;
+    zielBezug.dy = dy;
+    const r = zielBezug.rect;
+    ziel.style.left = `${r.left - dx}px`;
+    ziel.style.top = `${r.top - dy}px`;
+    ziel.style.width = `${r.width}px`;
+    ziel.style.height = `${r.height}px`;
+    if (Number.isFinite(zielBezug.x) && Number.isFinite(zielBezug.y)) {
+      zeiger.setAttribute("data-folgt", "1");
+      zeigerAuf(zielBezug.x - dx, zielBezug.y - dy, zielBezug.beschriftung);
+    }
   };
 
   /* Ein Ring am Ort der Handlung. Wird bei jedem Klick ausgelöst, damit der
@@ -1118,6 +1486,7 @@
       const el = tabelle && tabelle.get(String(ref));
       if (!el || !el.isConnected) return { ok: false, fehler: "element_not_found" };
       el.scrollIntoView({ block: "center", behavior: "auto" });
+      zielNachfuehren();
       return { ok: true, scrolledBy: scrollY - vorher, atTop: scrollY <= 0, atBottom: amBoden() };
     }
 
@@ -1132,6 +1501,9 @@
       else schritt = Math.round(innerHeight * 0.9);
       scrollBy({ top: richtung === "up" ? -schritt : schritt, behavior: "auto" });
     }
+    /* Der Agent hat gescrollt, also wandert auch das freigegebene Element.
+       Der Rahmen wandert mit, ohne auf ein Scroll-Ereignis zu warten. */
+    zielNachfuehren();
     return { ok: true, scrolledBy: scrollY - vorher, atTop: scrollY <= 0, atBottom: amBoden() };
   };
 
@@ -1434,21 +1806,46 @@
     elementCount: (epochen.get([...epochen.keys()].slice(-1)[0]) || new Map()).size,
   });
 
-  /* Notbremse: zweimal Escape in 800 ms. */
+  /* Notbremse: zweimal Escape in 800 ms.
+   *
+   * Befund 10.08.2026: Ist der Erweiterungskontext weg — Erweiterung neu
+   * geladen, aktualisiert oder abgeschaltet —, wirft `chrome.runtime
+   * .sendMessage` synchron („Extension context invalidated"). Der Wurf lief
+   * aus dem Ereignishörer heraus in die Konsole der Seite, die niemand offen
+   * hat. Der Mensch drückte zweimal Escape, sah nichts, und glaubte, gestoppt
+   * zu haben. Die Wahrheit ist die umgekehrte: Ohne Erweiterung kann diese
+   * Seite gar nichts mehr steuern, die Sitzung ist längst vorbei, aber genau
+   * das muss er auch lesen können.
+   *
+   * Die Rückmeldung steht bewusst IM Overlay und nicht in der Seitenleiste:
+   * Die kann geschlossen sein, und ohne Erweiterung ist sie ohnehin stumm. */
   let letztesEsc = 0;
   const aufTaste = (e) => {
-    if (e.key !== "Escape") return;
+    if (!e || e.key !== "Escape") return;
     const jetzt = performance.now();
     if (jetzt - letztesEsc < 800) {
       letztesEsc = 0;
-      chrome.runtime.sendMessage({ typ: "notbremse", quelle: "esc-esc" });
+      if (!notbremseSenden("esc-esc")) totMelden(KONTEXT_SATZ);
     } else {
       letztesEsc = jetzt;
     }
   };
   window.addEventListener("keydown", aufTaste, true);
 
+  /* Scrollt der Mensch selbst, wandert das freigegebene Element genauso wie
+     beim Bildlauf des Agenten. `passive` sagt Chrome zu, dass hier nichts
+     abgefangen wird — der Bildlauf der Seite bleibt flüssig. */
+  window.addEventListener("scroll", zielNachfuehren, { passive: true, capture: true });
+
   chrome.runtime.onMessage.addListener((n, _absender, antwort) => {
+    /* Ein totes Overlay nimmt nichts mehr an. Es könnte den Befehl zwar
+       ausführen, aber nicht mehr zeigen — und unsichtbar bedienen ist genau
+       das, was hier nie passieren darf. Die Absage ist benannt, damit der
+       Ausführer sie von „Tab weg" unterscheiden kann. */
+    if (overlayTot) {
+      antwort({ ok: false, fehler: "overlay_tot" });
+      return true;
+    }
     switch (n.typ) {
       case "overlay:an":
         grossSetzen(n.gross);
@@ -1468,6 +1865,7 @@
         antwort({ ok: true });
         break;
       case "overlay:zeiger":
+        bezugMerken(n);
         zeigerAuf(n.x, n.y, n.beschriftung);
         zielRahmen(n.rect || null);
         antwort({ ok: true });

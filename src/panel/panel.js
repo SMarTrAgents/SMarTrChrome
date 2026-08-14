@@ -69,10 +69,111 @@ const zustand = {
 };
 
 /* ------------------------------------------------------------------ *
+ * Fokusfuehrung
+ *
+ * Vorlesen ist der Haupt-Bedienweg des Inhabers. Wo der Fokus nach einem
+ * Wechsel steht, entscheidet deshalb darüber, ob er überhaupt erfährt, dass
+ * sich etwas geändert hat: Fällt der Fokus auf `body`, sagt der Vorleser
+ * nichts, der Mensch merkt nichts, und er muss sich mit der Tabulatortaste neu
+ * durch die ganze Leiste arbeiten. Genau das war der Befund vom 10.08.2026.
+ *
+ * Jede Stelle, die etwas Neues zeigt, trifft hier deshalb eine bewusste
+ * Entscheidung, wohin er wandert. Zwei Regeln gelten dabei überall:
+ *
+ *  - Wer tippt, behält den Fokus. Ihn mitten im Satz aus dem Eingabefeld zu
+ *    reißen, wäre schlimmer als eine Karte, die ungelesen bleibt: Die Karte
+ *    steht auch in der Ansagezone, der halbe Satz ist weg.
+ *  - Ein verstecktes oder abgeschaltetes Ziel bekommt ihn nie. Es zu
+ *    fokussieren hieße, ihn auf `body` fallen zu lassen, also genau der
+ *    Fehler, den diese Stelle verhindert.
+ * ------------------------------------------------------------------ */
+
+/* Was der Browser von sich aus anspringt. Alles andere braucht tabindex="-1",
+   sonst nimmt focus() es gar nicht erst an. */
+const VON_SELBST_ANSPRINGBAR = new Set(["A", "BUTTON", "INPUT", "SELECT", "TEXTAREA"]);
+
+function anspringbarMachen(el) {
+  if (VON_SELBST_ANSPRINGBAR.has(String(el.tagName || "").toUpperCase())) return;
+  /* -1 heißt: mit der Tabulatortaste NICHT erreichbar, mit focus() sehr wohl.
+     Ein Knopf bekommt das nie, sonst nähme man ihn aus der Tabulatorreihe.
+     Ein vorhandener Wert wird nicht überschrieben — er stünde in der Seite und
+     hätte dort einen Grund. */
+  if (el.getAttribute("tabindex") === null) el.setAttribute("tabindex", "-1");
+}
+
+/* Tippt gerade jemand? Dann gehört der Fokus ihm und keiner Karte. */
+const jemandTippt = () => document.activeElement === $("eingabe");
+
+/* Liegt der Fokus auf nichts, also faktisch auf `body`? Das ist die Lage, in
+   der der Vorleser stumm bleibt. */
+function fokusIstLos() {
+  const a = document.activeElement;
+  return !a || a === document.body || a.hidden === true || a.disabled === true;
+}
+
+/**
+ * Den Fokus setzen — und ehrlich zurückmelden, ob er wirklich gewandert ist.
+ * @returns {boolean}
+ */
+function fokusHin(el) {
+  if (!el || el.hidden || el.disabled || typeof el.focus !== "function") return false;
+  if (jemandTippt()) return false;
+  anspringbarMachen(el);
+  el.focus();
+  return document.activeElement === el;
+}
+
+/* Die Überschrift einer Karte ist das bessere Ziel als die Karte selbst: Der
+   Vorleser sagt damit zuerst, WO man gelandet ist, und der Rest der Karte
+   liegt danach in Leserichtung. Hat eine Karte keine Überschrift, bekommt sie
+   selbst den Fokus. */
+function ueberschriftVon(el) {
+  if (!el) return null;
+  const h = typeof el.querySelector === "function" ? el.querySelector("h2") : null;
+  return h || el;
+}
+
+/*
+ * Wohin der Fokus nach einem Zustandswechsel gehört.
+ *
+ * Als Funktionen und nicht als Kennungen, weil zwei der Ziele von der Lage
+ * abhängen: Der Weg zur Verbindung ist zugedeckt, solange eine Sitzung noch
+ * Rechte hält (setzeZustand), und ein zugedecktes Ziel wäre wieder `body`.
+ */
+const FOKUS_NACH_ZUSTAND = {
+  dialog: () => $("dialog"),
+  anmeldung: () => $("anmeldung"),
+  kennwort: () => $("kennwort"),
+  erklaerung: () => $("erklaerkarte"),
+  /* Die Sitzungsleiste trägt Stufe, Restzeit und den Stopp-Knopf. Wer gerade
+     eine Steuerung eingeschaltet hat, soll genau das zuerst hören — und die
+     Notbremse liegt danach einen Tabulatorschritt entfernt. */
+  aktiv: () => $("sitzungsleiste"),
+  /* Im Ruhezustand ist die Karte weg, an der der Mensch eben stand: Abbrechen,
+     Zurück und Stopp verschwinden mit ihr. Der nächste Schritt ist der Weg zur
+     Verbindung, also steht der Fokus dort. */
+  bereit: () => ($("verbindungsleiste").hidden ? null : $("verbinden-start")),
+};
+
+function fokusNachZustand(name) {
+  const suchen = FOKUS_NACH_ZUSTAND[name];
+  const ziel = typeof suchen === "function" ? suchen() : null;
+  return ziel ? fokusHin(ueberschriftVon(ziel)) : false;
+}
+
+/* ------------------------------------------------------------------ *
  * Bildschirmzustand — ein Dokument, kein Bildschirmwechsel.
  * ------------------------------------------------------------------ */
 
+/* Was zuletzt gezeigt wurde. Nur ein echter WECHSEL rührt den Fokus an: Beim
+   ersten Aufbau der Leiste wird er nicht angefasst (niemand hat um sie
+   gebeten), und ein zweiter Aufruf mit demselben Namen ist kein Wechsel,
+   sondern ein Nachziehen der Sichtbarkeiten. */
+let zuletztGezeigt = null;
+
 function setzeZustand(name) {
+  const wechsel = zuletztGezeigt !== null && zuletztGezeigt !== name;
+  zuletztGezeigt = name;
   app.dataset.state = name;
   /* Das Gespräch hängt NICHT an der Browser-Sitzung: Sobald Blasen da sind,
      bleibt der Verlauf auch im Ruhezustand sichtbar — der Leerzustand weicht
@@ -107,6 +208,9 @@ function setzeZustand(name) {
   $("menue-beenden").hidden = name !== "aktiv";
   if (name !== "aktiv") $("protokoll-box").hidden = true;
   zustandChipSetzen();
+  /* Der Fokus ganz zum Schluss: Vorher ist die neue Karte noch versteckt, und
+     ein verstecktes Element kann ihn nicht halten. */
+  if (wechsel) fokusNachZustand(name);
 }
 
 function zustandChipSetzen() {
@@ -129,9 +233,20 @@ function zustandChipSetzen() {
   $("zustand-text").textContent = zustand.ausweis ? "Angemeldet · bereit" : "Nicht verbunden";
 }
 
-/* Störungen stehen sichtbar da und gehen zusätzlich in die Ansage. Ein
-   Fehler, den nur die Stimme kennt, ist für einen abgeschalteten Ton
-   dasselbe wie kein Fehler. */
+/*
+ * Störungen stehen sichtbar da und werden zusätzlich gesprochen. Ein Fehler,
+ * den nur die Stimme kennt, ist für einen abgeschalteten Ton dasselbe wie kein
+ * Fehler.
+ *
+ * Gesprochen wird über `merkenUndSprechen` und nicht über `ansagen`, und das
+ * ist der Unterschied zwischen einmal und zweimal: `#stoerung` trägt selbst
+ * `role="alert"`, ist also bereits eine Vorlesezone, und zwar die dringlichste
+ * im ganzen Dokument. Derselbe Satz zusätzlich in `#ansage` hieße, dass der
+ * Bildschirmleser ihn zweimal liest, einmal als Alarm und einmal als
+ * Statusmeldung. Genau dieser Fund ist bei den Sprechblasen schon einmal
+ * ausgebaut worden (siehe merkenUndSprechen). Die eigene Sprachausgabe und der
+ * 🔊-Knopf (`zustand.letzteRede`) arbeiten unverändert weiter.
+ */
 function stoerung(text) {
   const p = $("stoerung");
   if (!text) {
@@ -145,7 +260,7 @@ function stoerung(text) {
   }
   p.textContent = text;
   p.hidden = false;
-  ansagen(text, true);
+  merkenUndSprechen(text, true);
 }
 
 /*
@@ -1331,6 +1446,11 @@ async function beenden(grund, klartext = null) {
     zustand.freigabeLaeuft = null;
   }
   freigabeUhrStoppen();
+  /* Auch hier verschwindet die Freigabekarte, nur nicht über
+     freigabeSchliessen. Stand der Fokus darin, muss er auch hier zurück:
+     Sonst liegt er die 1200 Millisekunden bis zum Ruhezustand auf `body`, und
+     das ist die Zeit, in der die Schlussansage läuft. */
+  freigabeFokusZurueckgeben();
   $("freigabe").hidden = true;
   $("sitzungscode").hidden = true;
 
@@ -1481,6 +1601,30 @@ function freigabeUhrStoppen(verbergen = true) {
   if (verbergen) $("freigabe-rest").hidden = true;
 }
 
+/*
+ * Wo der Fokus stand, bevor die Freigabekarte kam.
+ *
+ * Die Karte ist der einzige Teil der Leiste, der ungefragt dazwischentritt:
+ * Sie erscheint, weil der Agent etwas will, nicht weil der Mensch etwas
+ * gedrückt hat. Danach muss er dort weitermachen können, wo er war — sonst
+ * kostet ihn jede einzelne Freigabe den Weg mit der Tabulatortaste vom
+ * Seitenanfang zurück an seine Stelle.
+ */
+let fokusVorFreigabe = null;
+
+/* Die Freigabekarte gibt den Fokus zurück, BEVOR sie verschwindet: Ein
+   verstecktes Element hält ihn nicht, und die Frage danach, wo er stand, ist
+   dann nicht mehr zu beantworten. Steht er inzwischen woanders, weil der Mensch
+   selbst weitergegangen ist, bleibt er dort. */
+function freigabeFokusZurueckgeben() {
+  const ziel = fokusVorFreigabe;
+  fokusVorFreigabe = null;
+  if (!ziel || !$("freigabe").contains(document.activeElement)) return false;
+  if (ziel.hidden || ziel.disabled || typeof ziel.focus !== "function") return false;
+  ziel.focus();
+  return document.activeElement === ziel;
+}
+
 function freigabeHolen(frage, quelle = "", fristMs = 0) {
   return new Promise((aufloesen) => {
     $("freigabe-text").textContent = frage;
@@ -1493,6 +1637,8 @@ function freigabeHolen(frage, quelle = "", fristMs = 0) {
       q.hidden = true;
     }
     freigabeUhrStarten(fristMs);
+    /* Merken, bevor die Karte den Fokus bekommt — danach steht dort sie. */
+    fokusVorFreigabe = document.activeElement;
     $("freigabe").hidden = false;
     zustand.freigabeLaeuft = aufloesen;
     /* Der Hauptbedienweg des Inhabers ist das Vorlesen: Was nur in der Karte
@@ -1501,13 +1647,21 @@ function freigabeHolen(frage, quelle = "", fristMs = 0) {
        wenn wirklich jemand wartet (fristMs === 0) und niemand weiß, wie lange:
        Beim Beispielauftrag (null) gibt es keine Zeit, über die zu reden wäre. */
     ansagen(`${frage} Freigeben oder ablehnen?${fristMs === 0 ? ` ${OHNE_UHR_ANSAGE}` : ""}`, true);
-    $("freigabe-nein").focus();
+    /* Vorausgewählt ist „Ablehnen", und dort landet auch der Fokus: Wer die
+       Eingabetaste drückt, ohne hinzusehen, lehnt ab.
+       Über `fokusHin` und nicht über ein blankes focus(): Tippt gerade jemand,
+       bleibt der Fokus bei ihm. Sonst spränge die Eingabetaste mitten im Satz
+       auf „Ablehnen" — der Mensch verlöre seinen Text und träfe zugleich eine
+       Entscheidung, die er nie treffen wollte. Die Karte ist eine dringende
+       Vorlesezone (`aria-live="assertive"`), gesagt wird sie also trotzdem. */
+    fokusHin($("freigabe-nein"));
   });
 }
 
 function freigabeSchliessen(antwort) {
   if (!zustand.freigabeLaeuft) return;
   freigabeUhrStoppen();
+  freigabeFokusZurueckgeben();
   $("freigabe").hidden = true;
   const f = zustand.freigabeLaeuft;
   zustand.freigabeLaeuft = null;
@@ -1663,6 +1817,12 @@ async function demoAuftrag() {
     ansagen("Auftrag erledigt.");
   } finally {
     $("vorschlag").disabled = false;
+    /* Der Knopf war während des Auftrags abgeschaltet, und ein abgeschaltetes
+       Element hält den Fokus nicht: Er fiel beim ersten Klick auf `body` und
+       blieb dort liegen. Ist seitdem nichts anderes an seine Stelle getreten,
+       bekommt der Knopf ihn zurück — er ist die Stelle, an der der Mensch
+       gerade stand. */
+    if (fokusIstLos()) fokusHin($("vorschlag"));
   }
 }
 
@@ -2327,6 +2487,21 @@ window.addEventListener("pagehide", () => {
     })
     .catch(() => {});
 });
+
+/*
+ * Die Restzeit tickt still.
+ *
+ * Sie steht in der Sitzungsleiste, und die trägt `role="status"` — also eine
+ * Vorlesezone. `tick()` schreibt dort im Sekundentakt eine neue Zahl hinein:
+ * Ein Bildschirmleser liest damit jede Sekunde die Uhr vor und übertönt genau
+ * das, worauf es ankommt, die Freigabefrage und jede Ansage. Dieselbe
+ * Entscheidung ist bei der Antwortuhr der Freigabekarte schon getroffen worden
+ * (panel.html, `aria-live="off"` an #freigabe-rest); hier wird sie
+ * nachgezogen. Verschwiegen wird nichts: Die Zahl steht sichtbar da, wird beim
+ * Betreten der Leiste mitgelesen, und die Warnungen bei zwei Minuten und einer
+ * Minute kommen als eigene Ansage.
+ */
+$("rest").setAttribute("aria-live", "off");
 
 setzeZustand("bereit");
 eingabePlatzhalterSetzen();

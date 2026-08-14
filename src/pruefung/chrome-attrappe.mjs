@@ -44,6 +44,18 @@ export function attrappeSetzen({
      was der Ausführer nicht wissen kann, wenn er den Befehl absetzt: Eine
      Weiterleitung kann aus einer freigegebenen Adresse eine fremde machen. */
   umleitungNach = null,
+  /* Die Tabs, die `tabs.query` findet. Ohne sie liesse sich die Tab-Liste der
+     Startseite nicht pruefen: Sie ist der einzige Weg, auf dem ein Mensch ein
+     ANDERES Fenster verbindet, und ein Weg ohne Pruefsatz ist ein Weg, der
+     beim naechsten Umbau still verschwindet. */
+  alleTabs = null,
+  /* Der Sprachkatalog fuer `chrome.i18n.getMessage`. Fehlt ein Schluessel,
+     kommt die leere Zeichenkette zurueck — genau wie in Chrome. Damit faellt
+     eine Luecke im Katalog im Pruefsatz auf und nicht erst dem Nutzer. */
+  katalog = {},
+  /* Was `chrome.storage` schon enthaelt, bevor der Code laeuft. */
+  ablageSession = {},
+  ablageLocal = {},
 } = {}) {
   const spur = [];
   const zurueck = Array.isArray(verlauf) ? [...verlauf] : [];
@@ -58,6 +70,9 @@ export function attrappeSetzen({
     const zuhoerer = [];
     return { addListener: (f) => zuhoerer.push(f), _zuhoerer: zuhoerer };
   };
+
+  const sitzungsAblage = new Map(Object.entries(ablageSession || {}));
+  const oertlicheAblage = new Map(Object.entries(ablageLocal || {}));
 
   const chrome = {
     runtime: {
@@ -113,6 +128,17 @@ export function attrappeSetzen({
         if (schweigt("captureVisibleTab")) return new Promise(() => {});
         return typeof bildDatenUrl === "function" ? bildDatenUrl(angaben || {}) : bildDatenUrl;
       },
+      /* Die offenen Tabs. Ohne Angabe steht genau der eine Tab da, mit dem
+         die uebrigen Pruefsaetze ohnehin rechnen. */
+      async query(anfrage) {
+        spur.push({ wohin: "tabs.query", anfrage });
+        const liste = Array.isArray(alleTabs) ? alleTabs : tab ? [tab] : [];
+        if (anfrage && anfrage.active) return liste.filter((t) => t.active);
+        return liste;
+      },
+      onUpdated: ereignis(),
+      onRemoved: ereignis(),
+      onActivated: ereignis(),
       async sendMessage(tabId, nachricht) {
         spur.push({ wohin: "seite", tabId, nachricht });
         if (!tab || tab.id !== tabId) throw new Error("kein Empfänger");
@@ -129,9 +155,49 @@ export function attrappeSetzen({
         return [{ result: null }];
       },
     },
+    /* Die Ablage speichert WIRKLICH.
+
+       Bis 14.08.2026 gaben `get()` hier immer `{}` zurueck. Das genuegte,
+       solange nur die Sitzung darin lag und jeder Pruefsatz sie selbst
+       hinstellte. Ab v3.5 liegen Modus, Matrix, Protokollbuch und die
+       Ablaeufe darin — und eine Attrappe, die Geschriebenes vergisst, wuerde
+       jede Zusage der Art „das bleibt gemerkt" gruen melden, ohne sie zu
+       messen. Genau das ist der Befund vom 11.08.2026 in anderer Gestalt.
+
+       `session` und `local` sind getrennte Toepfe, weil der Unterschied eine
+       Sicherheitszusage ist: Was in `session` liegt, stirbt mit dem Browser. */
     storage: {
-      session: { async get() { return {}; }, async set() {}, async remove() {} },
-      local: { async get() { return {}; }, async set() {}, async remove() {} },
+      session: ablageTopf(sitzungsAblage, "storage.session", spur),
+      local: ablageTopf(oertlicheAblage, "storage.local", spur),
+    },
+    action: {
+      async setBadgeText(a) { spur.push({ wohin: "action.setBadgeText", ...a }); },
+      async setBadgeBackgroundColor(a) { spur.push({ wohin: "action.setBadgeBackgroundColor", ...a }); },
+      async setTitle(a) { spur.push({ wohin: "action.setTitle", ...a }); },
+    },
+    notifications: {
+      async create(id, angaben) {
+        spur.push({ wohin: "notifications.create", id, angaben });
+        return id || "n1";
+      },
+      async clear(id) { spur.push({ wohin: "notifications.clear", id }); return true; },
+      onClicked: ereignis(),
+    },
+    /* `getMessage` gibt die leere Zeichenkette zurueck, wenn der Schluessel
+       fehlt — das ist Chromes Verhalten und der Grund, warum ein fehlender
+       Schluessel in der Oberflaeche als LEERE Stelle erscheint und nicht als
+       Fehler. Ein Pruefsatz, der beide Kataloge gegeneinander haelt, ist
+       deshalb Pflicht und keine Kuer. */
+    i18n: {
+      getMessage(schluessel, ersetzungen) {
+        const eintrag = katalog[schluessel];
+        let text = eintrag && typeof eintrag === "object" ? eintrag.message : eintrag;
+        if (typeof text !== "string") return "";
+        const werte = Array.isArray(ersetzungen) ? ersetzungen : ersetzungen === undefined ? [] : [ersetzungen];
+        werte.forEach((w, i) => { text = text.split(`$${i + 1}`).join(String(w)); });
+        return text;
+      },
+      getUILanguage: () => "de",
     },
     permissions: {
       async getAll() { return { origins: [] }; },
@@ -153,4 +219,53 @@ export function anDieSeite(spur) {
 /** Alles, was an die Seitenleiste ging. */
 export function anDasPanel(spur) {
   return spur.filter((e) => e.wohin === "panel").map((e) => e.nachricht.typ);
+}
+
+/*
+ * Ein Ablagetopf, der sich wie `chrome.storage.*` verhaelt.
+ *
+ * Nachgebildet ist genau das, was der Code wirklich benutzt: `get` mit
+ * Zeichenkette, mit Liste, mit Objekt (Voreinstellungen) und ohne Angabe,
+ * dazu `set`, `remove` und `clear`. Werte gehen durch JSON, damit ein
+ * Pruefsatz nicht versehentlich dieselbe Objektinstanz zurueckbekommt, die
+ * der Code hineingelegt hat — sonst waere jede Zusage der Art „das wurde
+ * wirklich geschrieben" nur ein Zeiger auf sich selbst.
+ */
+function ablageTopf(karte, name, spur) {
+  const tief = (w) => (w === undefined ? undefined : JSON.parse(JSON.stringify(w)));
+  return {
+    async get(was) {
+      spur.push({ wohin: `${name}.get`, was });
+      if (was === null || was === undefined) {
+        const alles = {};
+        for (const [k, v] of karte) alles[k] = tief(v);
+        return alles;
+      }
+      if (typeof was === "string") {
+        return karte.has(was) ? { [was]: tief(karte.get(was)) } : {};
+      }
+      if (Array.isArray(was)) {
+        const raus = {};
+        for (const k of was) if (karte.has(k)) raus[k] = tief(karte.get(k));
+        return raus;
+      }
+      const raus = {};
+      for (const [k, standard] of Object.entries(was)) {
+        raus[k] = karte.has(k) ? tief(karte.get(k)) : tief(standard);
+      }
+      return raus;
+    },
+    async set(satz) {
+      spur.push({ wohin: `${name}.set`, satz });
+      for (const [k, v] of Object.entries(satz || {})) karte.set(k, tief(v));
+    },
+    async remove(was) {
+      spur.push({ wohin: `${name}.remove`, was });
+      for (const k of Array.isArray(was) ? was : [was]) karte.delete(k);
+    },
+    async clear() {
+      spur.push({ wohin: `${name}.clear` });
+      karte.clear();
+    },
+  };
 }

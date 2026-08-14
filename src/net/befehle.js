@@ -341,32 +341,193 @@ export function stufeReicht(stufe, cmd) {
   return (RANG[stufe] || 0) >= RANG[eintrag.stufe];
 }
 
+/* --------------------------------------------------------------------- *
+ * Adressen und der freigegebene Bereich
+ *
+ * Befund vom 11.08.2026: `bereichPasst` verglich ausschließlich den Wirt und
+ * ließ das Schema fallen. Eine Freigabe für `https://bank.de` deckte damit
+ * klaglos `http://bank.de` — für das Auge dieselbe Adresse, in Wahrheit eine
+ * unverschlüsselte Leitung, die jeder im selben Netz mitliest UND verändert.
+ * Das ist die klassische Herunterstufung: Sie braucht keinen fremden Wirt,
+ * ihr genügt ein fehlendes „s".
+ *
+ * Ab hier ist deshalb alles eine Positivliste. Nicht „was verboten ist, fliegt
+ * raus", sondern „was nicht ausdrücklich erlaubt ist, kommt nicht durch":
+ *
+ *   Schema      nur `https:` und `http:`. Damit sind `javascript:`, `data:`,
+ *               `blob:`, `file:`, `chrome:` und `chrome-extension:` in einem
+ *               Satz erledigt, ohne Sperrliste, die man zu ergänzen vergessen
+ *               kann. Und `https` wird nie zu `http`.
+ *   Wirt        nur Kleinbuchstaben, Ziffern, Bindestrich und Punkt; jede
+ *               Marke 1 bis 63 Zeichen, ohne Bindestrich am Rand; der ganze
+ *               Name höchstens 253 Zeichen. Der Wurzelpunkt fällt weg
+ *               (RFC 1034 §3.1), Großschreibung wird kleingeschrieben.
+ *   Nutzername  verboten. `https://bank.de@angreifer.de` führt zu
+ *               `angreifer.de`, liest sich aber wie die Bank. Eine Adresse,
+ *               die etwas anderes tut, als sie sagt, rufen wir nicht auf.
+ *   Port        nur der voreingestellte, es sei denn, die Freigabe nennt den
+ *               Port selbst. Ein anderer Port ist ein anderer Dienst.
+ *   Punycode    `xn--` gilt nur, wo die Freigabe genau diesen Namen nennt,
+ *               nie unter einem Platzhalter. Gemischte Schriften sehen im
+ *               Klartext aus wie lateinische Buchstaben, und wer
+ *               `*.example.de` freigibt, hat `xn--bnk-bld.example.de` nicht
+ *               gemeint.
+ *
+ * Warum umgekehrt, also von `http` auf `https`, erlaubt bleibt: Eine
+ * Aufwertung nimmt dem Mitleser die Leitung weg, sie gibt niemandem Macht
+ * dazu. Wirt, Port und Pfad bleiben dieselben, nur die Strecke wird
+ * verschlossen. Wer den offenen Weg freigegeben hat, hat den geschlossenen
+ * erst recht freigegeben, und eine Erweiterung, die eine Verschlüsselung
+ * ablehnt, weil niemand sie ausdrücklich verlangt hat, schützt niemanden.
+ *
+ * Zerlegt wird ausschließlich mit `new URL`. Eigene Zeichenkettenarbeit an
+ * Adressen ist der Ursprung fast jeder Herunterstufung: Der Browser liest die
+ * Adresse anders als die selbstgebaute Suche, und maßgeblich ist der Browser.
+ * --------------------------------------------------------------------- */
+
+/* Die einzigen Schemata, die überhaupt in Frage kommen. */
+export const SCHEMATA = new Set(["https", "http"]);
+
+/* Ein Wirtsname, wie ihn `new URL` nach der IDNA-Umwandlung liefert: reines
+   ASCII. Was hier nicht hineinpasst, ist kein Name, den wir vergleichen. */
+const MARKE_MUSTER = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+
+function wirtSauber(roh) {
+  let host = String(roh || "").toLowerCase();
+  if (host.endsWith(".")) host = host.slice(0, -1); // Wurzelpunkt, RFC 1034 §3.1
+  if (!host || host.length > 253) return null;
+  const marken = host.split(".");
+  if (marken.some((m) => !MARKE_MUSTER.test(m))) return null;
+  return host;
+}
+
+function hatPunycode(host) {
+  return String(host || "").split(".").some((m) => m.startsWith("xn--"));
+}
+
 /**
- * Host einer Adresse — klein, ohne Wurzelpunkt, nur http/https.
+ * Eine Adresse in ihre drei Vergleichsstücke zerlegen: Schema, Wirt, Port.
  *
- * Der abschließende Wurzelpunkt ist bedeutungslos (RFC 1034 §3.1,
- * DRAHTFORMAT §6): `geizhals.de.` und `geizhals.de` sind derselbe Name. Ein
- * Host mit leerer Marke (`geizhals..de`) ist dagegen keiner.
+ * `null` heißt: Diese Adresse wird nicht angefasst. Es gibt keinen Zweifelsfall,
+ * der durchgereicht wird.
  *
- * @returns {string|null}
+ * @returns {{schema:string, host:string, port:string}|null}
  */
-export function hostAus(adresse) {
+export function adresseZerlegen(adresse) {
   let u;
   try {
     u = new URL(String(adresse ?? ""));
   } catch (_) {
     return null;
   }
-  if (u.protocol !== "https:" && u.protocol !== "http:") return null;
-  let host = u.hostname.toLowerCase();
-  if (host.endsWith(".")) host = host.slice(0, -1);
+  const schema = u.protocol.replace(/:$/, "").toLowerCase();
+  if (!SCHEMATA.has(schema)) return null;
+  /* Nutzername oder Kennwort im Ort: Die Adresse zeigt vorne den Namen, den
+     der Mensch lesen soll, und geht hinten zu einem anderen Wirt. */
+  if (u.username || u.password) return null;
+  const host = wirtSauber(u.hostname);
   if (!host) return null;
-  if (host.split(".").some((marke) => marke === "")) return null;
-  return host;
+  /* `u.port` ist leer, wenn der voreingestellte Port gemeint ist — Chrome
+     entfernt `:443` bei https und `:80` bei http von selbst. */
+  return { schema, host, port: u.port || "" };
 }
 
 /**
- * Liegt diese Adresse im freigegebenen Bereich?
+ * Host einer Adresse — klein, ohne Wurzelpunkt, nur http/https.
+ *
+ * Bleibt als eigener Name bestehen, weil der Ausführer und die Freigabefrage
+ * nur den Wirt brauchen. Die Prüfung dahinter ist seit dem 11.08.2026
+ * dieselbe wie beim Bereich: `adresseZerlegen`.
+ *
+ * @returns {string|null}
+ */
+export function hostAus(adresse) {
+  const z = adresseZerlegen(adresse);
+  return z ? z.host : null;
+}
+
+/**
+ * Einen Eintrag der Freigabeliste zerlegen.
+ *
+ * Erlaubt sind `bank.de`, `*.bank.de`, `bank.de:8443` und dieselben Formen mit
+ * vorangestelltem `https://` oder `http://`. Alles andere ist kein Eintrag.
+ *
+ * @returns {{schema:(string|null), host:string, port:string, platzhalter:boolean}|null}
+ */
+export function eintragZerlegen(roh) {
+  let s = String(roh ?? "").trim().toLowerCase();
+  if (!s) return null;
+
+  let schema = null;
+  const mitSchema = /^(https?):\/\//.exec(s);
+  if (mitSchema) {
+    schema = mitSchema[1];
+    s = s.slice(mitSchema[0].length);
+  } else if (/^[a-z][a-z0-9+.-]*:\/\//.test(s)) {
+    return null; // ein fremdes Schema im Eintrag ist keine Wirtsangabe
+  }
+
+  s = s.replace(/\/.*$/, ""); // ein Pfad im Eintrag sagt über den Wirt nichts
+  if (s.includes("@")) return null; // Nutzername auch hier nie
+
+  let port = "";
+  const mitPort = /:([0-9]{1,5})$/.exec(s);
+  if (mitPort) {
+    port = mitPort[1];
+    s = s.slice(0, mitPort.index);
+  } else if (s.includes(":")) {
+    return null;
+  }
+  /* Der voreingestellte Port ist kein eigener Port: `https://bank.de:443` und
+     `https://bank.de` sind derselbe Dienst, und `new URL` schreibt ihn beim
+     Ziel gar nicht erst hin. */
+  if (schema && port === (schema === "https" ? "443" : "80")) port = "";
+
+  if (s.endsWith(".")) s = s.slice(0, -1);
+  const platzhalter = s.startsWith("*.");
+  const rumpf = platzhalter ? s.slice(2) : s;
+  const host = wirtSauber(rumpf);
+  if (!host) return null;
+  /* `*.de` wäre eine ganze Länderendung, `*` das halbe Netz. Ein Platzhalter
+     braucht mindestens einen eigenen Namen unter der Endung. */
+  if (platzhalter && host.split(".").length < 2) return null;
+
+  return { schema, host, port, platzhalter };
+}
+
+/**
+ * Das Schema, das der Mensch im Browser wirklich freigegeben hat.
+ *
+ * Quelle ist das Ursprungsmuster der Sitzung (`https://bank.de/*`) — genau
+ * jene Zeichenkette, mit der die Erweiterung ihr Zugriffsrecht auf diese Seite
+ * beantragt hat. Es ist die einzige Stelle, an der ein Schema überhaupt
+ * auftaucht: Die `allow`-Liste des Relays führt nur Wirte.
+ *
+ * @returns {string|null} „https", „http" oder null, wenn nichts bekannt ist
+ */
+export function freigabeSchema(sitzung) {
+  const m = /^(https?):\/\//.exec(String((sitzung && sitzung.ursprungMuster) || "").toLowerCase());
+  return m && SCHEMATA.has(m[1]) ? m[1] : null;
+}
+
+/** Deckt das freigegebene Schema das Schema des Ziels? */
+function schemaReicht(freigegeben, ziel) {
+  if (!freigegeben) return true; // nichts bekannt: der Eintrag entscheidet allein
+  if (freigegeben === "https") return ziel === "https";
+  return SCHEMATA.has(ziel); // http freigegeben: http und https
+}
+
+function wirtPasst(eintrag, ziel) {
+  if (!eintrag.platzhalter) return ziel.host === eintrag.host;
+  /* Unter einem Platzhalter kein Punycode: `xn--bnk-bld.example.de` ist
+     formal eine Unterseite von `example.de`, liest sich im Klartext aber wie
+     ein ganz anderer Name. Wer den Namen wirklich meint, gibt ihn frei. */
+  if (hatPunycode(ziel.host) && !hatPunycode(eintrag.host)) return false;
+  return ziel.host === eintrag.host || ziel.host.endsWith(`.${eintrag.host}`);
+}
+
+/**
+ * Liegt diese Adresse im freigegebenen Bereich, und wenn nicht, woran lag es?
  *
  * Der Relay prüft die Ziele, die IM BEFEHL stehen. Er kann aber nicht wissen,
  * wo der Tab gerade steht: Der Mensch kann in der Zwischenzeit selbst
@@ -378,29 +539,47 @@ export function hostAus(adresse) {
  * Eine leere Bereichsliste ist hier KEINE Erlaubnis, sondern das Gegenteil
  * (DRAHTFORMAT E7): Sie kann nur aus einem Fehler stammen, und im Fehlerfall
  * wird nichts gelesen.
+ *
+ * Der Grund wird mitgegeben, weil ein Mensch bei „bank.de liegt außerhalb der
+ * Freigabe" nichts versteht, wenn er bank.de freigegeben hat. Er muss hören,
+ * dass es an der fehlenden Verschlüsselung liegt.
+ *
+ * @returns {{ok:true, ziel:object} | {ok:false, grund:string, ziel:(object|null)}}
  */
-export function bereichPasst(adresse, sitzung) {
-  const host = hostAus(adresse);
-  if (!host) return false;
+export function bereichBefund(adresse, sitzung) {
+  const ziel = adresseZerlegen(adresse);
+  if (!ziel) return { ok: false, grund: "adresse", ziel: null };
+
   const liste = Array.isArray(sitzung && sitzung.bereich) ? sitzung.bereich : [];
-  if (!liste.length) return false;
+  if (!liste.length) return { ok: false, grund: "bereich", ziel };
 
-  /* „Nur dieser Tab" heißt: genau dieser eine Host, ohne Platzhalter. */
-  if ((sitzung && sitzung.modus) === "tab") {
-    const eins = String(liste[0] || "").toLowerCase().replace(/\.$/, "");
-    return !!eins && eins === host;
+  /* „Nur dieser Tab" heißt: genau dieser eine Wirt, ohne Platzhalter. */
+  const roh = (sitzung && sitzung.modus) === "tab" ? liste.slice(0, 1) : liste;
+  const eintraege = roh
+    .map(eintragZerlegen)
+    .filter((e) => e && !((sitzung && sitzung.modus) === "tab" && e.platzhalter));
+  if (!eintraege.length) return { ok: false, grund: "bereich", ziel };
+
+  /* In dieser Reihenfolge, damit der Grund der engste ist, der noch stimmt:
+     erst der Wirt, dann der Port, zuletzt das Schema. */
+  const amWirt = eintraege.filter((e) => wirtPasst(e, ziel));
+  if (!amWirt.length) return { ok: false, grund: "bereich", ziel };
+
+  const amPort = amWirt.filter((e) => (e.port || "") === (ziel.port || ""));
+  if (!amPort.length) return { ok: false, grund: "port", ziel };
+
+  if (!amPort.some((e) => schemaReicht(e.schema, ziel.schema))) {
+    return { ok: false, grund: "schema", ziel };
   }
+  if (!schemaReicht(freigabeSchema(sitzung), ziel.schema)) {
+    return { ok: false, grund: "schema", ziel };
+  }
+  return { ok: true, ziel };
+}
 
-  return liste.some((eintrag) => {
-    const e = String(eintrag || "").toLowerCase().replace(/\.$/, "");
-    if (!e) return false;
-    if (e.startsWith("*.")) {
-      const wurzel = e.slice(2);
-      if (!wurzel || wurzel.split(".").length < 2) return false; // `*.de` ist zu weit
-      return host === wurzel || host.endsWith(`.${wurzel}`);
-    }
-    return host === e;
-  });
+/** Die Ja/Nein-Form von `bereichBefund` für alle Aufrufer, die nur das brauchen. */
+export function bereichPasst(adresse, sitzung) {
+  return bereichBefund(adresse, sitzung).ok;
 }
 
 /* --------------------------------------------------------------------- *
@@ -738,10 +917,33 @@ export function parameterPruefen(cmd, rahmen = {}, lage = {}) {
       /* Die Bereichsprüfung steht VOR der Freigabefrage. Andernfalls bestätigte
          der Mensch eine Adresse, die die Erweiterung danach selbst ablehnt —
          und lernte, dass seine Zustimmung nichts bedeutet. */
-      if (!bereichPasst(url, lage.sitzung)) {
+      const befund = bereichBefund(url, lage.sitzung);
+      if (!befund.ok) {
         const erlaubt = Array.isArray(lage.sitzung && lage.sitzung.bereich)
           ? lage.sitzung.bereich.slice(0, 3).map((e) => saeubern(e, 60)).join(", ")
           : "";
+        /* Der Grund muss der wahre sein. „bank.de liegt außerhalb der Freigabe"
+           ist für einen Menschen, der bank.de freigegeben hat, keine Auskunft,
+           sondern ein Rätsel — und wer das Rätsel nicht löst, hält die
+           Erweiterung für kaputt statt die Adresse für falsch. */
+        if (befund.grund === "schema") {
+          return {
+            ok: false,
+            code: "scope_violation_local",
+            satz: `Die Adresse ${saeubern(host, 60)} soll unverschlüsselt aufgerufen werden, freigegeben ist sie nur verschlüsselt. Diese Herabstufung mache ich nicht mit.`,
+            hinweis: "Dieselbe Adresse mit https:// aufrufen. Über http läse jeder im selben Netz mit, und ändern könnte er die Seite auch.",
+            retryable: false,
+          };
+        }
+        if (befund.grund === "port") {
+          return {
+            ok: false,
+            code: "scope_violation_local",
+            satz: `Die Adresse ${saeubern(host, 60)} soll über den Port ${saeubern(befund.ziel.port, 8)} aufgerufen werden, und dieser Port ist nicht freigegeben. Dorthin gehe ich nicht.`,
+            hinweis: "Ein anderer Port ist ein anderer Dienst. Den Nutzer um eine Freigabe für genau diesen Port bitten.",
+            retryable: false,
+          };
+        }
         return {
           ok: false,
           code: "scope_violation_local",
@@ -980,6 +1182,229 @@ export function frageZusatz(cmd, plan) {
     return satz ? ` Er wartet darauf, ${satz(plan.wert)}.` : "";
   }
   return "";
+}
+
+/* --------------------------------------------------------------------- *
+ * Der Verdeckungstest vor dem Klick
+ *
+ * Befund vom 11.08.2026: Vor einem Klick wurde nur nachgeschlagen, OB es das
+ * Element noch gibt und ob es eine Fläche hat. Niemand sah nach, ob an dieser
+ * Fläche wirklich das Element liegt. Liegt etwas darüber, eine Bannerleiste,
+ * ein Zustimmungsfenster, ein durchsichtiger Überzug über der ganzen Seite,
+ * dann bekommt der Klick das obere Element, und der Mensch hat das untere
+ * gesehen und freigegeben. Das ist keine Ungenauigkeit, das ist eine
+ * Falschaussage mit Wirkung: Der Mensch stimmt „Warenkorb" zu und drückt
+ * „Alle Cookies annehmen", oder Schlimmeres.
+ *
+ * Der Test ist der, den auch ein Mensch machen würde: an der Stelle
+ * nachsehen, auf die gleich geklickt wird. `document.elementFromPoint` gibt
+ * genau das Element zurück, das den Klick an diesem Punkt bekäme — dieselbe
+ * Auswahl, die der Browser selbst trifft, samt Stapelreihenfolge,
+ * Durchsichtigkeit und `pointer-events`. Selbst zu rechnen wäre wieder die
+ * eigene Zeichenkettenarbeit von oben, nur in Geometrie.
+ *
+ * Drei Feinheiten, an denen ein naiver Vergleich scheitert:
+ *
+ *  1. **Offene Schattenbäume.** `document.elementFromPoint` bleibt am Wirt
+ *     stehen und liefert die Web-Komponente, nicht den Knopf darin. Ein
+ *     Vergleich mit dem Ziel schlüge dann fehl, obwohl nichts verdeckt ist,
+ *     und die Erweiterung verweigerte genau die Zustimmungsbanner, für die
+ *     der Schattenbaum überhaupt betreten wird. Deshalb wird abgestiegen,
+ *     solange eine OFFENE Wurzel da ist. Geschlossene Wurzeln haben kein
+ *     `shadowRoot`, dorthin kommt auch dieses Skript nicht.
+ *  2. **Außerhalb des Sichtfelds.** `elementFromPoint` kennt nur den
+ *     sichtbaren Ausschnitt und gibt außerhalb `null`. Ohne eigene Prüfung
+ *     hieße das „da liegt nichts", und der wahre Satz ist ein anderer: Das
+ *     Ziel ist gar nicht auf dem Schirm.
+ *  3. **`pointer-events: none`.** Ein solches Ziel nimmt selbst keinen Klick
+ *     an, der Punkt gehört dem Element darunter. Das ist keine Verdeckung,
+ *     sondern das Gegenteil, und es verdient seinen eigenen Satz.
+ *
+ * Diese Datei sieht keinen Browser: Dokument, Sichtfeld und Stilabfrage werden
+ * hereingereicht. Das ist derselbe Grund wie im Kopf der Datei — ein Gate, das
+ * man nicht prüfen kann, ist ein Gate, das man nicht hat.
+ * --------------------------------------------------------------------- */
+
+/* Wie tief in Schattenbäume abgestiegen wird. Eine Seite, die sich selbst
+   tausendfach verschachtelt, hält den Tab nicht an. */
+const SCHATTEN_TIEFE = 20;
+
+/* Die Absagen des Verdeckungstests. Sie stehen als Tabelle da, weil jeder Satz
+   wörtlich in einem Prüfsatz steht: Ein Schutz, dessen Satz sich beiläufig
+   ändert, ist ein Schutz, dessen Prüfung beiläufig aufhört zu messen. */
+export const KLICK_ABSAGEN = {
+  kein_ziel: {
+    code: "element_not_found",
+    satz: "Das Element, auf das ich klicken sollte, gibt es auf der Seite nicht mehr.",
+    hinweis: "`readPage` neu aufrufen und die Referenz aus der neuen Wahrnehmung nehmen.",
+    retryable: false,
+  },
+  keine_flaeche: {
+    code: "element_not_visible",
+    satz: "Das Ziel hat auf der Seite keine Fläche, auf die man klicken könnte.",
+    hinweis: "`readPage` neu aufrufen. Was keine Fläche hat, ist meist aufgeklappt oder ausgeblendet.",
+    retryable: true,
+  },
+  ausserhalb: {
+    code: "element_not_visible",
+    satz: "Das Ziel liegt außerhalb des sichtbaren Ausschnitts. Auf etwas, das niemand sieht, klicke ich nicht.",
+    hinweis: "Erst mit `scroll` und der Referenz des Elements dorthin rollen, dann den Klick wiederholen.",
+    retryable: true,
+  },
+  klicktaub: {
+    code: "element_not_visible",
+    satz: "Das Ziel nimmt selbst keine Klicks an, seine Zeigerereignisse sind abgeschaltet.",
+    hinweis: "Das Element, das den Klick wirklich annimmt, ist ein anderes. `readPage` neu aufrufen und es dort suchen.",
+    retryable: false,
+  },
+  leer: {
+    code: "element_not_visible",
+    satz: "An der Stelle des Ziels nimmt kein Element einen Klick an.",
+    hinweis: "`readPage` neu aufrufen, die Seite hat sich seit der Wahrnehmung bewegt.",
+    retryable: true,
+  },
+  verdeckt: {
+    code: "element_covered",
+    satz: "Über dem Ziel liegt ein anderes Element. Ich klicke nicht, denn der Klick träfe dieses andere Element und nicht das, was der Mensch freigegeben hat.",
+    hinweis: "Meist ist es eine Bannerleiste oder ein Zustimmungsfenster. Es zuerst schließen, dann `readPage` neu lesen und den Klick wiederholen.",
+    retryable: true,
+  },
+};
+
+function klickAbsage(name, zusatz = {}) {
+  return { ok: false, ...KLICK_ABSAGEN[name], ...zusatz };
+}
+
+/**
+ * Welches Element bekäme an diesem Punkt den Klick?
+ *
+ * Steigt durch offene Schattenbäume durch, weil `elementFromPoint` an jeder
+ * Schattengrenze am Wirt stehen bleibt.
+ *
+ * @param {object} wurzel  `document` oder eine offene `shadowRoot`
+ * @returns {object|null}
+ */
+export function zielAmPunkt(wurzel, x, y) {
+  let gefunden = null;
+  let hier = wurzel;
+  for (let tiefe = 0; tiefe < SCHATTEN_TIEFE; tiefe++) {
+    if (!hier || typeof hier.elementFromPoint !== "function") break;
+    let treffer = null;
+    try {
+      treffer = hier.elementFromPoint(x, y);
+    } catch (_) {
+      treffer = null;
+    }
+    if (!treffer || treffer === gefunden) break;
+    gefunden = treffer;
+    hier = gefunden.shadowRoot || null; // nur OFFENE Wurzeln haben eine
+  }
+  return gefunden;
+}
+
+/**
+ * Ist `knoten` das Ziel selbst oder ein Kind davon?
+ *
+ * Aufwärts statt `ziel.contains(knoten)`, weil `contains` an der
+ * Schattengrenze aufhört: Ein Knopf IN der offenen Wurzel einer Komponente
+ * wäre sonst „nicht enthalten", obwohl der Klick genau dort hingehört. Über
+ * `host` geht es weiter, und das ist derselbe Weg, den auch `composedPath`
+ * eines echten Ereignisses nimmt.
+ */
+export function gehoertZuZiel(ziel, knoten) {
+  if (!ziel || !knoten) return false;
+  let n = knoten;
+  for (let i = 0; i < 200 && n; i++) {
+    if (n === ziel) return true;
+    n = n.parentNode || n.host || null;
+  }
+  return false;
+}
+
+/**
+ * Der Verdeckungstest selbst.
+ *
+ * @param {object} ziel        das Element, dem der Mensch zugestimmt hat
+ * @param {object} umgebung    { dokument, sichtfeld:{breite,hoehe}, stil }
+ *                             `stil` ist `getComputedStyle`, hereingereicht.
+ * @returns {{ok:true, punkt:{x:number,y:number}, gefunden:object}
+ *          |{ok:false, code:string, satz:string, hinweis:string, retryable:boolean}}
+ */
+export function klickZielFrei(ziel, umgebung = {}) {
+  if (!ziel || typeof ziel.getBoundingClientRect !== "function") {
+    return klickAbsage("kein_ziel");
+  }
+
+  let r = null;
+  try {
+    r = ziel.getBoundingClientRect();
+  } catch (_) {
+    r = null;
+  }
+  if (!r || !Number.isFinite(r.width) || !Number.isFinite(r.height) || r.width <= 0 || r.height <= 0) {
+    return klickAbsage("keine_flaeche");
+  }
+
+  const x = r.left + r.width / 2;
+  const y = r.top + r.height / 2;
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return klickAbsage("keine_flaeche");
+
+  /* Das Sichtfeld, wenn es genannt ist. Fehlt es, trägt `elementFromPoint` den
+     Fall allein: Außerhalb liefert es `null`, und daraus wird eine Absage —
+     nur mit dem allgemeineren Satz. */
+  const sicht = umgebung.sichtfeld || {};
+  const breite = Number(sicht.breite);
+  const hoehe = Number(sicht.hoehe);
+  if (Number.isFinite(breite) && Number.isFinite(hoehe)) {
+    if (x < 0 || y < 0 || x >= breite || y >= hoehe) return klickAbsage("ausserhalb");
+  }
+
+  /* Ein Ziel, das selbst keine Zeigerereignisse annimmt, ist nicht verdeckt,
+     sondern durchlässig. Der Unterschied gehört in den Satz, sonst sucht der
+     Agent ein Banner, das es gar nicht gibt. */
+  if (typeof umgebung.stil === "function") {
+    let stil = null;
+    try {
+      stil = umgebung.stil(ziel);
+    } catch (_) {
+      stil = null;
+    }
+    if (stil && String(stil.pointerEvents || "") === "none") return klickAbsage("klicktaub");
+  }
+
+  const dokument = umgebung.dokument;
+  if (!dokument || typeof dokument.elementFromPoint !== "function") {
+    /* Ohne Nachsehen keine Freigabe. Ein Test, der bei fehlendem Werkzeug
+       durchwinkt, ist genau der Test, den man weglassen kann. */
+    return klickAbsage("leer");
+  }
+
+  const gefunden = zielAmPunkt(dokument, x, y);
+  if (!gefunden) return klickAbsage("leer");
+  if (gehoertZuZiel(ziel, gefunden)) return { ok: true, punkt: { x, y }, gefunden };
+
+  /* Was oben liegt, wird gemeldet, aber nicht in den Satz gehoben: Es ist
+     Text von der besuchten Seite. Der Name des HTML-Elements genügt zur
+     Fehlersuche und trägt keinen Fremdtext. */
+  const marke = saeubern(gefunden.tagName || gefunden.nodeName || "", 40)
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "");
+  return klickAbsage("verdeckt", { darueber: marke || null });
+}
+
+/**
+ * Klicken, aber nur, wenn der Punkt wirklich dem Ziel gehört.
+ *
+ * Der Auslöser wird hereingereicht und ausschließlich hier aufgerufen. Das ist
+ * der Unterschied zwischen einer Prüfung, die berät, und einer, die schützt:
+ * Wer die Absage übersehen könnte, könnte trotzdem klicken; wer den Auslöser
+ * abgibt, kann es nicht.
+ */
+export function klickFreigeben(ziel, umgebung, ausloesen) {
+  const frei = klickZielFrei(ziel, umgebung);
+  if (!frei.ok) return frei;
+  if (typeof ausloesen === "function") ausloesen(frei.punkt);
+  return frei;
 }
 
 /* --------------------------------------------------------------------- *

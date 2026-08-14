@@ -164,19 +164,119 @@ function mitWertSetter() {
   return K;
 }
 
+/* Ein Inline-Stil, wie ihn eine CSSStyleDeclaration führt: Text UND einzeln
+   abfragbare Eigenschaften samt Priorität.
+   Warum das sein muss: Der Wächter am Wirt erkennt einen gekaperten Stil an
+   `getPropertyValue`/`getPropertyPriority` und ausdrücklich NICHT am ganzen
+   cssText — Chrome schreibt den beim Setzen um („0" wird „0px"), ein
+   Textvergleich wäre danach dauerhaft ungleich und der Wächter liefe im Kreis.
+   Eine Attrappe, die nur cssText kann, würde genau diese Bauentscheidung
+   ungeprüft lassen.
+   Grenze der Nachbildung: Ein direkt gesetztes `style.left = "5px"` legt hier
+   eine gewöhnliche Eigenschaft an und taucht nicht in der Karte auf. Das
+   genügt, weil overlay.js die Karte ausschließlich für den Wirt-Stil befragt,
+   den es am Stück über cssText schreibt. */
+function stilAttrappe() {
+  const karte = new Map();
+  let roh = "";
+  const neuSchreiben = () => {
+    roh = [...karte]
+      .map(([k, v]) => `${k}:${v.wert}${v.prio ? " !important" : ""}`)
+      .join(";");
+    if (roh) roh += ";";
+  };
+  return {
+    get cssText() {
+      return roh;
+    },
+    set cssText(t) {
+      roh = String(t == null ? "" : t);
+      karte.clear();
+      for (const stueck of roh.split(";")) {
+        const s = stueck.trim();
+        if (!s) continue;
+        const trenn = s.indexOf(":");
+        if (trenn < 0) continue;
+        const name = s.slice(0, trenn).trim().toLowerCase();
+        let wert = s.slice(trenn + 1).trim();
+        let prio = "";
+        if (/!\s*important$/i.test(wert)) {
+          prio = "important";
+          wert = wert.replace(/!\s*important$/i, "").trim();
+        }
+        karte.set(name, { wert, prio });
+      }
+    },
+    getPropertyValue(n) {
+      return (karte.get(String(n).toLowerCase()) || { wert: "" }).wert;
+    },
+    getPropertyPriority(n) {
+      return (karte.get(String(n).toLowerCase()) || { prio: "" }).prio;
+    },
+    setProperty(n, w, p) {
+      karte.set(String(n).toLowerCase(), {
+        wert: String(w),
+        prio: p === "important" ? "important" : "",
+      });
+      neuSchreiben();
+    },
+    removeProperty(n) {
+      karte.delete(String(n).toLowerCase());
+      neuSchreiben();
+    },
+  };
+}
+
 function umgebungBauen(elemente, etiketten = []) {
   /* `erzeugt` und `angehaengt` halten fest, WAS das Skript in die fremde
      Seite baut. Ohne diese zwei Listen war der Wirt-Knoten des Overlays
      (#smartrchrome-host) für keine Prüfung erreichbar — createElement gab ein
      namenloses Objekt zurück und appendChild warf es weg. Genau an diesem
      Knoten hängt aber die Abwehr gegen Seiten-CSS. */
-  const zustand = { scrollY: 0, geschrieben: [], beobachter: [], erzeugt: [], angehaengt: [] };
-
-  /* Eine Änderung am Seitenbaum melden — für die Ruhe-Bedingung von
-     overlay:warten. */
-  zustand.aendern = (ziel = {}) => {
-    for (const b of zustand.beobachter) if (b.__aktiv) b.__ruf([{ target: ziel }]);
+  const zustand = {
+    scrollY: 0,
+    geschrieben: [],
+    beobachter: [],
+    erzeugt: [],
+    angehaengt: [],
+    /* Fensterhörer (keydown, scroll) und das Stylesheet des Schattenbaums.
+       Ohne beides wären die Notbremse und der Klick-Puls von außen weder
+       auslösbar noch lesbar. */
+    hoerer: [],
+    stil: "",
   };
+
+  /* Eine Meldung zustellen — und zwar nur an die Beobachter, die sie im echten
+     Browser auch bekämen.
+     Warum so genau: Der Wächter am Wirt hängt an genau zwei Stellen, an den
+     Kindern von <html> und an den Attributen des eigenen Knotens. Eine
+     Attrappe, die jede Meldung an jeden Beobachter gibt, kann nicht messen, ob
+     er überhaupt an der richtigen Stelle hängt — die Gegenprobe „Beobachtung
+     entfernt" bliebe grün. Zugestellt wird deshalb nach Ziel, nach Art und,
+     bei Attributen, nach dem Filter. */
+  zustand.melden = (art, ziel, merkmal = null) => {
+    for (const b of [...zustand.beobachter]) {
+      if (!b.__aktiv) continue;
+      const passt = (b.__ziele || []).some((e) => {
+        const o = e.o || {};
+        if (!o[art]) return false;
+        if (e.ziel !== ziel) return !!o.subtree;
+        if (art === "attributes" && o.attributeFilter && merkmal) {
+          return o.attributeFilter.includes(merkmal);
+        }
+        return true;
+      });
+      if (passt) b.__ruf([{ type: art, target: ziel, attributeName: merkmal }]);
+    }
+  };
+
+  /* Eine Änderung irgendwo am Seitenbaum — für die Ruhe-Bedingung von
+     overlay:warten. Sie erreicht nur, wer den ganzen Teilbaum beobachtet. */
+  zustand.aendern = (ziel = {}) => zustand.melden("childList", ziel);
+
+  /* Eine Änderung an den DIREKTEN Kindern von <html>: genau die Meldung, mit
+     der der Browser das Entfernen des Wirts anzeigt. */
+  zustand.kindWechsel = () => zustand.melden("childList", document.documentElement);
 
   const document = {
     title: "Warenkorb",
@@ -186,28 +286,50 @@ function umgebungBauen(elemente, etiketten = []) {
     documentElement: {
       /* Der Wirt ist der einzige Knoten, den das Overlay in die fremde Seite
          hängt. Er wird hier aufbewahrt statt verworfen, damit prüfbar bleibt,
-         womit er sich gegen das CSS dieser Seite wehrt. */
+         womit er sich gegen das CSS dieser Seite wehrt.
+         Wie im echten Baum bekommt der Knoten dabei seinen Elternteil und
+         seine Verbindung — und der Browser meldet die Änderung an die
+         Beobachter. Nur so ist überhaupt prüfbar, dass das Wiedereinsetzen
+         durch den Wächter nicht in eine Schleife mit sich selbst läuft. */
       appendChild(n) {
         zustand.angehaengt.push(n);
+        if (n) {
+          n.isConnected = true;
+          n.parentNode = document.documentElement;
+        }
+        zustand.kindWechsel();
         return n;
       },
       scrollHeight: 4000,
     },
     createElement: () => {
+      const attrs = {};
+      /* Der Textknoten des Schildes bleibt derselbe — sonst wäre nicht
+         nachlesbar, WAS das Overlay dem Menschen hinschreibt. */
+      const textKnoten = { textContent: "" };
       const el = {
-        style: { cssText: "" },
+        style: stilAttrappe(),
         className: "",
         id: "",
         innerHTML: "",
         textContent: "",
         dataset: {},
-        setAttribute() {},
-        removeAttribute() {},
-        getAttribute: () => null,
+        isConnected: false,
+        parentNode: null,
+        __eigen: true,
+        __attrs: attrs,
+        __text: textKnoten,
+        setAttribute(n, w) {
+          attrs[n] = String(w);
+        },
+        removeAttribute(n) {
+          delete attrs[n];
+        },
+        getAttribute: (n) => (n in attrs ? attrs[n] : null),
         /* Der eigene Rahmen erkennt seine eigenen Knoten — overlay:warten darf
            die eigene Anzeige nicht für Bewegung der Seite halten. */
         contains: (n) => !!(n && n.__eigen),
-        querySelector: () => ({ textContent: "" }),
+        querySelector: (sel) => (sel === ".text" ? textKnoten : { textContent: "" }),
         append() {},
         appendChild() {},
         attachShadow: () => ({
@@ -251,8 +373,13 @@ function umgebungBauen(elemente, etiketten = []) {
       el.__versteckt
         ? { visibility: "hidden", display: "none", opacity: "0" }
         : { visibility: "visible", display: "block", opacity: "1" },
+    /* Das Stylesheet des Schattenbaums wird mitgeschrieben statt verworfen:
+       Der Klick-Puls und das Zeichen für ein totes Overlay leben ausschließlich
+       im CSS, und was hier nicht ankommt, kann keine Prüfung sehen. */
     CSSStyleSheet: class {
-      replaceSync() {}
+      replaceSync(text) {
+        zustand.stil = String(text || "");
+      }
     },
     CSS: { escape: (s) => s },
     performance: { now: () => Date.now() },
@@ -272,31 +399,98 @@ function umgebungBauen(elemente, etiketten = []) {
       constructor(ruf) {
         this.__ruf = ruf;
         this.__aktiv = false;
+        /* Woran dieser Beobachter hängt und mit welchen Vorgaben. Ohne diese
+           Liste wäre „hängt am richtigen Knoten" keine prüfbare Aussage. */
+        this.__ziele = [];
         zustand.beobachter.push(this);
       }
-      observe() {
+      observe(ziel, o = {}) {
         this.__aktiv = true;
+        this.__ziele.push({ ziel, o });
       }
       disconnect() {
         this.__aktiv = false;
+        this.__ziele = [];
       }
     },
     chrome: {
       runtime: {
+        /* Chrome setzt `id` immer — und nimmt sie weg, sobald der Kontext
+           ungültig ist (Erweiterung neu geladen, aktualisiert, abgeschaltet).
+           Genau daran erkennt overlay.js, dass die Notbremse nichts mehr
+           erreichen kann. */
+        id: "smartrchrome-attrappe",
         __hoerer: null,
+        __gesendet: [],
+        __wirft: false,
+        __abgelehnt: false,
         onMessage: {
           addListener(f) {
             sandbox.chrome.runtime.__hoerer = f;
           },
         },
-        sendMessage() {},
+        sendMessage(n) {
+          const r = sandbox.chrome.runtime;
+          /* So wirft der echte Browser: synchron, mitten im Ereignishörer. */
+          if (r.__wirft) throw new Error("Extension context invalidated.");
+          r.__gesendet.push(n);
+          if (r.__abgelehnt) return Promise.reject(new Error("message port closed"));
+          return undefined;
+        },
       },
     },
   };
   sandbox.window = sandbox;
   sandbox.self = sandbox;
   sandbox.globalThis = sandbox;
-  sandbox.window.addEventListener = () => {};
+  sandbox.scrollX = 0;
+  /* Fensterhörer werden aufbewahrt statt verworfen: Notbremse (keydown) und
+     das Nachführen im Bildlauf (scroll) hängen daran, und ohne sie wäre beides
+     von außen gar nicht auslösbar. */
+  sandbox.window.addEventListener = (typ, hoerer, o) => {
+    zustand.hoerer.push({ typ, hoerer, o });
+  };
+  zustand.feuern = (typ, ereignis = {}) => {
+    for (const h of zustand.hoerer) if (h.typ === typ) h.hoerer(ereignis);
+  };
+
+  /* Der Wirt, so wie ihn eine Prüfung angreift. */
+  const wirt = () =>
+    zustand.angehaengt.find((n) => n && n.id === "smartrchrome-host") || null;
+  zustand.wirt = wirt;
+
+  /* `node.remove()` der Seite: raus aus dem Baum, und der Browser meldet die
+     Änderung an den Kindern von <html>. */
+  zustand.wirtEntfernen = () => {
+    const w = wirt();
+    assert.ok(w, "ohne Wirt gibt es nichts zu entfernen");
+    w.isConnected = false;
+    w.parentNode = null;
+    zustand.kindWechsel();
+    return w;
+  };
+
+  /* Verschieben statt entfernen: Der Knoten lebt, hängt aber woanders — zum
+     Beispiel in einem Behälter mit overflow:hidden. */
+  zustand.wirtVerschieben = () => {
+    const w = wirt();
+    assert.ok(w, "ohne Wirt gibt es nichts zu verschieben");
+    w.parentNode = { __fremd: true };
+    zustand.kindWechsel();
+    return w;
+  };
+
+  /* Ein Seitenskript überschreibt den Inline-Stil an genau der Stelle, an der
+     die Abwehr steht. Gegen !important im CSS hilft der Stil, gegen das hier
+     nicht — nur der Wächter. Der Browser meldet es als Attributänderung an
+     „style", und genau darauf muss der Wächter hören. */
+  zustand.stilKapern = (eigenschaft = "display", neu = "none", prio = "important") => {
+    const w = wirt();
+    assert.ok(w, "ohne Wirt gibt es keinen Stil zu kapern");
+    w.style.setProperty(eigenschaft, neu, prio);
+    zustand.melden("attributes", w, "style");
+    return w;
+  };
 
   return { sandbox, zustand };
 }
@@ -1738,4 +1932,689 @@ test("Abwehr: der Wirt liegt fixiert und auf der höchsten Ebene", async () => {
     "der Rahmen muss über allem liegen, sonst deckt ein Seitenelement ihn zu"
   );
   assert.equal(ebene.wichtig, true, "z-index ohne !important kann die Seite überstapeln");
+});
+
+/* ------------------------------------------------------------------ *
+ * Der Wächter am Wirt
+ *
+ * Der Inline-Stil mit !important hält das CSS der Seite auf. Gegen ein SKRIPT
+ * der Seite hilft er nicht: `document.getElementById("smartrchrome-host")
+ * .remove()` nimmt den Knoten aus dem Baum, ein appendChild woanders
+ * verschiebt ihn aus dem Sichtfenster, und `host.style.display = "none"`
+ * überschreibt die Abwehr an genau der Stelle, an der sie steht. In allen drei
+ * Fällen bediente der Agent bis 0.5.2 unverändert weiter, nur eben unsichtbar
+ * — dasselbe gebrochene Versprechen wie beim CSS, nur eine Ebene tiefer.
+ *
+ * Die drei Fallen des Wächters werden hier einzeln gemessen: keine Schleife
+ * mit sich selbst, keine teure Arbeit bei jeder Änderung, und kein endloser
+ * Kampf gegen eine Seite, die es darauf anlegt.
+ * ------------------------------------------------------------------ */
+
+/* Der exakte Wortlaut, den der Mensch zu lesen bekommt. Beide Sätze stehen
+   hier ausgeschrieben, damit eine stille Umformulierung auffällt: Sie sind das
+   Einzige, woran ein Mensch merkt, dass die Sitzung vorbei ist. */
+const ANGRIFF_SATZ =
+  "Diese Seite entfernt das Sichtzeichen immer wieder, deshalb ist die Sitzung jetzt beendet.";
+const KONTEXT_SATZ =
+  "Die Verbindung zur Erweiterung ist weg, die Sitzung ist damit ohnehin beendet.";
+
+/* Ein Teil der Anzeige aus dem, was das Skript gebaut hat. Über die Klasse
+   und nicht über die Reihenfolge: Die Reihenfolge ist Sache von overlay.js. */
+function teilHolen(zustand, klasse) {
+  const el = zustand.erzeugt.find((n) => n && n.className === klasse);
+  assert.ok(el, `das Overlay muss ein Element .${klasse} bauen`);
+  return el;
+}
+
+const schildSatz = (zustand) => teilHolen(zustand, "schild").__text.textContent;
+
+/* Was das Seitenskript an den Dienst gemeldet hat. Der Umweg über JSON ist
+   nicht Zierde: Objekte aus dem Sandkasten stammen aus einer anderen Welt und
+   sind für assert.deepEqual nie gleich, so gleich ihr Inhalt auch ist. Chrome
+   kopiert jede Nachricht ohnehin genauso zwischen den Welten. */
+const gesendet = (sandbox) =>
+  JSON.parse(JSON.stringify(sandbox.chrome.runtime.__gesendet));
+
+/* Ein laufendes Overlay mit Sitzung — erst ab `overlay:an` gibt es etwas zu
+   bewachen. */
+async function sitzungStarten() {
+  const seite = seiteBauen();
+  const alles = await overlayStarten(seite.alle);
+  alles.fragen({ typ: "overlay:an", text: "SMarTrAgent steuert diesen Tab" });
+  return { ...alles, seite };
+}
+
+test("Wächter: die Seite entfernt den Wirt, er ist sofort wieder da", async () => {
+  const { zustand } = await sitzungStarten();
+  const wirt = zustand.wirt();
+  assert.equal(wirt.isConnected, true, "vor dem Angriff hängt der Wirt in der Seite");
+
+  zustand.wirtEntfernen();
+
+  assert.equal(
+    wirt.isConnected,
+    true,
+    "nach node.remove() muss der Wirt wieder im Baum hängen, sonst bedient der Agent unsichtbar weiter"
+  );
+  assert.equal(
+    wirt.parentNode,
+    zustand.wirt().parentNode,
+    "und zwar an <html>, nicht irgendwo"
+  );
+  assert.equal(
+    zustand.angehaengt.filter((n) => n && n.id === "smartrchrome-host").length,
+    2,
+    "genau einmal wieder eingesetzt: einmal beim Start, einmal nach dem Angriff"
+  );
+});
+
+test("Wächter: der verschobene Wirt kommt an <html> zurück", async () => {
+  const { zustand, sandbox } = await sitzungStarten();
+  const wirt = zustand.wirt();
+
+  /* Verschieben statt entfernen: Der Knoten lebt, hängt aber in einem
+     fremden Behälter — und ein Behälter mit overflow:hidden oder eigenem
+     Stapelkontext blendet ihn genauso aus wie ein remove(). */
+  zustand.wirtVerschieben();
+
+  assert.equal(
+    wirt.parentNode,
+    sandbox.document.documentElement,
+    "der Wirt gehört an <html>, ein fremder Elternteil ist ein Versteck"
+  );
+});
+
+test("Wächter: ein gekaperter Inline-Stil wird wiederhergestellt", async () => {
+  const { zustand } = await sitzungStarten();
+  const wirt = zustand.wirt();
+
+  /* Das ist der Weg, gegen den !important nichts ausrichtet: Die Seite
+     schreibt an derselben Stelle, an der die Abwehr steht. */
+  zustand.stilKapern("display", "none");
+
+  assert.equal(
+    wirt.style.getPropertyValue("display"),
+    "block",
+    "display muss wieder auf block stehen, sonst ist das Overlay abgeschaltet"
+  );
+  assert.equal(
+    wirt.style.getPropertyPriority("display"),
+    "important",
+    "und wieder mit !important, sonst gewinnt das nächste Seiten-CSS"
+  );
+
+  /* Ein einzelner Eingriff beendet noch nichts — sonst wäre der Wächter
+     selbst die Reißleine. */
+  assert.equal(schildSatz(zustand), "SMarTrAgent steuert diesen Tab");
+});
+
+test("Wächter: auch ein entwertetes !important wird wiederhergestellt", async () => {
+  const { zustand } = await sitzungStarten();
+
+  /* Der leiseste Angriff von allen: Der Wert bleibt richtig, nur die
+     Priorität fällt weg. Dann sieht der Inline-Stil unverändert aus, und das
+     nächste `#smartrchrome-host{display:none!important}` der Seite gewinnt
+     trotzdem. Ein Wächter, der nur auf Werte schaut, merkt davon nichts. */
+  zustand.stilKapern("display", "block", "");
+
+  assert.equal(zustand.wirt().style.getPropertyValue("display"), "block");
+  assert.equal(
+    zustand.wirt().style.getPropertyPriority("display"),
+    "important",
+    "ohne !important verliert die Abwehr gegen das nächste Seiten-Stylesheet"
+  );
+});
+
+test("Wächter: opacity, Sichtbarkeit und Ebene werden einzeln nachgezogen", async () => {
+  /* Nicht nur display: Jede dieser Angaben macht das Zeichen für sich allein
+     unsichtbar, und der Wächter prüft sie deshalb einzeln. */
+  for (const [eigenschaft, angriff, soll] of [
+    ["opacity", "0", "1"],
+    ["visibility", "hidden", "visible"],
+    ["position", "static", "fixed"],
+    ["z-index", "0", "2147483647"],
+    ["pointer-events", "auto", "none"],
+  ]) {
+    const { zustand } = await sitzungStarten();
+    zustand.stilKapern(eigenschaft, angriff);
+    assert.equal(
+      zustand.wirt().style.getPropertyValue(eigenschaft),
+      soll,
+      `${eigenschaft}:${angriff} der Seite muss zurückgenommen werden`
+    );
+  }
+});
+
+test("Wächter: das Wiedereinsetzen läuft nicht in eine Schleife mit sich selbst", async () => {
+  const { zustand } = await sitzungStarten();
+
+  /* Die Attrappe meldet das Wiedereinsetzen an denselben Beobachter, genau
+     wie der Browser. Ohne Riegel riefe der Wächter sich selbst nach: Jede
+     Reparatur ist eine Änderung, jede Änderung wäre wieder ein Anlass.
+     Gemessen wird an der Zahl der Einsetzungen, nicht am Ausbleiben eines
+     Absturzes — eine Schleife, die nach 200 Runden von selbst aufhört, wäre
+     genauso falsch. */
+  zustand.wirtEntfernen();
+
+  assert.equal(
+    zustand.angehaengt.length,
+    2,
+    "eine Entfernung, eine Einsetzung. Mehr heißt: der Wächter reagiert auf sich selbst"
+  );
+  assert.notEqual(
+    schildSatz(zustand),
+    ANGRIFF_SATZ,
+    "eine einzelne Entfernung darf keine Sitzung beenden"
+  );
+});
+
+test("Wächter: dreimal entfernt ist ein Angriff, die Sitzung wird beendet", async () => {
+  const { zustand, sandbox, fragen } = await sitzungStarten();
+
+  zustand.wirtEntfernen();
+  zustand.wirtEntfernen();
+  assert.notEqual(schildSatz(zustand), ANGRIFF_SATZ, "zweimal ist noch kein Angriff");
+
+  zustand.wirtEntfernen();
+
+  assert.equal(
+    schildSatz(zustand),
+    ANGRIFF_SATZ,
+    "der Mensch muss im Overlay lesen, warum die Sitzung vorbei ist"
+  );
+  assert.deepEqual(
+    gesendet(sandbox),
+    [{ typ: "notbremse", quelle: "overlay-entfernt" }],
+    "die Sitzung wird wirklich beendet, nicht nur beklagt"
+  );
+  assert.equal(
+    teilHolen(zustand, "rahmen").getAttribute("data-zustand"),
+    "tot",
+    "der Rahmen zeigt, dass er nichts mehr verspricht"
+  );
+  assert.equal(
+    teilHolen(zustand, "schild").getAttribute("data-zustand"),
+    "tot",
+    "und das Schild ebenso"
+  );
+
+  /* Und ab hier ist Schluss: Ein totes Overlay führt keinen Befehl mehr aus. */
+  const k = fragen({ typ: "overlay:klicken", ref: "e1", epoche: "s1" });
+  assert.deepEqual(k, { ok: false, fehler: "overlay_tot" });
+  const an = fragen({ typ: "overlay:an", text: "wieder da" });
+  assert.deepEqual(an, { ok: false, fehler: "overlay_tot" });
+  assert.equal(
+    schildSatz(zustand),
+    ANGRIFF_SATZ,
+    "ein totes Overlay lässt sich nicht wieder als lebendes anschalten"
+  );
+});
+
+test("Wächter: kommt der Wirt gar nicht wieder, endet die Sitzung sofort", async () => {
+  const { zustand, sandbox } = await sitzungStarten();
+
+  /* Die Seite hält den Knoten draußen — appendChild läuft ins Leere, meldet
+     die Änderung aber wie der Browser. Ein Zeichen, das nicht wiederkommt,
+     kommt auch beim dritten Versuch nicht wieder; weiterzumachen hieße,
+     unsichtbar zu bedienen.
+     Hier hängt zugleich die schärfste Probe auf die Selbstschleife: Ohne
+     Riegel ruft sich der Wächter über seine eigene Reparatur endlos selbst
+     auf, weil die Reparatur nie zum Ziel führt. */
+  let versuche = 0;
+  sandbox.document.documentElement.appendChild = (n) => {
+    versuche += 1;
+    zustand.angehaengt.push(n);
+    zustand.kindWechsel();
+    return n;
+  };
+
+  zustand.wirtEntfernen();
+
+  assert.equal(
+    versuche,
+    1,
+    "ein Versuch, dann Schluss. Mehr heißt: Der Wächter ruft sich über seine eigene Reparatur selbst nach"
+  );
+  assert.equal(schildSatz(zustand), ANGRIFF_SATZ);
+  assert.deepEqual(gesendet(sandbox), [{ typ: "notbremse", quelle: "overlay-entfernt" }]);
+});
+
+test("Wächter: ohne Sitzung bewacht niemand, und nach dem Ende auch nicht mehr", async () => {
+  const seite = seiteBauen();
+  const { fragen, zustand } = await overlayStarten(seite.alle);
+
+  /* Vor overlay:an gibt es kein Versprechen, also auch nichts zu bewachen —
+     kein fremdes Blatt schleppt einen Beobachter mit, den niemand braucht. */
+  assert.equal(zustand.beobachter.filter((b) => b.__aktiv).length, 0);
+
+  fragen({ typ: "overlay:an" });
+  assert.equal(
+    zustand.beobachter.filter((b) => b.__aktiv).length,
+    1,
+    "mit der Sitzung beginnt die Bewachung"
+  );
+
+  fragen({ typ: "overlay:aus" });
+  assert.equal(
+    zustand.beobachter.filter((b) => b.__aktiv).length,
+    0,
+    "mit dem Ende hört sie wieder auf"
+  );
+});
+
+test("Wächter: er sieht die Meldungen gar nicht an, sondern nur den Ist-Zustand", async () => {
+  const { zustand } = await sitzungStarten();
+  const vorher = zustand.angehaengt.length;
+
+  /* Tausend Meldungen an genau der Stelle, an der der Wächter hängt. Er darf
+     davon nichts tun außer sechs Eigenschaften abfragen — kein Baumvergleich,
+     kein Wiedereinsetzen, keine Zählung Richtung Sitzungsende. */
+  for (let i = 0; i < 1000; i += 1) zustand.kindWechsel();
+
+  assert.equal(zustand.angehaengt.length, vorher, "ein heiler Wirt wird nicht angefasst");
+  assert.notEqual(schildSatz(zustand), ANGRIFF_SATZ, "Bewegung der Seite ist kein Angriff");
+});
+
+/* ------------------------------------------------------------------ *
+ * Die Notbremse ohne Erweiterung
+ *
+ * Befund 10.08.2026: Ist der Erweiterungskontext weg — Erweiterung neu
+ * geladen, aktualisiert oder abgeschaltet —, wirft chrome.runtime.sendMessage
+ * synchron. Der Wurf lief aus dem Tastenhörer in die Konsole der Seite, die
+ * niemand offen hat: Der Mensch drückte zweimal Escape, sah nichts und glaubte,
+ * gestoppt zu haben.
+ * ------------------------------------------------------------------ */
+
+/* Zweimal Escape, wie ein Mensch es drückt. */
+function escEsc(zustand) {
+  zustand.feuern("keydown", { key: "Escape" });
+  zustand.feuern("keydown", { key: "Escape" });
+}
+
+test("Notbremse: zweimal Escape meldet die Notbremse an den Dienst", async () => {
+  const { zustand, sandbox } = await sitzungStarten();
+  escEsc(zustand);
+  assert.deepEqual(gesendet(sandbox), [{ typ: "notbremse", quelle: "esc-esc" }]);
+  assert.notEqual(
+    teilHolen(zustand, "rahmen").getAttribute("data-zustand"),
+    "tot",
+    "mit lebender Erweiterung bleibt das Overlay am Leben"
+  );
+});
+
+test("Notbremse: ein einzelnes Escape löst nichts aus", async () => {
+  const { zustand, sandbox } = await sitzungStarten();
+  zustand.feuern("keydown", { key: "Escape" });
+  assert.deepEqual(gesendet(sandbox), []);
+});
+
+test("Notbremse: ohne Erweiterungskontext gibt es eine ehrliche Meldung statt eines stillen Wurfs", async () => {
+  const { zustand, sandbox, fragen } = await sitzungStarten();
+
+  /* Genau das macht Chrome, wenn die Erweiterung neu geladen wurde: Die
+     Kennung ist weg, und jeder Aufruf wirft. */
+  sandbox.chrome.runtime.id = undefined;
+  sandbox.chrome.runtime.__wirft = true;
+
+  assert.doesNotThrow(
+    () => escEsc(zustand),
+    "der Tastenhörer darf nicht werfen, sonst landet die Wahrheit in einer Konsole, die niemand liest"
+  );
+
+  assert.equal(
+    schildSatz(zustand),
+    KONTEXT_SATZ,
+    "der Mensch muss lesen, dass sein Druck ins Leere ging und die Sitzung ohnehin vorbei ist"
+  );
+  assert.equal(
+    teilHolen(zustand, "rahmen").getAttribute("data-zustand"),
+    "tot",
+    "ein totes Overlay darf sich nicht als lebendes ausgeben"
+  );
+  assert.equal(teilHolen(zustand, "zeiger").getAttribute("data-an"), "0");
+  assert.deepEqual(fragen({ typ: "overlay:ping" }), { ok: false, fehler: "overlay_tot" });
+});
+
+test("Notbremse: wirft sendMessage trotz Kennung, ist das derselbe Befund", async () => {
+  const { zustand, sandbox } = await sitzungStarten();
+  /* Die Kennung steht noch, der Kanal ist trotzdem tot — auch dieser Weg
+     darf nicht still werfen. */
+  sandbox.chrome.runtime.__wirft = true;
+
+  assert.doesNotThrow(() => escEsc(zustand));
+  assert.equal(schildSatz(zustand), KONTEXT_SATZ);
+  assert.equal(teilHolen(zustand, "rahmen").getAttribute("data-zustand"), "tot");
+});
+
+test("Notbremse: eine abgewiesene Zusage ist derselbe Befund wie ein Wurf", async () => {
+  const { zustand, sandbox } = await sitzungStarten();
+  /* Chrome gibt in Manifest V3 ein Versprechen zurück. Wird es abgewiesen,
+     ist die Meldung genauso wenig angekommen wie bei einem Wurf — und der
+     Mensch stünde genauso im Dunkeln. */
+  sandbox.chrome.runtime.__abgelehnt = true;
+
+  escEsc(zustand);
+  await gleich();
+
+  assert.equal(schildSatz(zustand), KONTEXT_SATZ);
+  assert.equal(teilHolen(zustand, "rahmen").getAttribute("data-zustand"), "tot");
+});
+
+test("Notbremse: ein totes Overlay gibt den Seitentitel wieder frei", async () => {
+  const { zustand, sandbox } = await sitzungStarten();
+  const vorher = "Warenkorb";
+  assert.ok(sandbox.document.title.startsWith("🐇▶ "), "die Sitzung trägt das Präfix");
+
+  sandbox.chrome.runtime.id = undefined;
+  escEsc(zustand);
+
+  assert.equal(
+    sandbox.document.title,
+    vorher,
+    "das Präfix verspricht einen gesteuerten Tab, und gesteuert wird hier nichts mehr"
+  );
+});
+
+/* ------------------------------------------------------------------ *
+ * Der Zielrahmen im Bildlauf
+ *
+ * Der Rahmen steht in Sichtfenster-Koordinaten, weil der Wirt fixiert ist.
+ * Genau deshalb zeigte er bis 0.5.2 nach jedem Bildlauf auf die falsche
+ * Stelle: Das Element wandert mit dem Inhalt, der Rahmen blieb stehen. Der
+ * Mensch sah einen Rahmen um „Abmelden" und gab in Wahrheit „Bestellen" frei.
+ * ------------------------------------------------------------------ */
+
+const RECHTECK = { left: 100, top: 400, width: 200, height: 40 };
+
+async function zielGesetzt() {
+  const alles = await sitzungStarten();
+  alles.fragen({
+    typ: "overlay:zeiger",
+    x: 200,
+    y: 420,
+    rect: RECHTECK,
+    beschriftung: "Bestellen",
+  });
+  return alles;
+}
+
+test("Bildlauf: der Zielrahmen folgt dem Bildlauf des Agenten", async () => {
+  const { fragen, zustand } = await zielGesetzt();
+  const ziel = teilHolen(zustand, "ziel");
+  assert.equal(ziel.style.top, "400px", "vor dem Bildlauf sitzt der Rahmen auf dem Element");
+
+  fragen({ typ: "overlay:scrollen", richtung: "down", menge: 300 });
+
+  assert.equal(
+    ziel.style.top,
+    "100px",
+    "300 Pixel Bildlauf heißt 300 Pixel höher, sonst rahmt der Rahmen etwas anderes ein"
+  );
+  assert.equal(ziel.style.left, "100px", "seitwärts wurde nicht gescrollt, also bleibt links links");
+  assert.equal(ziel.style.height, "40px", "die Größe des Elements ändert der Bildlauf nicht");
+  assert.equal(ziel.getAttribute("data-an"), "1", "und sichtbar bleibt er auch");
+});
+
+test("Bildlauf: auch der Zeiger zeigt nach dem Bildlauf noch auf dasselbe Element", async () => {
+  const { fragen, zustand } = await zielGesetzt();
+  const zeiger = teilHolen(zustand, "zeiger");
+  assert.equal(zeiger.style.transform, "translate3d(192px, 412px, 0)");
+
+  fragen({ typ: "overlay:scrollen", richtung: "down", menge: 300 });
+
+  assert.equal(
+    zeiger.style.transform,
+    "translate3d(192px, 112px, 0)",
+    "ein Zeiger, der auf das falsche Element zeigt, ist schlimmer als gar keiner"
+  );
+  assert.equal(
+    zeiger.getAttribute("data-folgt"),
+    "1",
+    "beim Nachführen darf der Zeiger nicht gleiten, sonst zeigt er unterwegs daneben"
+  );
+});
+
+test("Bildlauf: auch der Mensch am Rad führt den Rahmen nach", async () => {
+  const { zustand } = await zielGesetzt();
+  const ziel = teilHolen(zustand, "ziel");
+
+  /* Kein Befehl des Agenten, sondern das Scroll-Ereignis des Browsers. */
+  zustand.scrollY = 250;
+  zustand.feuern("scroll", {});
+
+  assert.equal(ziel.style.top, "150px", "der Rahmen hängt am Element, nicht am Sichtfenster");
+});
+
+test("Bildlauf: der Rahmen kehrt zurück, wenn zurückgescrollt wird", async () => {
+  const { fragen, zustand } = await zielGesetzt();
+  const ziel = teilHolen(zustand, "ziel");
+  fragen({ typ: "overlay:scrollen", richtung: "down", menge: 300 });
+  fragen({ typ: "overlay:scrollen", richtung: "up", menge: 300 });
+  assert.equal(ziel.style.top, "400px", "die Nachführung rechnet vom Bezugspunkt, nicht Schritt für Schritt");
+});
+
+test("Bildlauf: ohne gesetzten Zielrahmen führt niemand etwas nach", async () => {
+  const { fragen, zustand } = await sitzungStarten();
+  const ziel = teilHolen(zustand, "ziel");
+  /* Der Arbeitszeiger hat kein Element und darf deshalb auch nicht wandern. */
+  fragen({ typ: "overlay:zeiger", x: 50, y: 50 });
+  fragen({ typ: "overlay:scrollen", richtung: "down", menge: 300 });
+  assert.equal(ziel.style.top, undefined, "ohne Rechteck gibt es keinen Rahmen zu bewegen");
+  assert.equal(ziel.getAttribute("data-an"), "0");
+});
+
+test("Bildlauf: nach dem Sitzungsende wird nichts mehr nachgeführt", async () => {
+  const { fragen, zustand } = await zielGesetzt();
+  const ziel = teilHolen(zustand, "ziel");
+  fragen({ typ: "overlay:aus" });
+  zustand.scrollY = 250;
+  zustand.feuern("scroll", {});
+  assert.equal(ziel.style.top, "400px", "ein abgeschaltetes Overlay bewegt nichts mehr");
+});
+
+/* ------------------------------------------------------------------ *
+ * Der Klick-Puls ohne Bewegung
+ *
+ * Wer „Bewegung reduzieren" eingestellt hat, sah bis 0.5.2 beim Klick gar
+ * nichts: Die einzige Regel für den ausgelösten Puls lag in
+ * prefers-reduced-motion: no-preference. Genau die Menschen, die auf eine
+ * ruhige, deutliche Anzeige angewiesen sind, bekamen keine.
+ *
+ * Geprüft wird nicht mit einer Textsuche, sondern an der Struktur des
+ * Stylesheets: Welche Regel liegt in welcher Medienabfrage, und was steht
+ * darin. Eine Textsuche nach „puls" bliebe grün, egal wo die Regel steht.
+ * ------------------------------------------------------------------ */
+
+/* Ein kleiner CSS-Zerleger: Regeln mit ihrer Umgebung und ihren
+   Deklarationen. Verschachtelte Blöcke (@media mit Regeln darin) werden
+   betreten, @keyframes übergangen. */
+function regelnLesen(css, umgebung = "") {
+  const raus = [];
+  let i = 0;
+  /* Kommentare zuerst heraus: Sonst klebt der Kommentar über einer Regel am
+     Selektor, und genau die Regeln mit der ausführlichsten Begründung wären
+     die, die keine Prüfung findet. */
+  const text = String(css || "").replace(/\/\*[\s\S]*?\*\//g, " ");
+  while (i < text.length) {
+    const auf = text.indexOf("{", i);
+    if (auf < 0) break;
+    const kopf = text.slice(i, auf).trim();
+    let tiefe = 1;
+    let j = auf + 1;
+    while (j < text.length && tiefe > 0) {
+      if (text[j] === "{") tiefe += 1;
+      else if (text[j] === "}") tiefe -= 1;
+      j += 1;
+    }
+    const koerper = text.slice(auf + 1, j - 1);
+    if (kopf.startsWith("@media")) {
+      raus.push(...regelnLesen(koerper, kopf));
+    } else if (!kopf.startsWith("@")) {
+      const deklarationen = new Map();
+      for (const stueck of koerper.split(";")) {
+        const s = stueck.trim();
+        if (!s || s.includes("{")) continue;
+        const trenn = s.indexOf(":");
+        if (trenn < 0) continue;
+        deklarationen.set(s.slice(0, trenn).trim().toLowerCase(), s.slice(trenn + 1).trim());
+      }
+      for (const teil of kopf.split(",")) {
+        raus.push({ selektor: teil.trim(), umgebung, deklarationen });
+      }
+    }
+    i = j;
+  }
+  return raus;
+}
+
+async function stylesheetLesen() {
+  const seite = seiteBauen();
+  const { zustand } = await overlayStarten(seite.alle);
+  assert.ok(zustand.stil.length > 200, "das Overlay muss ein Stylesheet mitbringen");
+  return regelnLesen(zustand.stil);
+}
+
+test("Der Zerleger findet die Regeln wirklich, sonst misst der Rest nichts", async () => {
+  /* Ein Zerleger, der nichts findet, macht jede folgende Prüfung zu einer
+     Prüfung über die leere Menge. Deshalb zuerst er selbst. */
+  const regeln = await stylesheetLesen();
+  assert.ok(regeln.length >= 15, `zu wenige Regeln gefunden: ${regeln.length}`);
+  const rahmen = regeln.find((r) => r.selektor === ".rahmen");
+  assert.ok(rahmen, "die Grundregel des Rahmens muss auffindbar sein");
+  assert.equal(rahmen.umgebung, "", "sie steht in keiner Medienabfrage");
+  assert.equal(rahmen.deklarationen.get("position"), "fixed");
+  const atmen = regeln.find(
+    (r) => r.selektor === '.rahmen[data-an="1"]' && r.umgebung.includes("no-preference")
+  );
+  assert.ok(atmen, "und die Bewegungsregel muss in ihrer Medienabfrage stehen");
+});
+
+test("Klick-Puls: auch ohne Bewegung gibt es ein sichtbares Zeichen", async () => {
+  const regeln = await stylesheetLesen();
+  const pulsRegeln = regeln.filter((r) => r.selektor === '.puls[data-an="1"]');
+  assert.ok(pulsRegeln.length, "es muss überhaupt eine Regel für den ausgelösten Puls geben");
+
+  /* Der Kern: eine Regel, die den Puls sichtbar macht, OHNE an
+     „no-preference" zu hängen. Liegt die einzige sichtbar machende Regel in
+     dieser Abfrage, sieht ein Mensch mit abgestellter Bewegung nichts. */
+  const ohneBewegung = pulsRegeln.filter((r) => !r.umgebung.includes("no-preference"));
+  assert.ok(
+    ohneBewegung.length,
+    "der ausgelöste Puls hängt vollständig an prefers-reduced-motion: no-preference"
+  );
+
+  const sichtbar = ohneBewegung.find((r) => Number(r.deklarationen.get("opacity")) > 0);
+  assert.ok(
+    sichtbar,
+    "ohne Bewegung muss der Puls eine Deckkraft über null bekommen, sonst ist er unsichtbar"
+  );
+
+  /* Und er muss ohne Bewegung auch etwas hermachen: Ein 18-Pixel-Ring, der
+     nicht aufgeht, ist auf einer vollen Seite nicht zu finden. */
+  assert.ok(
+    sichtbar.deklarationen.get("background"),
+    "die stehende Hervorhebung braucht eine Fläche, ein dünner Ring allein genügt nicht"
+  );
+  assert.ok(
+    !sichtbar.deklarationen.has("animation"),
+    "eine Bewegung ist genau das, was hier nicht stattfinden darf"
+  );
+
+  /* Der Ruhezustand bleibt unsichtbar — sonst wäre die Prüfung oben trivial
+     erfüllt und der Puls stünde dauerhaft auf der Seite. */
+  const grund = regeln.find((r) => r.selektor === ".puls" && !r.umgebung);
+  assert.ok(grund, "die Grundregel des Pulses muss es geben");
+  assert.equal(grund.deklarationen.get("opacity"), "0", "ungeklickt ist der Puls unsichtbar");
+});
+
+test("Klick-Puls: mit Bewegung bleibt der aufgehende Ring erhalten", async () => {
+  const regeln = await stylesheetLesen();
+  const bewegt = regeln.find(
+    (r) => r.selektor === '.puls[data-an="1"]' && r.umgebung.includes("no-preference")
+  );
+  assert.ok(bewegt, "wer Bewegung mag, bekommt weiterhin den aufgehenden Ring");
+  const animation = String(bewegt.deklarationen.get("animation") || "");
+  assert.ok(animation.includes("pulsRing"), `keine Puls-Animation gefunden: ${animation}`);
+  assert.ok(
+    animation.includes("forwards"),
+    "ohne forwards blitzt die stehende Hervorhebung nach dem Auslaufen noch einmal auf"
+  );
+});
+
+test("Der Klick löst den Puls wirklich aus", async () => {
+  /* Die schönste CSS-Regel nützt nichts, wenn niemand data-an setzt. */
+  const seite = seiteBauen();
+  const { fragen, zustand } = await overlayStarten(seite.alle);
+  fragen({ typ: "overlay:an" });
+  const baum = fragen({ typ: "overlay:baum" });
+  const ref = refVon(baum, "Startseite");
+  fragen({ typ: "overlay:klicken", ref, epoche: baum.epoche });
+  const puls = teilHolen(zustand, "puls");
+  assert.equal(puls.getAttribute("data-an"), "1", "beim Klick geht der Puls an");
+  assert.equal(puls.style.left, "70px", "und zwar dort, wo geklickt wurde");
+});
+
+test("Ein totes Overlay hat sein eigenes Aussehen im Stylesheet", async () => {
+  const regeln = await stylesheetLesen();
+  const totRahmen = regeln.find((x) => x.selektor.includes('.rahmen[') && x.selektor.includes('[data-zustand="tot"]'));
+  const totSchild = regeln.find((x) => x.selektor === '.schild[data-zustand="tot"]');
+  assert.ok(totRahmen, "der Rahmen braucht ein eigenes Aussehen für tot");
+  assert.ok(totSchild, "und das Schild ebenso");
+  assert.ok(totSchild.deklarationen.size > 0, "die Regel steht da, sagt aber nichts");
+  assert.ok(
+    !String(totRahmen.deklarationen.get("box-shadow") || "").includes("#2aff2a"),
+    "ein totes Overlay darf nicht mehr grün leuchten, Grün ist die Zusage"
+  );
+
+  /* Und es darf auch nicht weiteratmen. Die Atem-Regel steht später im
+     Stylesheet; wäre der Tot-Selektor nicht spezifischer, gewänne sie bei
+     gleicher Spezifität allein durch ihre Stelle. */
+  assert.equal(
+    totRahmen.deklarationen.get("animation"),
+    "none",
+    "ein totes Overlay darf nicht weiter grün pulsieren"
+  );
+  const atmen = regeln.find(
+    (r) => r.selektor === '.rahmen[data-an="1"]' && r.umgebung.includes("no-preference")
+  );
+  assert.ok(atmen, "die Atem-Regel muss es geben, sonst misst der Vergleich nichts");
+  assert.ok(
+    totRahmen.selektor.split("[").length > atmen.selektor.split("[").length,
+    `der Tot-Selektor muss spezifischer sein als die Atem-Regel: ${totRahmen.selektor}`
+  );
+});
+
+/* ------------------------------------------------------------------ *
+ * Die Abwehr gegen die übrigen Verstecke
+ *
+ * display, visibility und opacity sind die bekannten drei. Sie sind nicht die
+ * einzigen: `scale: 0` überlebt ein `transform: none`, weil die einzelnen
+ * Transform-Eigenschaften eigene Eigenschaften sind. clip, mask,
+ * mix-blend-mode, content-visibility und eine Breite von null blenden das
+ * Zeichen ebenso aus, ohne eine der bekannten drei anzufassen.
+ * ------------------------------------------------------------------ */
+
+test("Abwehr: auch scale, clip, mask und Verwandtschaft stehen am Wirt", async () => {
+  const stil = await wirtStil();
+  const karte = new Map(stil.map((d) => [d.eigenschaft, d]));
+
+  for (const [eigenschaft, erwartet] of [
+    ["scale", "none"],
+    ["rotate", "none"],
+    ["translate", "none"],
+    ["clip", "auto"],
+    ["mask", "none"],
+    ["mix-blend-mode", "normal"],
+    ["content-visibility", "visible"],
+    ["animation", "none"],
+    ["width", "auto"],
+    ["height", "auto"],
+    ["max-width", "none"],
+    ["max-height", "none"],
+  ]) {
+    const d = karte.get(eigenschaft);
+    assert.ok(d, `${eigenschaft} fehlt am Wirt, damit blendet die Seite das Zeichen darüber aus`);
+    assert.equal(d.wert, erwartet, `${eigenschaft} muss auf ${erwartet} stehen`);
+    assert.equal(d.wichtig, true, `${eigenschaft} ohne !important verliert gegen das Seiten-CSS`);
+  }
 });
