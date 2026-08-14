@@ -1,0 +1,989 @@
+{
+  "ausweis_keine_knopf": {
+    "message": "Open the sign-in page"
+  },
+  "ausweis_keine_text": {
+    "message": "I do not have your sign-in yet, and there is no SMarTrAgents tab open either. Please sign in to the cloud. I will open the sign-in page for you if you like."
+  },
+  "ausweis_keine_titel": {
+    "message": "Please sign in first"
+  },
+  "ausweis_neuladen": {
+    "message": "I am reloading the SMarTrAgents tab. As soon as it is back, I have your sign-in."
+  },
+  "ausweis_uebergabe_knopf": {
+    "message": "Reload the SMarTrAgents tab"
+  },
+  "ausweis_uebergabe_text": {
+    "message": "I do not have your sign-in yet. Reload the SMarTrAgents tab once (F5), then I get it automatically."
+  },
+  "ausweis_uebergabe_titel": {
+    "message": "Your sign-in is missing"
+  },
+  "buch_ansage": {
+    "message": "Activity log. Every remote action is listed here with time, agent and address."
+  },
+  "buch_ansicht_ausgeben": {
+    "message": "Export the log"
+  },
+  "buch_ansicht_titel": {
+    "message": "What has happened in your name"
+  },
+  "buch_auffrischen": {
+    "message": "Refresh"
+  },
+  "buch_ausgabe_im_feld": {
+    "message": "The text is in the field, you can copy it from there."
+  },
+  "buch_ausgeben": {
+    "message": "Export"
+  },
+  "buch_ausgegeben": {
+    "message": "Done, the text is in the field."
+  },
+  "buch_datei": {
+    "message": "Save the activity log as a file"
+  },
+  "buch_datei_bereit": {
+    "message": "The activity log is ready as a file."
+  },
+  "buch_ersatz_leer": {
+    "message": "There is nothing in the activity log yet. As soon as an agent does something from outside, a line appears here."
+  },
+  "buch_frist": {
+    "message": "An entry stays for this many days"
+  },
+  "buch_frist_gemerkt": {
+    "message": "Saved, $1 entries are gone."
+  },
+  "buch_frist_nicht_gemerkt": {
+    "message": "The retention time could not be saved just now, please try again."
+  },
+  "buch_frist_speichern": {
+    "message": "Save the retention time"
+  },
+  "buch_frist_ungueltig": {
+    "message": "Enter a number between 0 and $1."
+  },
+  "buch_json_feld": {
+    "message": "JSON of the activity log"
+  },
+  "buch_leer": {
+    "message": "Nothing here yet. No agent has been at your browser so far."
+  },
+  "buch_nicht_geladen": {
+    "message": "The log could not be read just now, please try again."
+  },
+  "buch_oeffnen": {
+    "message": "Activity log …"
+  },
+  "buch_titel": {
+    "message": "Activity log"
+  },
+  "buch_zurueck": {
+    "message": "Back"
+  },
+  "chat_modus_gruppe": {
+    "message": "Answer mode"
+  },
+  "chat_modus_normal": {
+    "message": "Normal Mode."
+  },
+  "chat_modus_smartr": {
+    "message": "SMarTr Mode."
+  },
+  "chat_noch_beschaeftigt": {
+    "message": "I am still working on your previous question. Please wait until the answer is here."
+  },
+  "chat_schritt_error": {
+    "message": "Trouble at the agent"
+  },
+  "chat_schritt_info": {
+    "message": "Working"
+  },
+  "chat_schritt_response": {
+    "message": "Says"
+  },
+  "chat_schritt_thinking": {
+    "message": "Thinking"
+  },
+  "chat_schritt_tool": {
+    "message": "Tool"
+  },
+  "chat_schritt_werkzeug": {
+    "message": "Tool $1"
+  },
+  "chat_warten": {
+    "message": "Nobody is working …"
+  },
+  "chat_zeile": {
+    "message": "$1: $2"
+  },
+  "demo_abbruch": {
+    "message": "All right, then I will leave the rest. The connection stays."
+  },
+  "demo_fertig_ansage": {
+    "message": "Task done."
+  },
+  "demo_fertig_blase": {
+    "message": "That was everything I found here. Tell me what I should do with it."
+  },
+  "demo_frage": {
+    "message": "Show me what is clickable here."
+  },
+  "demo_gefunden_eins": {
+    "message": "I found 1 control and will show it to you."
+  },
+  "demo_gefunden_viele": {
+    "message": "I found $1 controls and will show them to you one after another."
+  },
+  "demo_nichts_ansage": {
+    "message": "I find nothing clickable in the visible area."
+  },
+  "demo_nichts_blase": {
+    "message": "I find nothing clickable in the visible area of this page right now."
+  },
+  "demo_schritt_frage": {
+    "message": "Step $1 of $2: show one control."
+  },
+  "demo_schritt_gezeigt": {
+    "message": "Step $1 of $2 shown."
+  },
+  "dialog_abbrechen": {
+    "message": "Cancel"
+  },
+  "dialog_abgebrochen": {
+    "message": "Cancelled. No connection was set up."
+  },
+  "dialog_abgebrochen_kennwort": {
+    "message": "Cancelled. No connection was created."
+  },
+  "dialog_abgebrochen_laufend": {
+    "message": "Cancelled. The running connection stays, Stop is still there."
+  },
+  "dialog_anmeldung_abbrechen": {
+    "message": "Cancel"
+  },
+  "dialog_anmeldung_geoeffnet": {
+    "message": "I opened the sign-in page. Sign in there and then come back here."
+  },
+  "dialog_anmeldung_hinweis": {
+    "message": "You never type your password here in the extension. That is on purpose and it stays that way."
+  },
+  "dialog_anmeldung_nochmal": {
+    "message": "I am signed in now, try again"
+  },
+  "dialog_anmeldung_oeffnen": {
+    "message": "Open the sign-in page"
+  },
+  "dialog_anmeldung_text": {
+    "message": "For a connection I need to know who you are. Please sign in to the cloud, in a tab of its own, with a real address bar."
+  },
+  "dialog_anmeldung_titel": {
+    "message": "Please sign in first"
+  },
+  "dialog_ansage": {
+    "message": "Connection with this website. To connect, press Connect. You can change duration and level beforehand. You approve every single step."
+  },
+  "dialog_antrag": {
+    "message": "I am requesting: the agent may $3 $2 $1. "
+  },
+  "dialog_antrag_ende": {
+    "message": "After that the connection ends by itself. "
+  },
+  "dialog_antrag_offen": {
+    "message": "I renew the permission myself until you press Stop. "
+  },
+  "dialog_antrag_schritt": {
+    "message": "You approve every single step. "
+  },
+  "dialog_antrag_server": {
+    "message": "How much the server really grants, I will tell you when connecting."
+  },
+  "dialog_bereich": {
+    "message": "in this one tab"
+  },
+  "dialog_dauer_1800": {
+    "message": "30 minutes"
+  },
+  "dialog_dauer_3600": {
+    "message": "60 minutes"
+  },
+  "dialog_dauer_600": {
+    "message": "10 minutes"
+  },
+  "dialog_dauer_gruppe": {
+    "message": "Duration of the connection"
+  },
+  "dialog_dauer_lang": {
+    "message": "for $1"
+  },
+  "dialog_dauer_legende": {
+    "message": "How long?"
+  },
+  "dialog_dauer_offen": {
+    "message": "until you end it"
+  },
+  "dialog_dauer_unbegrenzt": {
+    "message": "Open ended, until you stop it"
+  },
+  "dialog_einstellungen_aendern": {
+    "message": "Change duration and scope"
+  },
+  "dialog_erklaer_ansage": {
+    "message": "Understood. Nothing was changed."
+  },
+  "dialog_erklaer_zurueck": {
+    "message": "Back"
+  },
+  "dialog_fussnote": {
+    "message": "When connecting, Chrome asks for permission for this page. Usually you need to do no more than that. If our service asks a question, a separate tab opens for it. When you finish, SMarTrChrome gives everything back."
+  },
+  "dialog_geltung_legende": {
+    "message": "Where does this apply?"
+  },
+  "dialog_geltung_rest": {
+    "message": "The agent does not see other tabs and other pages."
+  },
+  "dialog_geltung_stark": {
+    "message": "This one tab only"
+  },
+  "dialog_kennwort_abbrechen": {
+    "message": "Cancel"
+  },
+  "dialog_kennwort_anfrage": {
+    "message": "I am requesting permission …"
+  },
+  "dialog_kennwort_ansage": {
+    "message": "Pass phrase: $1. Compare it in the new tab before you approve."
+  },
+  "dialog_kennwort_da": {
+    "message": "Permission granted. I am setting up the connection."
+  },
+  "dialog_kennwort_erneut": {
+    "message": "Open the permission page again"
+  },
+  "dialog_kennwort_hinweis": {
+    "message": "The same pass phrase is shown in the new tab. If it does not match there, approve nothing."
+  },
+  "dialog_kennwort_lage": {
+    "message": "A tab will open in a moment. Compare the pass phrase there and approve the connection."
+  },
+  "dialog_kennwort_marke": {
+    "message": "Pass phrase: $1"
+  },
+  "dialog_kennwort_titel": {
+    "message": "Pass phrase for the permission"
+  },
+  "dialog_kennwort_warten": {
+    "message": "I am waiting for your approval in the other tab."
+  },
+  "dialog_kennwort_warten_lang": {
+    "message": "I am still waiting. Approve the connection in the other tab or cancel here."
+  },
+  "dialog_mehr_ansage": {
+    "message": "Duration and level. Change what you like, then press Connect."
+  },
+  "dialog_stufe_auskunft": {
+    "message": "You approve every single step. The agent never types passwords. Signing in you do yourself. Your choice is remembered and preselected next time."
+  },
+  "dialog_stufe_gruppe": {
+    "message": "What the agent may do"
+  },
+  "dialog_stufe_legende": {
+    "message": "What may the agent do?"
+  },
+  "dialog_stufe_read": {
+    "message": "Watch only, read, scroll, point"
+  },
+  "dialog_stufe_read_ansage": {
+    "message": "It only watches."
+  },
+  "dialog_stufe_read_tut": {
+    "message": "watch and point things out to you"
+  },
+  "dialog_stufe_voll": {
+    "message": "Full access, operate and keep working on its own"
+  },
+  "dialog_stufe_voll_ansage": {
+    "message": "It keeps working on its own and does not ask at every step. Signing in you do yourself."
+  },
+  "dialog_stufe_voll_tut": {
+    "message": "click and type for you and keep working on its own"
+  },
+  "dialog_stufe_write": {
+    "message": "Operate, additionally click and type"
+  },
+  "dialog_stufe_write_ansage": {
+    "message": "It may click and type for you. Signing in you do yourself."
+  },
+  "dialog_stufe_write_tut": {
+    "message": "click, type and fill in for you"
+  },
+  "dialog_titel": {
+    "message": "Connection via SMarTrLink"
+  },
+  "dialog_verbinde": {
+    "message": "I am setting up the connection …"
+  },
+  "dialog_verbinden": {
+    "message": "Connect"
+  },
+  "dialog_zweck_ort": {
+    "message": "the open page"
+  },
+  "dialog_zweck_read": {
+    "message": "Read along on $1 and point things out to you"
+  },
+  "dialog_zweck_write": {
+    "message": "Click and type for you on $1"
+  },
+  "ext_beschreibung": {
+    "message": "SMarTrAgents in your browser. The agent reads, points, clicks, types and selects, you approve every step. Never passwords."
+  },
+  "ext_name": {
+    "message": "SMarTrChrome Beta"
+  },
+  "ext_notbremse": {
+    "message": "Emergency stop, end the agent session at once"
+  },
+  "ext_symbol_titel": {
+    "message": "SMarTrChrome, open Nobody"
+  },
+  "fehler_abgemeldet": {
+    "message": "You are signed out of the cloud now. Sign in there, then we can carry on."
+  },
+  "fehler_anmeldung_abgelaufen": {
+    "message": "Your sign-in is no longer valid. Please sign in to the cloud again, then we can carry on talking."
+  },
+  "fehler_bindung": {
+    "message": "The connection is up, but I could not hand it to the agent. The example task below still works. For tasks in the chat, please set the connection up again."
+  },
+  "fehler_bindung_ausweis": {
+    "message": "The connection is up, but I could not hand it to the agent: your sign-in is missing right now. Sign in to the cloud or reload the SMarTrAgents tab, then please set the connection up again."
+  },
+  "fehler_buch_ausgabe": {
+    "message": "I could not export the activity log just now. Please try again in a moment."
+  },
+  "fehler_dienst_stumm": {
+    "message": "The background service of the extension did not answer. That is on the extension, not on you. Restart Chrome, then it works again."
+  },
+  "fehler_intern": {
+    "message": "Something went wrong inside the extension. Your question did not arrive. That is on us, not on you."
+  },
+  "fehler_kein_erfolg": {
+    "message": "That did not work. No connection was created."
+  },
+  "fehler_neuladen": {
+    "message": "I could not reload the SMarTrAgents tab. Please switch there yourself and press F5."
+  },
+  "fehler_rahmen": {
+    "message": "I could not show the frame on this page."
+  },
+  "fehler_rahmen_sicherheit": {
+    "message": "I could not show the frame on this page. For safety reasons I do not set up a session then."
+  },
+  "fehler_schritt": {
+    "message": "The step did not work."
+  },
+  "fehler_verlaengern": {
+    "message": "I could not extend the connection. It ends at the time shown. You can connect again afterwards."
+  },
+  "freigabe_abgelehnt_ansage": {
+    "message": "Declined. This step does not happen, the connection stays. To finish, press Stop."
+  },
+  "freigabe_abgelehnt_knopf": {
+    "message": "Try again"
+  },
+  "freigabe_abgelehnt_text": {
+    "message": "You declined the permission for this page. Without it I cannot read the page. That is fine, you can try again any time."
+  },
+  "freigabe_abgelehnt_titel": {
+    "message": "Permission declined"
+  },
+  "freigabe_frage_ansage": {
+    "message": "$1 Approve or decline?"
+  },
+  "freigabe_ja": {
+    "message": "Approve"
+  },
+  "freigabe_nein": {
+    "message": "Decline"
+  },
+  "freigabe_ohne_uhr_ansage": {
+    "message": "I do not know how much time you have, so answer right away."
+  },
+  "freigabe_ohne_uhr_zeile": {
+    "message": "How long the agent still waits, I cannot tell here."
+  },
+  "freigabe_rest_eine": {
+    "message": "1 second left for your answer."
+  },
+  "freigabe_rest_gleich": {
+    "message": "The time for this answer is nearly up."
+  },
+  "freigabe_rest_viele": {
+    "message": "$1 seconds left for your answer."
+  },
+  "freigabe_standardfrage": {
+    "message": "The agent would like to carry out a step."
+  },
+  "freigabe_zurueckgezogen_ansage": {
+    "message": "The agent did not wait any longer. This step did not happen."
+  },
+  "freigabe_zurueckgezogen_blase": {
+    "message": "I did not wait for your answer any longer. This step did not happen. Tell me whether I should try once more."
+  },
+  "kopf_aktiv": {
+    "message": "Active"
+  },
+  "kopf_chip_angemeldet": {
+    "message": "You are signed in; account and credit are connected. No control session is running right now. Open the page the agent should work on and press Connect to this tab there."
+  },
+  "kopf_chip_getrennt": {
+    "message": "There is no connection. The agent can see nothing and do nothing on this page."
+  },
+  "kopf_chip_sitzung": {
+    "message": "The agent is on this tab: $1. The permission ends with the session and is handed back."
+  },
+  "kopf_cloud_sitzung": {
+    "message": "Cloud session active:"
+  },
+  "kopf_eingabe_marke": {
+    "message": "Message to Nobody"
+  },
+  "kopf_einstellungen_oeffnen": {
+    "message": "Change duration and scope"
+  },
+  "kopf_fusszeile": {
+    "message": "Esc twice = stop at once. Also Alt+Shift+S."
+  },
+  "kopf_guthaben": {
+    "message": "Credit: $1 GT"
+  },
+  "kopf_guthaben_keine": {
+    "message": "Credit: not signed in"
+  },
+  "kopf_guthaben_knapp": {
+    "message": "Careful, your credit is running low: $1 GT left."
+  },
+  "kopf_guthaben_laedt": {
+    "message": "Credit: fetching …"
+  },
+  "kopf_guthaben_leer": {
+    "message": "Your credit is used up. You can top up in the cloud."
+  },
+  "kopf_guthaben_uebergabe": {
+    "message": "Credit: sign-in still missing"
+  },
+  "kopf_leer_rede": {
+    "message": "Hello. I am Nobody. Tell me what you need."
+  },
+  "kopf_leer_rest": {
+    "message": ", everything after that I do."
+  },
+  "kopf_leer_stark": {
+    "message": "Signing in you do yourself"
+  },
+  "kopf_menue": {
+    "message": "Menu"
+  },
+  "kopf_menue_beenden": {
+    "message": "End the connection"
+  },
+  "kopf_menue_sicht": {
+    "message": "Large visibility"
+  },
+  "kopf_menue_verbinden": {
+    "message": "Set up a connection …"
+  },
+  "kopf_menue_vorlesen": {
+    "message": "Read aloud"
+  },
+  "kopf_menue_vorlesen_alles": {
+    "message": "Read everything aloud"
+  },
+  "kopf_menue_vorlesen_aus": {
+    "message": "Off"
+  },
+  "kopf_menue_vorlesen_sicher": {
+    "message": "Important announcements only"
+  },
+  "kopf_name": {
+    "message": "Nobody"
+  },
+  "kopf_neues_gespraech": {
+    "message": "New conversation"
+  },
+  "kopf_neues_gespraech_ansage": {
+    "message": "New conversation. The connection stays as it is."
+  },
+  "kopf_nicht_verbunden": {
+    "message": "Not connected"
+  },
+  "kopf_nichts_vorzulesen": {
+    "message": "There is nothing to read aloud yet."
+  },
+  "kopf_protokoll_titel": {
+    "message": "What the agent is doing"
+  },
+  "kopf_schon_verbunden": {
+    "message": "A connection is already running. End it with Stop, then you can set up a new one."
+  },
+  "kopf_senden": {
+    "message": "Send"
+  },
+  "kopf_sicht_an": {
+    "message": "Large visibility on."
+  },
+  "kopf_sicht_aus": {
+    "message": "Large visibility off."
+  },
+  "kopf_stopp": {
+    "message": "Stop"
+  },
+  "kopf_stufe_read": {
+    "message": "Watch only"
+  },
+  "kopf_stufe_voll": {
+    "message": "Full access"
+  },
+  "kopf_stufe_vorfuehrung": {
+    "message": "Demo"
+  },
+  "kopf_stufe_write": {
+    "message": "Operate"
+  },
+  "kopf_tabliste_titel": {
+    "message": "Another tab"
+  },
+  "kopf_titel": {
+    "message": "SMarTrChrome, Nobody"
+  },
+  "kopf_trennen": {
+    "message": "Disconnect"
+  },
+  "kopf_verbinden_hinweis": {
+    "message": "for the tab you have open right now"
+  },
+  "kopf_verbinden_tab": {
+    "message": "Connect to this tab"
+  },
+  "kopf_verlauf_marke": {
+    "message": "Conversation with Nobody"
+  },
+  "kopf_vorfuehrung": {
+    "message": "Just demonstrate, no server, no agent"
+  },
+  "kopf_vorlesen_alles_ansage": {
+    "message": "I read everything aloud."
+  },
+  "kopf_vorlesen_aus_ansage": {
+    "message": "Reading aloud is off."
+  },
+  "kopf_vorlesen_knopf": {
+    "message": "Read the last answer aloud"
+  },
+  "kopf_vorlesen_sicher_ansage": {
+    "message": "I now read only important announcements aloud."
+  },
+  "kopf_vorschlag": {
+    "message": "Show me what is clickable here"
+  },
+  "kopf_zustand_aktiv": {
+    "message": "Active · $1"
+  },
+  "kopf_zustand_angemeldet": {
+    "message": "Signed in · ready"
+  },
+  "kopf_zustand_vorfuehrung": {
+    "message": "Demo · $1"
+  },
+  "kopf_zustand_warte": {
+    "message": "Waiting for your approval"
+  },
+  "matrix_agent_adresse": {
+    "message": "Address for $1"
+  },
+  "matrix_agent_dazu": {
+    "message": "Add the address"
+  },
+  "matrix_agent_leer": {
+    "message": "Nothing is set for this agent yet."
+  },
+  "matrix_agenten": {
+    "message": "What a single agent may do where"
+  },
+  "matrix_domain_dazu": {
+    "message": "Add the address"
+  },
+  "matrix_domain_neu": {
+    "message": "Add an address"
+  },
+  "matrix_domain_weg": {
+    "message": "Remove the address"
+  },
+  "matrix_domains": {
+    "message": "Addresses where more may run without asking"
+  },
+  "matrix_domains_leer": {
+    "message": "No address yet. Without an entry the extension asks about everything, and that is the safe side."
+  },
+  "matrix_einleitung": {
+    "message": "Everything here starts out off. What you switch on applies only to the address next to it."
+  },
+  "matrix_gespeichert": {
+    "message": "Saved."
+  },
+  "matrix_speichern": {
+    "message": "Save the setting"
+  },
+  "matrix_sperrliste": {
+    "message": "Addresses that stay off limits, one per line"
+  },
+  "matrix_steht_gesperrt": {
+    "message": "This address is on your blocklist."
+  },
+  "matrix_titel": {
+    "message": "What may run without asking"
+  },
+  "modus_assist": {
+    "message": "Think along"
+  },
+  "modus_assist_auskunft": {
+    "message": "Reading, clicking, typing and scrolling I do on my own, everything else I put to you first."
+  },
+  "modus_auto": {
+    "message": "On its own"
+  },
+  "modus_auto_auskunft": {
+    "message": "On top of that I do what you have explicitly enabled for this website, without asking."
+  },
+  "modus_manual": {
+    "message": "Every step one by one"
+  },
+  "modus_manual_auskunft": {
+    "message": "I ask you before every step, even before reading a page."
+  },
+  "modus_riegel": {
+    "message": "Payments, passwords, deletions, files, browser permissions and CAPTCHAs I put to you in every mode, including the one where I work on my own."
+  },
+  "modus_titel": {
+    "message": "How much should I do on my own?"
+  },
+  "notaus_esc": {
+    "message": "Stopped with Escape Escape. The agent is no longer in control."
+  },
+  "notaus_schild": {
+    "message": "Stopped with the button in the tab. The agent is no longer in control."
+  },
+  "notaus_seitenleiste": {
+    "message": "Stopped. The agent is no longer in control."
+  },
+  "notaus_tastenkuerzel": {
+    "message": "Stopped with the keyboard shortcut. The agent is no longer in control."
+  },
+  "overlay_angriff": {
+    "message": "This page keeps removing the visible marker, so the session has been ended."
+  },
+  "overlay_gestoppt": {
+    "message": "STOPPED, the agent is no longer in control"
+  },
+  "overlay_kontext_weg": {
+    "message": "The connection to the extension is gone, so the session has ended anyway."
+  },
+  "overlay_modus_assist": {
+    "message": "Assisted"
+  },
+  "overlay_modus_auto": {
+    "message": "Automatic"
+  },
+  "overlay_modus_manual": {
+    "message": "Manual"
+  },
+  "overlay_notaus": {
+    "message": "STOP"
+  },
+  "overlay_notaus_marke": {
+    "message": "Stop, end the control right now"
+  },
+  "overlay_schild": {
+    "message": "SMarTrAgent is controlling this tab. Esc Esc = stop"
+  },
+  "overlay_schild_grund": {
+    "message": "SMarTrAgent is controlling this tab, Esc Esc = stop"
+  },
+  "overlay_schild_vorfuehrung": {
+    "message": "Demo without an agent. Esc Esc = stop"
+  },
+  "overlay_schild_zeile": {
+    "message": "$1, $2"
+  },
+  "protokoll_abgelaufen": {
+    "message": "Timed out: the agent stopped waiting for the answer"
+  },
+  "protokoll_abgelehnt": {
+    "message": "Declined: this step does not happen"
+  },
+  "protokoll_demo_fertig": {
+    "message": "Done: all elements found have been shown"
+  },
+  "protokoll_erledigt": {
+    "message": "Done: $1"
+  },
+  "protokoll_lesen": {
+    "message": "Reading the page: collecting the visible controls"
+  },
+  "protokoll_nicht_ausgefuehrt": {
+    "message": "Not carried out: $1"
+  },
+  "protokoll_verlaengert": {
+    "message": "Extended: the permission carries on"
+  },
+  "protokoll_zeigen": {
+    "message": "Pointing at “$1” ($2, $3 of $4)"
+  },
+  "sitzung_code_marke": {
+    "message": "Session code $1"
+  },
+  "sitzung_dauer_gekuerzt": {
+    "message": "You chose $1, what you got is $2."
+  },
+  "sitzung_eine_minute": {
+    "message": "One minute left. After that the connection ends by itself."
+  },
+  "sitzung_ende_abgelaufen": {
+    "message": "The session has ended. I handed the permission back."
+  },
+  "sitzung_ende_nutzer": {
+    "message": "Finished. I handed the permission back."
+  },
+  "sitzung_ende_verloren": {
+    "message": "The connection broke off. I handed the permission back."
+  },
+  "sitzung_haende_read": {
+    "message": "I can see this tab now: ask me what is on the page, or have me point things out."
+  },
+  "sitzung_haende_write": {
+    "message": "I have hands for this tab now: tell me what to click, fill in or look up. You approve every single step."
+  },
+  "sitzung_leerlauf": {
+    "message": "Without a task the connection ends by itself after $1."
+  },
+  "sitzung_schritt_auto": {
+    "message": "I keep working on my own and do not ask at every step. "
+  },
+  "sitzung_schritt_einzeln": {
+    "message": "I ask you before every step. "
+  },
+  "sitzung_verbunden_ansage": {
+    "message": "Connected. $1The agent is on this tab now. About $2 minutes left. $3 Escape twice ends it at once."
+  },
+  "sitzung_verbunden_blase": {
+    "message": "Connected. $1I am here for you for about $2 more minutes."
+  },
+  "sitzung_zwei_minuten": {
+    "message": "Two minutes left."
+  },
+  "sperre_browser_knopf": {
+    "message": "Understood"
+  },
+  "sperre_browser_text": {
+    "message": "I cannot read this kind of page. It belongs to the browser itself. Open the page I should read for you in a normal tab and press Connect to this tab there."
+  },
+  "sperre_browser_titel": {
+    "message": "This page belongs to the browser"
+  },
+  "sperre_cloud_knopf": {
+    "message": "Understood"
+  },
+  "sperre_cloud_text": {
+    "message": "I get your sign-in from this page automatically; account and credit are connected, there is nothing for you to do. I am only not allowed to WORK on the SMarTrAgents page itself. That is on purpose, so that nobody can grant themselves permission through this page. Open the page I should operate or read for you in another tab and press Connect to this tab there."
+  },
+  "sperre_cloud_titel": {
+    "message": "I do not work here, we are connected all the same"
+  },
+  "sprache_code": {
+    "message": "en"
+  },
+  "sprache_sprechcode": {
+    "message": "en-US"
+  },
+  "start_agent": {
+    "message": "At work:"
+  },
+  "start_aktualisieren": {
+    "message": "Refresh the list"
+  },
+  "start_leer": {
+    "message": "There is no tab right now that I can connect to."
+  },
+  "start_stand_frei": {
+    "message": "Pick a tab, then off we go."
+  },
+  "start_stand_verbunden": {
+    "message": "Connected to"
+  },
+  "start_tab_gesperrt": {
+    "message": "This tab has changed since the list was built, please refresh the list."
+  },
+  "start_tabs_nicht_geladen": {
+    "message": "The list of tabs could not be fetched just now, please refresh it."
+  },
+  "start_titel": {
+    "message": "Your open tabs"
+  },
+  "start_trennen": {
+    "message": "End the connection"
+  },
+  "start_trennen_ging_nicht": {
+    "message": "Ending did not get through just now, please try again."
+  },
+  "start_verbinden": {
+    "message": "Connect"
+  },
+  "start_verbinden_ging_nicht": {
+    "message": "Connecting did not get through just now, please try again."
+  },
+  "start_verbinden_mit": {
+    "message": "Connect to $1"
+  },
+  "tabliste_leer_text": {
+    "message": "There is no other tab open right now that I could work on. Open the page in question in a tab; after that it appears here."
+  },
+  "tabliste_leer_titel": {
+    "message": "Other windows"
+  },
+  "vorfuehrung_ansage": {
+    "message": "Demo started. No agent is connected. Ten minutes."
+  },
+  "vorfuehrung_blase": {
+    "message": "This is a demo without a server. No agent is connected, nothing is being controlled. You only see what this extension displays."
+  },
+  "werkbank_ablauf_oeffnen": {
+    "message": "Open"
+  },
+  "werkbank_ansage": {
+    "message": "Rules and workflows. Here you set per website what may run without asking."
+  },
+  "werkbank_aufnahme_aus": {
+    "message": "No recording is running."
+  },
+  "werkbank_aufnahme_fertig": {
+    "message": "Recorded, $1 steps are here now as a new workflow."
+  },
+  "werkbank_aufnahme_laeuft": {
+    "message": "The recording is running. Now do in the tab what the workflow should be able to do."
+  },
+  "werkbank_aufnahme_leer": {
+    "message": "The recording has ended, nothing was recorded."
+  },
+  "werkbank_aufnahme_start": {
+    "message": "Start recording"
+  },
+  "werkbank_aufnahme_stop": {
+    "message": "Stop recording"
+  },
+  "werkbank_aufnahme_titel": {
+    "message": "Recording"
+  },
+  "werkbank_ausgabe_im_feld": {
+    "message": "The text is in the field, you can copy it from there."
+  },
+  "werkbank_ausgeben": {
+    "message": "Export all"
+  },
+  "werkbank_ausgegeben": {
+    "message": "Done, the text is in the field."
+  },
+  "werkbank_austausch_titel": {
+    "message": "Save and restore"
+  },
+  "werkbank_beschreibung": {
+    "message": "Description"
+  },
+  "werkbank_eingelesen": {
+    "message": "Imported, $1 workflows are here now."
+  },
+  "werkbank_einlesen": {
+    "message": "Import from the field"
+  },
+  "werkbank_einzeln_ausgeben": {
+    "message": "Export this workflow"
+  },
+  "werkbank_ersatz_leer": {
+    "message": "Nothing is enabled for this website yet, and there are no saved workflows either."
+  },
+  "werkbank_geloescht": {
+    "message": "Deleted."
+  },
+  "werkbank_gesichert": {
+    "message": "Saved."
+  },
+  "werkbank_hoch": {
+    "message": "Move up"
+  },
+  "werkbank_json_feld": {
+    "message": "JSON of the workflows"
+  },
+  "werkbank_kopieren": {
+    "message": "Duplicate"
+  },
+  "werkbank_laeuft": {
+    "message": "The workflow is on its way, you approve every step as usual."
+  },
+  "werkbank_leer": {
+    "message": "There is no workflow yet. Record one, then it appears here."
+  },
+  "werkbank_liste_titel": {
+    "message": "Your workflows"
+  },
+  "werkbank_loeschen": {
+    "message": "Delete"
+  },
+  "werkbank_name": {
+    "message": "Name"
+  },
+  "werkbank_nicht_geladen": {
+    "message": "The workflows could not be read just now, please try again."
+  },
+  "werkbank_nicht_gestartet": {
+    "message": "The workflow did not get through just now, please try again."
+  },
+  "werkbank_oeffnen": {
+    "message": "Rules and workflows …"
+  },
+  "werkbank_platzhalter": {
+    "message": "Values the workflow needs, separated by commas"
+  },
+  "werkbank_runter": {
+    "message": "Move down"
+  },
+  "werkbank_schritt_weg": {
+    "message": "Remove this one"
+  },
+  "werkbank_spielen": {
+    "message": "Play"
+  },
+  "werkbank_titel": {
+    "message": "Rules and workflows"
+  },
+  "werkbank_weg": {
+    "message": "This workflow does not exist any more."
+  },
+  "werkbank_werte": {
+    "message": "Values for this run, name equals value, one per line"
+  },
+  "werkbank_zurueck": {
+    "message": "Back"
+  },
+  "zeit_eine_minute": {
+    "message": "one minute"
+  },
+  "zeit_minuten": {
+    "message": "$1 minutes"
+  },
+  "zeit_sekunden": {
+    "message": "$1 seconds"
+  }
+}

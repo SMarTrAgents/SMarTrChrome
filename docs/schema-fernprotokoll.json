@@ -1,0 +1,295 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartragents.ai/schema/smartrchrome/fernprotokoll-v1.json",
+  "title": "SMarTrChrome Fernprotokoll v1",
+  "description": "Die Rahmen, die zwischen Relay und Erweiterung im Betrieb laufen: der Befehl vom Relay an die Erweiterung und die Antwort der Erweiterung. Massgeblich ist der Code, nicht dieses Schema: BEFEHLE und parameterPruefen() in src/net/befehle.js entscheiden, was angenommen wird, und befehlAusfuehren() in src/net/ausfuehrer.js baut die Antwort. DRAHTFORMAT.md bleibt die Wahrheitsquelle für den Handschlag, die Ausweise und die Schliesscodes, dieses Schema beschreibt ausschliesslich Abschnitt 5.4, die Rahmen im Betrieb.",
+  "$comment": "Quelle: src/net/befehle.js (BEFEHLE, parameterPruefen, GRENZEN, SCROLL_RICHTUNGEN, SCROLL_MENGEN, WARTE_BEDINGUNGEN, BILD_ANLAESSE, REF_MUSTER, WORKFLOW_ID_MUSTER, PARAM_NAME_MUSTER) und src/net/ausfuehrer.js (gelungen, misslungen, meta, parameterRahmen, einschleusungAnhaengen), dazu src/net/matrix.js (AGENTEN). Stand 14.08.2026.",
+  "oneOf": [
+    { "$ref": "#/$defs/befehlsrahmen" },
+    { "$ref": "#/$defs/ergebnisrahmen" }
+  ],
+  "$defs": {
+    "kennung": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "Die Korrelationskennung des Auftrags. Der Relay setzt sie selbst, wenn der Agent keine mitgibt, und wartet unter ihr auf die Antwort."
+    },
+    "ref": {
+      "type": "string",
+      "pattern": "^e[0-9]{1,4}$",
+      "description": "Referenz eines Elements aus der letzten Wahrnehmung.",
+      "examples": ["e12"]
+    },
+    "befehlsname": {
+      "enum": [
+        "readPage", "snapshot", "get_state", "scroll", "highlight",
+        "extract", "waitFor", "screenshot", "navigate", "back",
+        "click", "type", "select", "run_workflow"
+      ],
+      "description": "Geschlossene Positivliste. Was nicht darin steht, wird nicht ausgeführt, ganz gleich, was der Relay für erlaubt hält. newTab, closeTab und propose sind ersatzlos gestrichen."
+    },
+    "agent": {
+      "enum": [
+        "SMarTrCEO", "SMarTrItgott", "SMarTrMarketing", "SMarTrContent",
+        "SMarTrHRGott", "SMarTrTrader", "SMarTrInfluencer", "SMarTrSocialMedia",
+        "SMarTrPenTester"
+      ],
+      "description": "Die Agentenkennung. Sie kommt vom Relay, nie vom Client, und wird gegen diese Positivliste gehalten. Ein fremder Name wird mit agent_not_permitted abgelehnt. Fehlt das Feld ganz, läuft der Befehl weiter: Der Alltags-Ausweis des Sitzungseigentümers trägt keinen Agentennamen, dort fährt der Mensch selbst."
+    },
+    "befehlsrahmen": {
+      "type": "object",
+      "title": "Befehl, Relay an Erweiterung",
+      "required": ["id", "cmd"],
+      "additionalProperties": false,
+      "not": { "required": ["type"] },
+      "$comment": "Die Felder access, duration, mode, allow und step_mode darf der Client im Ausweisrahmen nicht selbst setzen (AUTH_RAHMEN_VERBOTEN, DRAHTFORMAT 5.3). Sie gehören nicht in diesen Rahmen und stehen deshalb hier nicht.",
+      "properties": {
+        "id": { "$ref": "#/$defs/kennung" },
+        "cmd": { "$ref": "#/$defs/befehlsname" },
+        "agent": { "$ref": "#/$defs/agent" },
+        "ref": { "$ref": "#/$defs/ref" },
+        "refs": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/ref" },
+          "description": "extract: die Referenzen, die abgelesen werden sollen. Über GRENZEN.extraktRefs (60) hinaus wird gekürzt und die Zahl der Ausgelassenen gemeldet."
+        },
+        "region": { "$ref": "#/$defs/ref" },
+        "fields": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 },
+          "description": "extract: die gewünschten Feldnamen, höchstens GRENZEN.extraktFelder (10)."
+        },
+        "snapshotEpoch": {
+          "type": "string",
+          "description": "Die Epoche der Wahrnehmung, aus der die Referenz stammt. Passt sie nicht mehr, kommt stale_ref zurück."
+        },
+        "url": {
+          "type": "string",
+          "pattern": "^https?://(?![^/?#]*@)[^\\s]+$",
+          "description": "navigate: die Zieladresse. Nur https und http, kein Benutzername im Ort. Sie wird VOR der Freigabefrage gegen den freigegebenen Bereich gehalten, sonst bestätigte der Mensch eine Adresse, die die Erweiterung danach selbst ablehnt."
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 2000,
+          "description": "type: der einzutippende Text, auch der leere Text ist einer. Grenze ist GRENZEN.tippZeichen."
+        },
+        "clear": { "type": "boolean", "default": true },
+        "submit": { "type": "boolean", "default": false },
+        "value": { "type": "string", "minLength": 1 },
+        "label": { "type": "string", "minLength": 1 },
+        "index": { "type": "integer", "minimum": 0, "maximum": 999 },
+        "direction": { "enum": ["down", "up", "top", "bottom"] },
+        "amount": {
+          "oneOf": [
+            { "type": "number", "exclusiveMinimum": 0, "maximum": 3000 },
+            { "enum": ["page", "half"] }
+          ],
+          "description": "scroll: Pixelzahl bis GRENZEN.scrollPixel oder page beziehungsweise half. Eine Zeichenkette wie \"800\" wird abgelehnt und nicht umgedeutet."
+        },
+        "container": {
+          "type": "string",
+          "description": "Nicht gebaut. Ein eigener Bildlaufbereich wird mit not_supported abgelehnt, statt stattdessen das Fenster zu rollen und Erfolg zu melden."
+        },
+        "includeOffscreen": { "type": "boolean", "default": false },
+        "area": {
+          "const": "viewport",
+          "description": "screenshot: mehr als der sichtbare Ausschnitt geht nicht, jeder andere Wert ergibt not_supported."
+        },
+        "screenshotReason": {
+          "enum": ["canvas", "empty_ax", "repeated_failure", "user_request"],
+          "description": "Pflicht bei screenshot, ohne Vorgabe. Ein Bild ist teuer und zeigt alles, was auf dem Schirm steht, wer es will, muss sagen warum. Fehlt der Anlass, kommt screenshot_not_justified."
+        },
+        "waitSeconds": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "waitFor: gewünschte Wartezeit. Sie wird auf die eigene Frist des Befehls gedeckelt, länger zu warten als der Relay hiesse, die Antwort käme nie."
+        },
+        "textPresent": { "type": "string", "minLength": 1 },
+        "refGone": { "$ref": "#/$defs/ref" },
+        "refVisible": { "$ref": "#/$defs/ref" },
+        "urlMatches": { "type": "string", "minLength": 1 },
+        "idle": { "type": "boolean" },
+        "workflowId": {
+          "type": "string",
+          "pattern": "^wf_[a-z0-9_]{1,40}$",
+          "description": "run_workflow: die Kennung des Ablaufs. Sie heisst auf dem Draht workflowId und ausdrücklich nicht id, weil id im selben flachen Rahmen bereits die Korrelationskennung des Auftrags ist. Wer den Ablauf ebenfalls id nennt, überschreibt die Kennung, unter der der Relay auf die Antwort wartet. Der Ausführer nimmt workflowId, wenn es dasteht, sonst id, und die zweite Lesart bleibt für den lokalen Weg aus der Seitenleiste, auf dem es keine zweite Kennung gibt."
+        },
+        "params": {
+          "type": "object",
+          "maxProperties": 20,
+          "propertyNames": { "pattern": "^[a-zA-Z0-9_]{1,40}$" },
+          "additionalProperties": { "type": "string", "maxLength": 200 },
+          "description": "run_workflow: die Werte für die Platzhalter. Flach und ausschliesslich Zeichenketten. Zahlen und Wahrheitswerte werden abgelehnt und nicht umgedeutet."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "cmd": { "enum": ["highlight", "click"] } }, "required": ["cmd"] },
+          "then": { "required": ["ref"] }
+        },
+        {
+          "if": { "properties": { "cmd": { "const": "type" } }, "required": ["cmd"] },
+          "then": { "required": ["ref", "text"] }
+        },
+        {
+          "if": { "properties": { "cmd": { "const": "select" } }, "required": ["cmd"] },
+          "then": {
+            "required": ["ref"],
+            "oneOf": [
+              { "required": ["value"], "not": { "anyOf": [{ "required": ["label"] }, { "required": ["index"] }] } },
+              { "required": ["label"], "not": { "anyOf": [{ "required": ["value"] }, { "required": ["index"] }] } },
+              { "required": ["index"], "not": { "anyOf": [{ "required": ["value"] }, { "required": ["label"] }] } }
+            ]
+          }
+        },
+        {
+          "if": { "properties": { "cmd": { "const": "navigate" } }, "required": ["cmd"] },
+          "then": { "required": ["url"] }
+        },
+        {
+          "if": { "properties": { "cmd": { "const": "scroll" } }, "required": ["cmd"] },
+          "then": {
+            "anyOf": [{ "required": ["ref"] }, { "required": ["direction"] }],
+            "not": { "required": ["container"] }
+          }
+        },
+        {
+          "if": { "properties": { "cmd": { "const": "extract" } }, "required": ["cmd"] },
+          "then": {
+            "oneOf": [
+              { "required": ["refs"], "not": { "required": ["region"] } },
+              { "required": ["region"], "not": { "required": ["refs"] } }
+            ]
+          }
+        },
+        {
+          "if": { "properties": { "cmd": { "const": "waitFor" } }, "required": ["cmd"] },
+          "then": {
+            "description": "Genau eine Bedingung. Mehrere wären ein Und oder ein Oder, und welches davon, stünde nirgends.",
+            "oneOf": [
+              { "required": ["textPresent"] },
+              { "required": ["refGone"] },
+              { "required": ["refVisible"] },
+              { "required": ["urlMatches"] },
+              { "required": ["idle"] }
+            ]
+          }
+        },
+        {
+          "if": { "properties": { "cmd": { "const": "screenshot" } }, "required": ["cmd"] },
+          "then": { "required": ["screenshotReason"] }
+        },
+        {
+          "if": { "properties": { "cmd": { "const": "run_workflow" } }, "required": ["cmd"] },
+          "then": { "required": ["workflowId"] }
+        },
+        {
+          "if": { "properties": { "cmd": { "enum": ["readPage", "snapshot"] } }, "required": ["cmd"] },
+          "then": {
+            "description": "region gehört zu extract. Hier stillschweigend die ganze Seite zu lesen hiesse, der Agent bekäme mehr, als er verlangt hat, und hielte es für seinen Ausschnitt.",
+            "not": { "required": ["region"] }
+          }
+        }
+      ]
+    },
+    "ergebnisrahmen": {
+      "type": "object",
+      "title": "Ergebnis, Erweiterung an Relay",
+      "required": ["type", "id", "cmd", "success", "meta"],
+      "additionalProperties": false,
+      "description": "Auf jeden Befehl kommt genau ein Ergebnisrahmen. Auch auf einen abgelehnten, auch auf einen, an dem die Erweiterung selbst gescheitert ist. Der Agent auf der anderen Seite wartet, er bekommt immer eine Aussage. Der ganze Rahmen ist auf GRENZEN.rahmenZeichen (128 KiB) gedeckelt, was darüber liegt, wird zu einer Absage mit dem Code rahmen_zu_gross statt zu einem abgeschnittenen Rahmen.",
+      "properties": {
+        "type": { "const": "result" },
+        "id": { "type": "string", "description": "Dieselbe Kennung wie im Befehl. Sie ist das Einzige, woran der Relay diese Antwort wiedererkennt." },
+        "cmd": { "type": "string", "description": "Der Befehlsname. Der Relay protokolliert ihn NICHT aus diesem Feld, weil der Name in der Antwort fälschbar ist." },
+        "success": { "type": "boolean" },
+        "data": {
+          "type": "object",
+          "description": "Nur bei success true, und bei workflow_step_failed zusätzlich zum Fehler. Der Inhalt hängt am Befehl: snapshot beim Lesen, url und title beim Zustand, extracted beim Ablesen, image beim Bild, workflow, stepCount und stepsDone beim Ablauf.",
+          "additionalProperties": true
+        },
+        "error": { "$ref": "#/$defs/fehler" },
+        "meta": { "$ref": "#/$defs/meta" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "success": { "const": false } }, "required": ["success"] },
+          "then": { "required": ["error"] }
+        }
+      ]
+    },
+    "fehler": {
+      "type": "object",
+      "required": ["code", "message", "retryable"],
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{1,39}$",
+          "description": "Die Fehlerkennung. Neu in v3.5: element_covered, guardrail_blocked, step_limit, loop_detected, agent_not_permitted, workflow_not_found, workflow_step_failed. Aus dem Bestand: param_ungueltig, not_supported, stufe_zu_niedrig, grant_required, user_declined, scope_violation_local, screenshot_not_justified, screenshot_zu_gross, rahmen_zu_gross, element_not_found, element_not_visible, option_not_found, region_not_found, nothing_extracted, stale_ref, snapshot_unavailable, seitenskript_fehler, settle_timeout, wait_timeout, idle_not_measurable, navigation_failed, no_history, reason_required, budget_exceeded, busy, session_beendet, tab_gone, tab_nicht_im_vordergrund, client_fehler. Die Liste ist offen geführt, weil eine geschlossene Aufzählung hier eine gültige Antwort zurückweisen würde, sobald ein Code dazukommt.",
+          "examples": ["guardrail_blocked", "element_covered", "loop_detected"]
+        },
+        "message": {
+          "type": "string",
+          "description": "Der Satz für den Menschen. Er wird auf der Agentenseite vorgelesen und bleibt deutsch, auch in der englischen Oberfläche: Er ist Protokolltext, kein Oberflächentext."
+        },
+        "retryable": {
+          "type": "boolean",
+          "description": "Eine Zusage, keine Höflichkeit. Sie heisst: derselbe Aufruf kann beim zweiten Mal gelingen. Ein Geheimfeld, eine Option, die es nicht gibt, eine abgelehnte Freigabe, nichts davon ändert sich durch Wiederholen."
+        },
+        "hint": {
+          "type": "string",
+          "description": "Was stattdessen ginge."
+        }
+      }
+    },
+    "meta": {
+      "type": "object",
+      "required": ["tookMs", "tabId", "clientTime"],
+      "additionalProperties": true,
+      "properties": {
+        "tookMs": { "type": "integer", "minimum": 0 },
+        "tabId": { "type": ["integer", "null"] },
+        "clientTime": { "type": "string", "description": "ISO 8601, Uhr des Browsers." },
+        "truncation": { "type": "boolean", "description": "Der Textbaum war länger als GRENZEN.baumZeichen und wurde gekürzt." },
+        "gedeckelt": { "type": "boolean", "description": "waitFor: die gewünschte Wartezeit lag über der eigenen Frist." },
+        "settled": { "type": "boolean", "description": "navigate und back: die Seite ist nach dem Wechsel zur Ruhe gekommen." },
+        "warnung": {
+          "const": "injection_suspected",
+          "description": "Im Textbaum steht ein Einschleusungsmuster. Der Schritt hat stattgefunden, das Gelesene ist echt, nur seine Herkunft ist verdächtig. Der Modus auto fällt dabei auf assist zurück, die Sitzung endet nicht."
+        },
+        "muster": { "type": "string", "description": "Das getroffene Muster aus UNSERER Liste, nie der Fremdtext, in dem es stand." },
+        "modus": { "enum": ["manual", "assist", "auto"], "description": "Der Modus, der nach dem Verdacht gilt." }
+      }
+    }
+  },
+  "examples": [
+    { "id": "c-7", "cmd": "navigate", "agent": "SMarTrCEO", "url": "https://geizhals.de/x" },
+    { "id": "c-8", "cmd": "run_workflow", "agent": "SMarTrCEO", "workflowId": "wf_ebay_relist", "params": { "artikelnummer": "123456" } },
+    {
+      "type": "result",
+      "id": "c-8",
+      "cmd": "run_workflow",
+      "success": false,
+      "error": {
+        "code": "workflow_step_failed",
+        "message": "Schritt 3 von 5 des Ablaufs \"eBay: Artikel neu einstellen\" ist nicht durchgekommen: Das Element ist verdeckt.",
+        "retryable": false,
+        "hint": "Die mitgelieferte Wahrnehmung zeigt, wie die Seite jetzt aussieht."
+      },
+      "data": {
+        "workflow": { "id": "wf_ebay_relist", "name": "eBay: Artikel neu einstellen" },
+        "step": 3,
+        "stepCount": 5,
+        "type": "click",
+        "description": "Knopf Erneut einstellen",
+        "anchors": ["[data-testid='relist']", "text=Erneut einstellen"],
+        "stepError": { "code": "element_covered", "message": "Über dem Ziel liegt ein anderes Element." }
+      },
+      "meta": { "tookMs": 812, "tabId": 42, "clientTime": "2026-08-14T10:00:00.000Z" }
+    }
+  ]
+}

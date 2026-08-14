@@ -24,6 +24,7 @@ import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 
 const QUELLE = new URL("../content/overlay.js", import.meta.url);
+const WACHE_QUELLE = new URL("../content/klickwache.js", import.meta.url);
 
 /* ------------------------------------------------------------------ *
  * Attrappe des Seitenbaums
@@ -37,11 +38,37 @@ function option(text, wert, { disabled = false } = {}) {
   return { text, textContent: text, value: wert === undefined ? text : wert, disabled, selected: false };
 }
 
+/* Jeder Knoten bekommt seinen eigenen Platz auf dem Schirm.
+ *
+ * Befund vom 14.08.2026: Bis hierher trugen ALLE Attrappen-Knoten dasselbe
+ * Rechteck. Solange niemand am Punkt nachsah, war das gleichgültig; mit der
+ * Verdeckungswache ist es das Gegenteil — bei deckungsgleichen Rechtecken liegt
+ * jedes Element über jedem anderen, und „ist mein Ziel frei" wäre nicht
+ * messbar, sondern immer nein. Deshalb liegen die Knoten jetzt in einem Raster,
+ * dessen Zellen sich nicht berühren: fünf Spalten mit 130 Punkten Abstand bei
+ * 120 Punkten Breite, zwanzig Zeilen mit 40 bei 30. Wer verdecken will, sagt
+ * es ausdrücklich (`rect` und `z`). */
+const RASTER_SPALTEN = 5;
+const RASTER_ZEILEN = 20;
+function platz(nr) {
+  const zelle = nr % (RASTER_SPALTEN * RASTER_ZEILEN);
+  return {
+    left: 10 + (zelle % RASTER_SPALTEN) * 130,
+    top: 20 + Math.floor(zelle / RASTER_SPALTEN) * 40,
+    width: 120,
+    height: 30,
+  };
+}
+
 function knoten(tag, {
   art = "element", // element | bereich | text
   attrs = {},
   text = "",
-  rect = { left: 10, top: 20, width: 120, height: 30 },
+  rect = null,
+  /* Die Stapelebene und die Klicktaubheit — beides braucht die Wache, und
+     beides gibt es im echten Browser auch. */
+  z = 0,
+  klicktaub = false,
   value = undefined,
   type = undefined,
   disabled = false,
@@ -52,9 +79,13 @@ function knoten(tag, {
   bearbeitbar = false,
   umLabel = undefined, // das <label>, das dieses Feld umschließt
 } = {}) {
+  const nr = ++naechsteId;
+  const flaeche = rect || platz(nr);
   const el = {
     __art: art,
     __versteckt: versteckt,
+    __z: z,
+    __klicktaub: klicktaub,
     __wert: value,
     __ereignisse: [], // was auf diesem Element ausgelöst wurde
     __klicks: 0,
@@ -71,13 +102,18 @@ function knoten(tag, {
     isConnected: true,
     isContentEditable: bearbeitbar,
     parentElement: null,
+    /* Die Wache geht über `parentNode` nach oben (und über `host` durch
+       Schattengrenzen). Ohne dieses Feld wäre „der Punkt gehört einem Kind des
+       Ziels" nicht prüfbar — und genau dieser Fall ist der Alltag: Auf dem
+       Knopf liegt seine eigene Beschriftung. */
+    parentNode: null,
     childNodes: text ? [{ nodeType: 3, nodeValue: text }] : [],
-    __id: ++naechsteId,
+    __id: nr,
     getAttribute: (n) => (n in attrs ? String(attrs[n]) : null),
     getBoundingClientRect: () => ({
-      ...rect,
-      bottom: rect.top + rect.height,
-      right: rect.left + rect.width,
+      ...flaeche,
+      bottom: flaeche.top + flaeche.height,
+      right: flaeche.left + flaeche.width,
     }),
     matches: (sel) => {
       if (sel.startsWith("a[href]")) return el.__art === "element";
@@ -227,6 +263,22 @@ function stilAttrappe() {
   };
 }
 
+/* Wer bekäme an dieser Stelle den Klick? Dieselbe Regel wie im Browser: Wer den
+   Punkt überdeckt, kommt in Frage, es gewinnt die höchste Ebene, bei gleicher
+   Ebene der spätere Knoten. Unsichtbares und Klicktaubes nimmt nichts an. */
+function trefferAmPunkt(elemente, x, y) {
+  let bester = null;
+  elemente.forEach((el, i) => {
+    if (!el || el.__versteckt || el.__klicktaub) return;
+    if (el.isConnected === false) return;
+    const r = el.getBoundingClientRect();
+    if (x < r.left || x >= r.right || y < r.top || y >= r.bottom) return;
+    const z = Number(el.__z) || 0;
+    if (!bester || z > bester.z || (z === bester.z && i > bester.i)) bester = { el, z, i };
+  });
+  return bester ? bester.el : null;
+}
+
 function umgebungBauen(elemente, etiketten = []) {
   /* `erzeugt` und `angehaengt` halten fest, WAS das Skript in die fremde
      Seite baut. Ohne diese zwei Listen war der Wirt-Knoten des Overlays
@@ -330,8 +382,24 @@ function umgebungBauen(elemente, etiketten = []) {
            die eigene Anzeige nicht für Bewegung der Seite halten. */
         contains: (n) => !!(n && n.__eigen),
         querySelector: (sel) => (sel === ".text" ? textKnoten : { textContent: "" }),
-        append() {},
-        appendChild() {},
+        /* Ereignishörer werden aufbewahrt statt verworfen: Am Not-Aus-Schild
+           hängt einer, und ein Knopf, den keine Prüfung drücken kann, ist ein
+           Knopf, von dem niemand weiß, ob er etwas tut. */
+        __hoerer: [],
+        addEventListener(typ, hoerer, o) {
+          el.__hoerer.push({ typ, hoerer, o });
+        },
+        removeEventListener(typ, hoerer) {
+          el.__hoerer = el.__hoerer.filter((h) => !(h.typ === typ && h.hoerer === hoerer));
+        },
+        __kinder: [],
+        append(...kinder) {
+          for (const k of kinder) if (k) el.__kinder.push(k);
+        },
+        appendChild(k) {
+          if (k) el.__kinder.push(k);
+          return k;
+        },
         attachShadow: () => ({
           adoptedStyleSheets: [],
           append() {},
@@ -341,6 +409,20 @@ function umgebungBauen(elemente, etiketten = []) {
       return el;
     },
     querySelectorAll: () => elemente,
+    /* Die Auswahl, die der Browser an einem Punkt selbst trifft — und die
+       einzige, die die Verdeckungswache befragt. Sie steht hier, weil sich ohne
+       sie überhaupt nicht messen lässt, ob ein Ziel frei liegt: Der Befund vom
+       11.08.2026 (Klick auf ein verdecktes Ziel wird ausgeführt und als Erfolg
+       gemeldet) wäre in einer Attrappe ohne Punktprobe unsichtbar geblieben.
+       Nachgebildet sind genau die drei Dinge, an denen es hängt: Rechtecke,
+       Stapelreihenfolge (höheres z-index gewinnt, sonst der spätere Knoten) und
+       die Frage, wer überhaupt Zeigerereignisse annimmt. Außerhalb des
+       Sichtfensters gibt es wie im Browser `null`. */
+    elementFromPoint: (x, y) => {
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+      if (x < 0 || y < 0 || x >= sandbox.innerWidth || y >= sandbox.innerHeight) return null;
+      return trefferAmPunkt(elemente, x, y);
+    },
     /* Befund M4: Beide gaben immer null zurück — damit waren `aria-labelledby`
        und `label[for=…]` als Beschriftungsquellen der Geheim-Erkennung nicht
        prüfbar. Ohne Etiketten in der Liste ist das Ergebnis wie vorher null. */
@@ -360,6 +442,11 @@ function umgebungBauen(elemente, etiketten = []) {
     clearTimeout,
     document,
     innerHeight: 900,
+    /* Die Breite fehlte bis 14.08.2026. Solange sie fehlte, war `innerWidth`
+       im Sandkasten undefiniert, und jede Rechnung damit ergab NaN — die
+       Sichtfeldprüfung der Wache („liegt das Ziel überhaupt auf dem Schirm")
+       wäre stillschweigend übersprungen worden. */
+    innerWidth: 1280,
     get scrollY() {
       return zustand.scrollY;
     },
@@ -369,10 +456,15 @@ function umgebungBauen(elemente, etiketten = []) {
     scrollBy: (o) => {
       zustand.scrollY = Math.max(0, zustand.scrollY + Math.round((o && o.top) || 0));
     },
-    getComputedStyle: (el) =>
-      el.__versteckt
+    getComputedStyle: (el) => ({
+      ...(el.__versteckt
         ? { visibility: "hidden", display: "none", opacity: "0" }
-        : { visibility: "visible", display: "block", opacity: "1" },
+        : { visibility: "visible", display: "block", opacity: "1" }),
+      /* Ein Ziel mit abgeschalteten Zeigerereignissen ist nicht verdeckt,
+         sondern durchlässig — die Wache unterscheidet das, und ohne diese
+         Angabe wäre der Unterschied hier nicht messbar. */
+      pointerEvents: el.__klicktaub ? "none" : "auto",
+    }),
     /* Das Stylesheet des Schattenbaums wird mitgeschrieben statt verworfen:
        Der Klick-Puls und das Zeichen für ein totes Overlay leben ausschließlich
        im CSS, und was hier nicht ankommt, kann keine Prüfung sehen. */
@@ -495,10 +587,21 @@ function umgebungBauen(elemente, etiketten = []) {
   return { sandbox, zustand };
 }
 
-async function overlayStarten(elemente, etiketten = []) {
+async function overlayStarten(elemente, etiketten = [], { ohneWache = false } = {}) {
   const quelle = await readFile(QUELLE, "utf8");
   const { sandbox, zustand } = umgebungBauen(elemente, etiketten);
   vm.createContext(sandbox);
+  /* Die Klickwache wird eingespielt wie im Browser: VOR dem Overlay, als
+     klassisches Skript, in denselben globalen Rahmen (`src/net/seite.js`
+     spielt genau diese Reihenfolge ein). Damit läuft in dieser Prüfung
+     wirklich der Weg, den auch der Kunde bekommt — der Befund vom 11.08.2026
+     war eine geprüfte Wache, die im Klickweg niemand rief.
+     `ohneWache` ist die Gegenprobe: Fehlt sie, darf nicht bedient werden. */
+  if (!ohneWache) {
+    const wache = await readFile(WACHE_QUELLE, "utf8");
+    vm.runInContext(wache, sandbox, { filename: "klickwache.js" });
+    assert.ok(sandbox.SMARTR_KLICKWACHE, "klickwache.js muss sich an globalThis hängen");
+  }
   vm.runInContext(quelle, sandbox, { filename: "overlay.js" });
   const hoerer = sandbox.chrome.runtime.__hoerer;
   assert.ok(hoerer, "overlay.js muss einen Nachrichtenhörer anmelden");
@@ -699,6 +802,12 @@ function bedienseiteBauen() {
 /* Referenzen werden nach Namen gesucht, nicht abgezählt — sonst prüft die
    Prüfung die Reihenfolge der Attrappe statt das Verhalten. */
 const refVon = (baum, name) => (baum.knoten.find((k) => k.name === name) || {}).ref;
+
+/* Die Mitte eines Knotens — der Punkt, an dem geklickt und nachgesehen wird. */
+const mitteVon = (el) => {
+  const r = el.getBoundingClientRect();
+  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+};
 
 /* ------------------------------------------------------------------ *
  * Echte Feldnamen aus dem Alltag — Bank, Bezahlseite, Anmeldung.
@@ -964,7 +1073,10 @@ test("Eine Referenz löst nur in ihrer eigenen Epoche auf", async () => {
   assert.equal(gut.ok, true);
   assert.equal(gut.name, "Startseite");
   assert.equal(gut.rolle, "link");
-  assert.deepEqual(gut.mitte, { x: 70, y: 35 });
+  /* Die Mitte wird aus dem Element gerechnet statt abgeschrieben: Seit die
+     Attrappe am Punkt nachsieht, liegt jeder Knoten auf einem eigenen Platz,
+     und eine abgeschriebene Zahl misst dann den Platz statt die Rechnung. */
+  assert.deepEqual(gut.mitte, mitteVon(seite.start));
 
   const alt = fragen({ typ: "overlay:nachschlagen", ref: "e1", epoche: "s1.fremd" });
   assert.deepEqual(alt, { ok: false, fehler: "stale_ref" });
@@ -1686,17 +1798,34 @@ test("Jede Nachricht bekommt eine Antwort — auch eine unbekannte", async () =>
  * ------------------------------------------------------------------ */
 
 /* Eine offene Schatten-Wurzel der Attrappe: liefert ihre Kinder — wie der
-   document-Stumpf oben ohne Selektorauswertung, die Filter macht overlay.js. */
-const schattenWurzel = (kinder) => ({ querySelectorAll: () => kinder });
+   document-Stumpf oben ohne Selektorauswertung, die Filter macht overlay.js.
+   Sie kann seit dem 14.08.2026 auch am Punkt nachsehen: `elementFromPoint`
+   bleibt im Browser an jeder Schattengrenze am Wirt stehen, und die Wache
+   steigt genau deshalb Wurzel für Wurzel ab. Eine Attrappe ohne diese Stufe
+   würde den Abstieg ungeprüft lassen — und damit die Zustimmungsbanner, für
+   die er überhaupt gebaut wurde. */
+const schattenWurzel = (kinder) => ({
+  querySelectorAll: () => kinder,
+  elementFromPoint: (x, y) => trefferAmPunkt(kinder, x, y),
+});
 
 test("Wahrnehmung: das Zustimmungsbanner im offenen Schattenbaum wird gesehen und bedienbar", async () => {
   const seite = seiteBauen();
-  const knopf = knoten("button", { text: "Alle akzeptieren" });
+  /* Die Rechtecke stehen hier ausdrücklich da: Ein Schattenkind liegt IM Kasten
+     seines Wirts, sonst gäbe der Browser am Punkt des Knopfes gar nicht erst
+     den Wirt zurück und der Abstieg fände nie statt. */
+  const knopf = knoten("button", {
+    text: "Alle akzeptieren",
+    rect: { left: 700, top: 100, width: 200, height: 40 },
+  });
   /* Ein Schatten im Schatten — Usercentrics verschachtelt seine Bausteine. */
-  const tief = knoten("button", { text: "Auswahl speichern" });
-  const innererWirt = knoten("div", {});
+  const tief = knoten("button", {
+    text: "Auswahl speichern",
+    rect: { left: 700, top: 160, width: 200, height: 40 },
+  });
+  const innererWirt = knoten("div", { rect: { left: 700, top: 160, width: 200, height: 40 } });
   innererWirt.shadowRoot = schattenWurzel([tief]);
-  const banner = knoten("div", {});
+  const banner = knoten("div", { rect: { left: 680, top: 80, width: 240, height: 140 } });
   banner.shadowRoot = schattenWurzel([knopf, innererWirt]);
 
   const { fragen } = await overlayStarten([...seite.alle, banner]);
@@ -2044,8 +2173,10 @@ test("Wächter: ein gekaperter Inline-Stil wird wiederhergestellt", async () => 
   );
 
   /* Ein einzelner Eingriff beendet noch nichts — sonst wäre der Wächter
-     selbst die Reißleine. */
-  assert.equal(schildSatz(zustand), "SMarTrAgent steuert diesen Tab");
+     selbst die Reißleine.
+     Der Betriebsmodus steht seit v3.5 vorn im Schild (VERTRAG §6): Der Satz
+     des Ausführers bleibt Wort für Wort stehen, das Modus-Wort kommt davor. */
+  assert.equal(schildSatz(zustand), "Begleitet, SMarTrAgent steuert diesen Tab");
 });
 
 test("Wächter: auch ein entwertetes !important wird wiederhergestellt", async () => {
@@ -2551,7 +2682,11 @@ test("Der Klick löst den Puls wirklich aus", async () => {
   fragen({ typ: "overlay:klicken", ref, epoche: baum.epoche });
   const puls = teilHolen(zustand, "puls");
   assert.equal(puls.getAttribute("data-an"), "1", "beim Klick geht der Puls an");
-  assert.equal(puls.style.left, "70px", "und zwar dort, wo geklickt wurde");
+  assert.equal(
+    puls.style.left,
+    `${mitteVon(seite.start).x}px`,
+    "und zwar dort, wo geklickt wurde"
+  );
 });
 
 test("Ein totes Overlay hat sein eigenes Aussehen im Stylesheet", async () => {
@@ -2617,4 +2752,697 @@ test("Abwehr: auch scale, clip, mask und Verwandtschaft stehen am Wirt", async (
     assert.equal(d.wert, erwartet, `${eigenschaft} muss auf ${erwartet} stehen`);
     assert.equal(d.wichtig, true, `${eigenschaft} ohne !important verliert gegen das Seiten-CSS`);
   }
+});
+
+/* ------------------------------------------------------------------ *
+ * Die Verdeckungswache im Klickweg
+ *
+ * Der Auslieferungsblocker vom 11.08.2026, im echten Chrome gemessen: Über
+ * einem freigegebenen „Jetzt kaufen" lag ein ganzseitiger Überzug,
+ * `document.elementFromPoint` gab in der Mitte des Knopfes eindeutig den
+ * Überzug zurück — und `overlay:klicken` antwortete trotzdem
+ * `{ok:true, name:"Jetzt kaufen"}`, die Klickspur der Seite zeigte den Kauf.
+ * Die Wache war gebaut, geprüft und wurde von niemandem gerufen.
+ *
+ * Deshalb wird hier nicht die Wache geprüft (das tut klickwache.test.mjs, und
+ * zwar gegen die Fassung in befehle.js), sondern der EINBAU: Jede Prüfung
+ * unten geht durch `overlay:klicken`, `overlay:tippen` und
+ * `overlay:auswaehlen` — also durch genau den Weg, den der Ausführer benutzt.
+ * ------------------------------------------------------------------ */
+
+/* Die Seite aus dem Funktionstest, mit den Maßen von dort. */
+function kaufseiteBauen() {
+  const kaufen = knoten("button", {
+    text: "Jetzt kaufen",
+    rect: { left: 41, top: 250, width: 122, height: 38 },
+  });
+  const menge = knoten("input", {
+    attrs: { type: "text", "aria-label": "Menge" },
+    type: "text",
+    value: "1",
+    rect: { left: 41, top: 320, width: 122, height: 38 },
+  });
+  const versand = knoten("select", {
+    attrs: { "aria-label": "Versandart" },
+    optionen: [option("Standard", "std"), option("Express", "exp")],
+    rect: { left: 41, top: 380, width: 122, height: 38 },
+  });
+  return { kaufen, menge, versand, alle: [kaufen, menge, versand] };
+}
+
+/* Ein Überzug über der ganzen Seite. Ohne Namen und ohne Wert steht er in
+   keiner Wahrnehmung — genau wie auf einer echten Seite, wo ihn niemand
+   bedienen will und trotzdem jeder Klick an ihm hängen bleibt. */
+const ueberzugBauen = (z) =>
+  knoten("div", { rect: { left: 0, top: 0, width: 1280, height: 900 }, z });
+
+async function kaufseiteStarten(zusatz = []) {
+  const seite = kaufseiteBauen();
+  const alles = await overlayStarten([...seite.alle, ...zusatz]);
+  const baum = alles.fragen({ typ: "overlay:baum" });
+  assert.equal(baum.ok, true);
+  return { ...alles, seite, baum };
+}
+
+test("Die Attrappe sieht wirklich am Punkt nach — sonst misst der Rest nichts", async () => {
+  /* Zuerst die Nachbildung selbst: Eine Attrappe, deren elementFromPoint immer
+     das Ziel zurückgibt, hielte jede Prüfung darunter grün. Gemessen wird
+     deshalb genau der Befund des Funktionstests: In der Mitte des Kaufknopfes
+     liegt der Überzug, nicht der Knopf. */
+  const seite = kaufseiteBauen();
+  const ueberzug = ueberzugBauen(999999);
+  const { sandbox } = await overlayStarten([...seite.alle, ueberzug]);
+  const m = mitteVon(seite.kaufen);
+
+  assert.equal(
+    sandbox.document.elementFromPoint(m.x, m.y),
+    ueberzug,
+    "über dem Knopf muss wirklich der Überzug liegen"
+  );
+  ueberzug.__z = -1;
+  assert.equal(
+    sandbox.document.elementFromPoint(m.x, m.y),
+    seite.kaufen,
+    "ohne Überzug darüber bekommt der Knopf den Punkt"
+  );
+  assert.equal(
+    sandbox.document.elementFromPoint(2000, 40),
+    null,
+    "außerhalb des Fensters liegt nichts, genau wie im Browser"
+  );
+});
+
+test("Blocker 11.08.: ein durchsichtiger Ganzseiten-Überzug hält den Klick auf", async () => {
+  const { fragen, seite, baum } = await kaufseiteStarten([ueberzugBauen(999999)]);
+  const ref = refVon(baum, "Jetzt kaufen");
+  assert.ok(ref, "der Knopf steht in der Wahrnehmung");
+
+  const k = fragen({ typ: "overlay:klicken", ref, epoche: baum.epoche });
+  assert.equal(k.ok, false, "genau hier meldete die alte Fassung Erfolg");
+  assert.equal(k.fehler, "element_covered");
+  assert.equal(k.wache, "verdeckt");
+  assert.equal(k.darueber, "div", "was oben liegt, wird benannt");
+
+  await gleich();
+  assert.equal(seite.kaufen.__klicks, 0, "und es wird wirklich nicht geklickt");
+  assert.equal(seite.kaufen.__fokus, 0, "auch der Fokus bleibt, wo er war");
+  assert.deepEqual(seite.kaufen.__ereignisse, [], "keine einzige Ereigniskette");
+});
+
+test("Blocker 11.08.: auch ein deckendes Banner auf der höchsten Ebene hält ihn auf", async () => {
+  const banner = knoten("aside", {
+    rect: { left: 0, top: 0, width: 1280, height: 900 },
+    z: 2147483647,
+  });
+  const { fragen, seite, baum } = await kaufseiteStarten([banner]);
+  const k = fragen({ typ: "overlay:klicken", ref: refVon(baum, "Jetzt kaufen"), epoche: baum.epoche });
+  assert.equal(k.ok, false);
+  assert.equal(k.fehler, "element_covered");
+  assert.equal(k.darueber, "aside");
+  await gleich();
+  assert.equal(seite.kaufen.__klicks, 0);
+});
+
+test("Ein Ziel mit abgeschalteten Zeigerereignissen wird nicht angeklickt", async () => {
+  const kaufen = knoten("button", {
+    text: "Jetzt kaufen",
+    rect: { left: 41, top: 250, width: 122, height: 38 },
+    klicktaub: true,
+  });
+  const { fragen } = await overlayStarten([kaufen]);
+  const baum = fragen({ typ: "overlay:baum" });
+  const k = fragen({ typ: "overlay:klicken", ref: refVon(baum, "Jetzt kaufen"), epoche: baum.epoche });
+  assert.equal(k.ok, false);
+  assert.equal(k.wache, "klicktaub", "das ist keine Verdeckung, sondern das Gegenteil");
+  assert.equal(k.fehler, "element_not_visible");
+  await gleich();
+  assert.equal(kaufen.__klicks, 0);
+});
+
+test("Ein Ziel, dessen Mitte außerhalb des Sichtfeldes liegt, wird nicht angeklickt", async () => {
+  /* Der Fall, den das Nachschlagen allein nicht findet: Das Element ragt gerade
+     noch in den Ausschnitt (also ist es „sichtbar"), aber der Punkt, an dem
+     geklickt würde, liegt darunter. Und seitwärts prüft das Nachschlagen gar
+     nichts. */
+  const halbUnten = knoten("button", {
+    text: "Halb unten",
+    rect: { left: 41, top: 880, width: 122, height: 200 },
+  });
+  const rechtsRaus = knoten("button", {
+    text: "Rechts raus",
+    rect: { left: 1200, top: 100, width: 200, height: 38 },
+  });
+  const { fragen } = await overlayStarten([halbUnten, rechtsRaus]);
+  const baum = fragen({ typ: "overlay:baum" });
+
+  for (const [name, el] of [["Halb unten", halbUnten], ["Rechts raus", rechtsRaus]]) {
+    const ref = refVon(baum, name);
+    assert.ok(ref, `${name} steht in der Wahrnehmung, das Nachschlagen lässt es durch`);
+    const k = fragen({ typ: "overlay:klicken", ref, epoche: baum.epoche });
+    assert.equal(k.ok, false, name);
+    assert.equal(k.wache, "ausserhalb", name);
+    await gleich();
+    assert.equal(el.__klicks, 0, `${name}: auf etwas, das niemand sieht, wird nicht geklickt`);
+  }
+});
+
+test("Was frei liegt, wird weiterhin geklickt — auch unter seiner eigenen Beschriftung", async () => {
+  /* Die Gegenprobe. Eine Wache, die alles ablehnt, wäre genauso unbrauchbar wie
+     keine: Auf dem Knopf liegt im Alltag seine eigene Beschriftung, und die
+     gehört zum Ziel. */
+  const seite = kaufseiteBauen();
+  const beschriftung = knoten("span", {
+    rect: { left: 41, top: 250, width: 122, height: 38 },
+    z: 1,
+  });
+  beschriftung.parentNode = seite.kaufen;
+  const { fragen } = await overlayStarten([...seite.alle, beschriftung]);
+  const baum = fragen({ typ: "overlay:baum" });
+  const k = fragen({ typ: "overlay:klicken", ref: refVon(baum, "Jetzt kaufen"), epoche: baum.epoche });
+  assert.equal(k.ok, true, "der Punkt gehört einem Kind des Ziels, das ist keine Verdeckung");
+  await gleich();
+  assert.equal(seite.kaufen.__klicks, 1);
+});
+
+test("Auch das Tippen und das Auswählen gehen durch die Wache", async () => {
+  const { fragen, seite, baum } = await kaufseiteStarten([ueberzugBauen(999999)]);
+
+  const t = fragen({
+    typ: "overlay:tippen",
+    ref: refVon(baum, "Menge"),
+    epoche: baum.epoche,
+    text: "3",
+  });
+  assert.equal(t.ok, false, "wer in ein verdecktes Feld tippt, tippt ins Falsche");
+  assert.equal(t.fehler, "element_covered");
+  assert.equal(seite.menge.value, "1", "der Wert bleibt, was er war");
+  assert.deepEqual(seite.menge.__ereignisse, [], "und die Seite erfährt nichts davon");
+
+  const a = fragen({
+    typ: "overlay:auswaehlen",
+    ref: refVon(baum, "Versandart"),
+    epoche: baum.epoche,
+    etikett: "Express",
+  });
+  assert.equal(a.ok, false);
+  assert.equal(a.fehler, "element_covered");
+  await gleich();
+  assert.equal(seite.versand.selectedIndex, 0, "die Auswahl bleibt stehen");
+});
+
+test("Geheime Felder bleiben geheim, auch wenn nichts darüber liegt", async () => {
+  /* Die Reihenfolge im Code ist eine Aussage: Das Verbot für Geheimfelder gilt
+     unbedingt und kommt VOR der Wache. Sonst hieße die Absage plötzlich
+     `element_covered`, und der Agent suchte ein Banner statt zu verstehen, dass
+     Anmelden Sache des Menschen bleibt. */
+  const passwort = knoten("input", {
+    attrs: { type: "password", "aria-label": "Passwort" },
+    type: "password",
+    value: "geheim",
+    rect: { left: 41, top: 250, width: 122, height: 38 },
+  });
+  const { fragen } = await overlayStarten([passwort, ueberzugBauen(9)]);
+  const baum = fragen({ typ: "overlay:baum" });
+  const t = fragen({
+    typ: "overlay:tippen",
+    ref: refVon(baum, "Passwort"),
+    epoche: baum.epoche,
+    text: "1234",
+  });
+  assert.deepEqual(t, { ok: false, fehler: "feld_geheim" });
+});
+
+test("Ohne Wache wird nicht bedient", async () => {
+  /* Die Lehre vom 11.08.2026 zu Ende gedacht: Ein Weg, der bei fehlender
+     Prüfung durchwinkt, ist genau der Weg von vorher. Fehlt die Wache, bleibt
+     die Seite unberührt. */
+  const seite = kaufseiteBauen();
+  const { fragen } = await overlayStarten(seite.alle, [], { ohneWache: true });
+  const baum = fragen({ typ: "overlay:baum" });
+
+  const k = fragen({ typ: "overlay:klicken", ref: refVon(baum, "Jetzt kaufen"), epoche: baum.epoche });
+  assert.deepEqual(k, { ok: false, fehler: "wache_fehlt" });
+  const t = fragen({
+    typ: "overlay:tippen", ref: refVon(baum, "Menge"), epoche: baum.epoche, text: "3",
+  });
+  assert.deepEqual(t, { ok: false, fehler: "wache_fehlt" });
+  const a = fragen({
+    typ: "overlay:auswaehlen", ref: refVon(baum, "Versandart"), epoche: baum.epoche, etikett: "Express",
+  });
+  assert.deepEqual(a, { ok: false, fehler: "wache_fehlt" });
+
+  await gleich();
+  assert.equal(seite.kaufen.__klicks, 0);
+  assert.equal(seite.menge.value, "1");
+  assert.equal(seite.versand.selectedIndex, 0);
+});
+
+test("Der Klickweg ruft die Wache wirklich, und reicht ihr die Seite herein", async () => {
+  /* Der Prüfsatz gegen den Befund selbst: Nicht „die Wache entscheidet richtig",
+     sondern „der ausgelieferte Weg fragt sie überhaupt". Achtzehn grüne
+     Prüfsätze über einer Funktion, die niemand ruft, sind achtzehn grüne
+     Prüfsätze über nichts. */
+  const { fragen, sandbox, seite, baum } = await kaufseiteStarten();
+  const echt = sandbox.SMARTR_KLICKWACHE;
+  const rufe = [];
+  sandbox.SMARTR_KLICKWACHE = {
+    ...echt,
+    klickFreigeben(el, umgebung, ausloesen) {
+      rufe.push({ el, umgebung, hatAusloeser: typeof ausloesen === "function" });
+      return echt.klickFreigeben(el, umgebung, ausloesen);
+    },
+  };
+
+  const k = fragen({ typ: "overlay:klicken", ref: refVon(baum, "Jetzt kaufen"), epoche: baum.epoche });
+  assert.equal(k.ok, true);
+  assert.equal(rufe.length, 1, "genau ein Gang durch die Wache je Klick");
+  assert.equal(rufe[0].el, seite.kaufen, "und zwar mit dem Element, dem der Mensch zugestimmt hat");
+  assert.equal(rufe[0].hatAusloeser, true, "der Klick wird als Auslöser abgegeben, nicht selbst getan");
+  assert.equal(rufe[0].umgebung.dokument, sandbox.document, "die Wache bekommt das echte Dokument");
+  /* Der Umweg über die Kopie: Objekte aus dem Sandkasten stammen aus einer
+     anderen Welt und sind für deepEqual nie gleich, so gleich ihr Inhalt auch
+     ist. Chrome kopiert jede Nachricht zwischen den Welten ohnehin genauso. */
+  assert.deepEqual({ ...rufe[0].umgebung.sichtfeld }, { breite: 1280, hoehe: 900 });
+  assert.equal(typeof rufe[0].umgebung.stil, "function");
+  /* Die Stilabfrage wird eingepackt und nicht blank gereicht: Losgelöst von
+     ihrem Fenster wirft `getComputedStyle` in Chrome „Illegal invocation", der
+     Wurf liefe in den try der Wache, und aus der Prüfung auf `pointer-events`
+     würde ein stilles Nichts. Im Sandkasten fällt das nicht auf, im Browser
+     schon — deshalb steht es hier als Bedingung. */
+  assert.notEqual(
+    rufe[0].umgebung.stil,
+    sandbox.getComputedStyle,
+    "getComputedStyle darf nicht als blanke Referenz gereicht werden"
+  );
+  assert.deepEqual(rufe[0].umgebung.stil(seite.kaufen).pointerEvents, "auto");
+
+  /* Und dieselbe Frage für die beiden anderen Wege. */
+  fragen({ typ: "overlay:tippen", ref: refVon(baum, "Menge"), epoche: baum.epoche, text: "2" });
+  fragen({ typ: "overlay:auswaehlen", ref: refVon(baum, "Versandart"), epoche: baum.epoche, etikett: "Express" });
+  assert.equal(rufe.length, 3, "auch Tippen und Auswählen gehen durch dieselbe Wache");
+});
+
+test("Der Puls geht nur an, wenn wirklich geklickt wird", async () => {
+  /* Der Puls sagt dem Menschen „jetzt ist etwas passiert". Ginge er auch bei
+     einer Absage an, sagte er die Unwahrheit — und zwar genau in der Lage, in
+     der der Mensch hinsieht. */
+  const verdeckt = await kaufseiteStarten([ueberzugBauen(5)]);
+  verdeckt.fragen({ typ: "overlay:an" });
+  verdeckt.fragen({
+    typ: "overlay:klicken",
+    ref: refVon(verdeckt.baum, "Jetzt kaufen"),
+    epoche: verdeckt.baum.epoche,
+  });
+  assert.notEqual(
+    teilHolen(verdeckt.zustand, "puls").getAttribute("data-an"),
+    "1",
+    "bei einer Absage darf am Ort der Handlung nichts aufleuchten"
+  );
+
+  /* Die Gegenprobe, sonst misst die Zeile darüber nur, dass der Puls nie angeht. */
+  const frei = await kaufseiteStarten();
+  frei.fragen({ typ: "overlay:an" });
+  frei.fragen({
+    typ: "overlay:klicken",
+    ref: refVon(frei.baum, "Jetzt kaufen"),
+    epoche: frei.baum.epoche,
+  });
+  assert.equal(teilHolen(frei.zustand, "puls").getAttribute("data-an"), "1");
+});
+
+/* ------------------------------------------------------------------ *
+ * Der Betriebsmodus am Zeichen (VERTRAG v3.5 §6)
+ * ------------------------------------------------------------------ */
+
+const MARKENFARBEN = ["#4CC2F1", "#5B8DEF", "#8D7CF6"];
+
+async function modusStarten() {
+  const seite = seiteBauen();
+  const alles = await overlayStarten(seite.alle);
+  alles.fragen({ typ: "overlay:an", text: "SMarTrAgent steuert diesen Tab" });
+  return alles;
+}
+
+test("Modus: die Automatik trägt den Markenverlauf, Rahmen und Schild", async () => {
+  const { fragen, zustand } = await modusStarten();
+  const antwort = fragen({ typ: "overlay:modus", modus: "auto" });
+  assert.deepEqual(antwort, { ok: true, gesetzt: true, modus: "auto" });
+
+  const rahmen = teilHolen(zustand, "rahmen");
+  const verlauf = rahmen.style.getPropertyValue("border-image-source");
+  for (const farbe of MARKENFARBEN) {
+    assert.ok(verlauf.includes(farbe), `die Marke fehlt im Rahmen: ${farbe}`);
+  }
+  /* Inline und mit !important, aus demselben Grund wie am Wirt: Ein Blatt der
+     Seite darf das Zeichen nicht umfärben (Befund 10.08.2026). */
+  for (const eigenschaft of ["border", "border-image-source", "box-shadow"]) {
+    assert.equal(
+      rahmen.style.getPropertyPriority(eigenschaft),
+      "important",
+      `${eigenschaft} am Rahmen ohne !important`
+    );
+  }
+  const punkt = teilHolen(zustand, "punkt");
+  assert.ok(punkt.style.getPropertyValue("background-image").includes("#4CC2F1"));
+  assert.equal(punkt.style.getPropertyPriority("background-image"), "important");
+  assert.equal(teilHolen(zustand, "schild").style.getPropertyPriority("border-color"), "important");
+  assert.equal(rahmen.getAttribute("data-modus"), "auto");
+});
+
+test("Modus: das Schild sagt, welcher Modus läuft", async () => {
+  const { fragen, zustand } = await modusStarten();
+  const gesehen = [];
+  for (const [modus, wort] of [["auto", "Automatik"], ["assist", "Begleitet"], ["manual", "Handbetrieb"]]) {
+    fragen({ typ: "overlay:modus", modus });
+    const satz = schildSatz(zustand);
+    assert.ok(satz.startsWith(`${wort},`), `${modus}: das Schild sagt „${satz}"`);
+    assert.ok(satz.includes("SMarTrAgent steuert diesen Tab"), `${modus}: der Satz des Ausführers bleibt`);
+    /* Kommas statt Gedankenstrichen: Das Schild wird vorgelesen, und ein
+       Gedankenstrich wird als Pause gelesen, die den Satz zerreißt. */
+    assert.ok(!satz.includes("—"), `${modus}: kein Gedankenstrich im gesprochenen Text`);
+    gesehen.push(wort);
+  }
+  assert.equal(new Set(gesehen).size, 3, "jeder Modus hat sein eigenes Wort");
+});
+
+test("Modus: begleitet und Handbetrieb bleiben grün", async () => {
+  const { fragen, zustand } = await modusStarten();
+  const rahmen = teilHolen(zustand, "rahmen");
+  const punkt = teilHolen(zustand, "punkt");
+  fragen({ typ: "overlay:modus", modus: "auto" });
+  assert.ok(rahmen.style.getPropertyValue("border-image-source"), "erst die Automatik");
+
+  for (const modus of ["assist", "manual"]) {
+    fragen({ typ: "overlay:modus", modus });
+    assert.equal(
+      rahmen.style.getPropertyValue("border-image-source"),
+      "",
+      `${modus}: der Verlauf muss wieder weg sein, sonst zeigt das Zeichen eine Lage, die nicht läuft`
+    );
+    assert.equal(rahmen.style.getPropertyValue("border"), "");
+    assert.equal(punkt.style.getPropertyValue("background-image"), "");
+    assert.equal(rahmen.getAttribute("data-modus"), modus);
+  }
+});
+
+test("Modus: ein unbekannter Wert ändert nichts und sagt es", async () => {
+  const { fragen, zustand } = await modusStarten();
+  fragen({ typ: "overlay:modus", modus: "auto" });
+  for (const wild of ["vollzugriff", "", null, 7, "AUTO"]) {
+    const a = fragen({ typ: "overlay:modus", modus: wild });
+    assert.deepEqual(a, { ok: true, gesetzt: false, modus: "auto" },
+      `„${wild}" darf das Zeichen nicht umschreiben`);
+  }
+  assert.ok(teilHolen(zustand, "rahmen").style.getPropertyValue("border-image-source"),
+    "die Automatik steht weiterhin da, denn sie läuft weiterhin");
+});
+
+/* ------------------------------------------------------------------ *
+ * Der Not-Aus im Schild
+ * ------------------------------------------------------------------ */
+
+/* Ein Druck auf den Knopf — über den Ereignishörer, den das Overlay wirklich
+   angemeldet hat. Ohne Hörer gibt es keinen Druck, und genau das fällt auf. */
+function notausDruecken(zustand, typ = "click") {
+  const knopf = teilHolen(zustand, "notaus");
+  const hoerer = (knopf.__hoerer || []).filter((h) => h.typ === typ);
+  assert.ok(hoerer.length, `am Not-Aus hängt kein Hörer für ${typ}`);
+  let verhindert = 0;
+  for (const h of hoerer) {
+    h.hoerer({ preventDefault: () => { verhindert += 1; }, stopPropagation: () => {} });
+  }
+  return { knopf, verhindert };
+}
+
+test("Not-Aus: der Knopf im Schild meldet die Notbremse mit eigener Quelle", async () => {
+  const { fragen, zustand, sandbox } = await modusStarten();
+  const { verhindert } = notausDruecken(zustand);
+  assert.ok(verhindert >= 1, "der Klick gehört dem Knopf, nicht der Seite darunter");
+  assert.deepEqual(
+    gesendet(sandbox),
+    [{ typ: "notbremse", quelle: "schild" }],
+    "genau eine Notbremse, und sie sagt, woher sie kommt"
+  );
+  /* Erst kappen, dann melden: Das Zeichen steht sofort auf GESTOPPT, ohne auf
+     eine Antwort des Dienstes zu warten. */
+  assert.equal(teilHolen(zustand, "rahmen").getAttribute("data-zustand"), "gestoppt");
+  assert.equal(schildSatz(zustand), "GESTOPPT, der Agent steuert nicht mehr");
+  fragen({ typ: "overlay:ping" });
+});
+
+test("Not-Aus: er hört auch auf pointerdown, falls die Seite Klicks abfängt", async () => {
+  const { zustand, sandbox } = await modusStarten();
+  notausDruecken(zustand, "pointerdown");
+  assert.deepEqual(gesendet(sandbox), [{ typ: "notbremse", quelle: "schild" }]);
+});
+
+test("Not-Aus: ohne Erweiterung sagt der Knopf die Wahrheit statt still zu scheitern", async () => {
+  const { zustand, sandbox } = await modusStarten();
+  sandbox.chrome.runtime.id = undefined;
+  notausDruecken(zustand);
+  assert.deepEqual(gesendet(sandbox), [], "ohne Kontext geht nichts mehr hinaus");
+  assert.equal(teilHolen(zustand, "schild").getAttribute("data-zustand"), "tot");
+  assert.ok(schildSatz(zustand).includes("Verbindung zur Erweiterung"));
+});
+
+test("Not-Aus: der Knopf ist nur treffbar, solange das Zeichen etwas verspricht", async () => {
+  const seite = seiteBauen();
+  const { fragen, zustand } = await overlayStarten(seite.alle);
+  const knopf = teilHolen(zustand, "notaus");
+
+  /* Vor der Sitzung: kein Knopf. Ein unsichtbarer Knopf, der weiter Klicks
+     schluckt, wäre ein Loch in der Seite des Menschen. */
+  assert.equal(knopf.style.getPropertyValue("display"), "none");
+  assert.equal(knopf.style.getPropertyValue("pointer-events"), "none");
+
+  fragen({ typ: "overlay:an" });
+  assert.equal(knopf.style.getPropertyValue("display"), "inline-flex");
+  assert.equal(knopf.style.getPropertyValue("pointer-events"), "auto");
+  /* Inline und wichtig, sonst schaltet ein Blatt der Seite die Reißleine ab. */
+  for (const eigenschaft of ["display", "pointer-events", "background", "color"]) {
+    assert.equal(
+      knopf.style.getPropertyPriority(eigenschaft),
+      "important",
+      `${eigenschaft} am Not-Aus ohne !important`
+    );
+  }
+
+  fragen({ typ: "overlay:aus" });
+  assert.equal(knopf.style.getPropertyValue("display"), "none");
+  assert.equal(knopf.style.getPropertyValue("pointer-events"), "none");
+});
+
+test("Not-Aus: ein totes Zeichen zeigt keine Reißleine mehr", async () => {
+  const { zustand, sandbox } = await modusStarten();
+  sandbox.chrome.runtime.__wirft = true;
+  zustand.feuern("keydown", { key: "Escape" });
+  zustand.feuern("keydown", { key: "Escape" });
+  assert.equal(teilHolen(zustand, "schild").getAttribute("data-zustand"), "tot");
+  const knopf = teilHolen(zustand, "notaus");
+  assert.equal(knopf.style.getPropertyValue("display"), "none",
+    "ein Knopf, der nichts mehr stoppen kann, ist ein falsches Versprechen");
+  assert.equal(knopf.style.getPropertyValue("pointer-events"), "none");
+});
+
+test("Not-Aus: der Knopf trägt einen Namen für den Vorleser", async () => {
+  const { zustand } = await modusStarten();
+  const knopf = teilHolen(zustand, "notaus");
+  assert.equal(knopf.getAttribute("type"), "button", "sonst schickt er in einem Formular etwas ab");
+  const name = knopf.getAttribute("aria-label") || "";
+  assert.ok(name.length > 4, "ohne Namen ist der Knopf für einen Vorleser stumm");
+  assert.ok(!name.includes("—"), "Kommas statt Gedankenstrichen, der Text wird vorgelesen");
+  assert.equal(knopf.textContent, "STOPP");
+});
+
+/* ------------------------------------------------------------------ *
+ * Was wirklich in die Seite eingespielt wird — `src/net/seite.js`
+ *
+ * Diese Prüfungen stehen hier, weil sie dieselbe Zusage messen wie alles
+ * darüber: Der Klickweg hat seine Wache. Nützt der beste Einbau in
+ * overlay.js nichts, wenn `klickwache.js` gar nicht erst in die Seite kommt —
+ * dann heißt jede Antwort `wache_fehlt`, und die Erweiterung bedient gar nicht
+ * mehr. Gemessen wird deshalb der Auftrag, den Chrome bekommt, und nicht der
+ * Quelltext, der ihn baut.
+ * ------------------------------------------------------------------ */
+
+import { attrappeSetzen } from "./chrome-attrappe.mjs";
+
+/* Erst die Attrappe stellen, dann laden: `net/dienste.js` liest die Fassung aus
+   dem Manifest schon beim Einlesen der Datei. Ohne ein `chrome` davor bricht
+   der Import, und zwar bevor irgendeine Prüfung läuft. */
+attrappeSetzen();
+const { overlaySicherstellen } = await import("../net/seite.js");
+
+const EINSPIEL_TAB = {
+  id: 7,
+  url: "https://geizhals.de/warenkorb",
+  title: "Warenkorb",
+  active: true,
+  status: "complete",
+  windowId: 3,
+};
+
+/* Ein Tab, in dem das Overlay noch nicht läuft: Der erste Ping bleibt ohne
+   Erfolg, nach dem Einspielen antwortet es. Genau so verhält sich eine frisch
+   geladene Seite. */
+function einspielstandBauen({ scheitertBei = null } = {}) {
+  const stand = { lebt: false };
+  const { chrome, spur } = attrappeSetzen({
+    tab: { ...EINSPIEL_TAB },
+    seiteAntwortet: (n) =>
+      n.typ === "overlay:ping" ? { ok: stand.lebt } : { ok: true },
+  });
+  chrome.scripting.executeScript = async (auftrag) => {
+    spur.push({ wohin: "executeScript", auftrag });
+    /* So sagt Chrome nein, wenn eine Datei des Auftrags fehlt: Der ganze
+       Auftrag wird abgelehnt, nicht nur die eine Datei. */
+    if (scheitertBei && (auftrag.files || []).some((d) => d.includes(scheitertBei))) {
+      throw new Error("Could not load file");
+    }
+    stand.lebt = true;
+    return [{ result: null }];
+  };
+  const auftraege = () =>
+    spur.filter((e) => e.wohin === "executeScript").map((e) => e.auftrag.files);
+  return { spur, auftraege };
+}
+
+test("Einspielen: die Klickwache kommt vor dem Overlay in die Seite", async () => {
+  const { auftraege } = einspielstandBauen();
+  const ergebnis = await overlaySicherstellen(EINSPIEL_TAB.id);
+  assert.deepEqual(ergebnis, { ok: true, schonDa: false });
+
+  const dateien = auftraege();
+  assert.equal(dateien.length, 1, "ein Auftrag genügt, wenn alles da ist");
+  assert.deepEqual(dateien[0], [
+    "src/content/klickwache.js",
+    "src/content/selektor.js",
+    "src/content/overlay.js",
+  ]);
+  /* Die Reihenfolge ist die Aussage: overlay.js findet die Wache vor, wenn es
+     startet. Umgekehrt liefe der erste Befehl in ein `wache_fehlt`. */
+  assert.ok(
+    dateien[0].indexOf("src/content/klickwache.js") < dateien[0].indexOf("src/content/overlay.js"),
+    "die Wache muss VOR dem Overlay eingespielt werden"
+  );
+});
+
+test("Einspielen: fehlt die Datei des Teach-Modus, wird trotzdem bedient", async () => {
+  /* `selektor.js` gehört einem anderen Gebiet und entsteht gerade erst. Fehlt
+     sie, lehnt Chrome den ganzen Auftrag ab — dann stünde die Erweiterung ohne
+     Zeichen und ohne Wache in der Seite, wegen einer Datei, die zum Klicken
+     niemand braucht. */
+  const { auftraege } = einspielstandBauen({ scheitertBei: "selektor.js" });
+  const ergebnis = await overlaySicherstellen(EINSPIEL_TAB.id);
+  assert.deepEqual(ergebnis, { ok: true, schonDa: false });
+
+  const dateien = auftraege();
+  assert.equal(dateien.length, 2, "erst der volle Auftrag, dann der Pflichtteil");
+  assert.deepEqual(dateien[1], ["src/content/klickwache.js", "src/content/overlay.js"]);
+});
+
+test("Einspielen: ohne Wache wird auch nichts eingespielt", async () => {
+  /* Die Gegenprobe zum Rückfall: Er ist kein Weg, auf dem das Overlay allein
+     in die Seite kommt. Ohne Wache keine Bedienung, und zwar schon hier. */
+  const { auftraege } = einspielstandBauen({ scheitertBei: "klickwache.js" });
+  const ergebnis = await overlaySicherstellen(EINSPIEL_TAB.id);
+  assert.deepEqual(ergebnis, { ok: false, fehler: "einspielen_fehlgeschlagen" });
+  for (const dateien of auftraege()) {
+    assert.ok(
+      dateien.includes("src/content/klickwache.js"),
+      "kein Auftrag darf overlay.js ohne seine Wache in die Seite bringen"
+    );
+  }
+});
+
+test("Einspielen: läuft das Overlay schon, wird gar nichts eingespielt", async () => {
+  const stand = { lebt: true };
+  const { chrome, spur } = attrappeSetzen({
+    tab: { ...EINSPIEL_TAB },
+    seiteAntwortet: (n) => (n.typ === "overlay:ping" ? { ok: stand.lebt } : { ok: true }),
+  });
+  chrome.scripting.executeScript = async (auftrag) => {
+    spur.push({ wohin: "executeScript", auftrag });
+    return [{ result: null }];
+  };
+  const ergebnis = await overlaySicherstellen(EINSPIEL_TAB.id);
+  assert.deepEqual(ergebnis, { ok: true, schonDa: true });
+  assert.equal(spur.filter((e) => e.wohin === "executeScript").length, 0);
+});
+
+test("Einspielen: in den Freigabe-Ursprung wird nie eingespielt", async () => {
+  /* Der Bestand aus DRAHTFORMAT §7.3, hier nur nachgemessen: Die Liste ändert
+     daran nichts. Ein Skript in cloud.smartragents.ai spräche mit der Stimme
+     dieses Ursprungs. */
+  const { chrome, spur } = attrappeSetzen({
+    tab: { ...EINSPIEL_TAB, url: "https://cloud.smartragents.ai/agenten" },
+    seiteAntwortet: () => ({ ok: false }),
+  });
+  chrome.scripting.executeScript = async (auftrag) => {
+    spur.push({ wohin: "executeScript", auftrag });
+    return [{ result: null }];
+  };
+  const ergebnis = await overlaySicherstellen(EINSPIEL_TAB.id);
+  assert.deepEqual(ergebnis, { ok: false, fehler: "ursprung_gesperrt" });
+  assert.equal(spur.filter((e) => e.wohin === "executeScript").length, 0);
+});
+
+test("Modus: ein gestopptes Zeichen ist rot, auch aus der Automatik heraus", async () => {
+  /* Der Inline-Stil mit !important schlägt auch das eigene Blatt im
+     Schattenbaum. Bliebe der Verlauf stehen, sagte der Rahmen nach dem Stopp
+     weiter „hier läuft etwas allein". */
+  const { fragen, zustand } = await modusStarten();
+  fragen({ typ: "overlay:modus", modus: "auto" });
+  const rahmen = teilHolen(zustand, "rahmen");
+  assert.ok(rahmen.style.getPropertyValue("border-image-source"), "erst läuft die Automatik");
+
+  fragen({ typ: "overlay:gestoppt" });
+  assert.equal(rahmen.getAttribute("data-zustand"), "gestoppt");
+  assert.equal(
+    rahmen.style.getPropertyValue("border-image-source"),
+    "",
+    "die Farbe der Automatik muss weg sein, sonst gewinnt sie gegen das Rot"
+  );
+  assert.equal(rahmen.style.getPropertyValue("box-shadow"), "");
+});
+
+test("Modus: ein totes Zeichen trägt keine Automatikfarbe mehr", async () => {
+  const { fragen, zustand, sandbox } = await modusStarten();
+  fragen({ typ: "overlay:modus", modus: "auto" });
+  sandbox.chrome.runtime.__wirft = true;
+  zustand.feuern("keydown", { key: "Escape" });
+  zustand.feuern("keydown", { key: "Escape" });
+
+  const rahmen = teilHolen(zustand, "rahmen");
+  assert.equal(rahmen.getAttribute("data-zustand"), "tot");
+  assert.equal(rahmen.style.getPropertyValue("border-image-source"), "");
+  assert.equal(
+    rahmen.getAttribute("data-modus"),
+    null,
+    "ein totes Zeichen hat keinen Betriebsmodus, sonst atmet es weiter in dessen Farbe"
+  );
+  assert.equal(teilHolen(zustand, "punkt").style.getPropertyValue("background-image"), "");
+});
+
+test("Modus: die Automatik atmet in ihrer eigenen Farbe, das tote Zeichen gar nicht", async () => {
+  const seite = seiteBauen();
+  const { zustand } = await overlayStarten(seite.alle);
+  const regeln = regelnLesen(zustand.stil);
+  const auto = regeln.find(
+    (r) => r.selektor.includes('[data-modus="auto"]') && r.umgebung.includes("no-preference")
+  );
+  assert.ok(auto, "die Automatik braucht ihre eigene Bewegungsregel");
+  assert.ok(
+    auto.selektor.includes(":not([data-zustand])"),
+    "sonst gewinnt sie gegen das tote und das gestoppte Zeichen, die früher im Blatt stehen"
+  );
+  const animation = String(auto.deklarationen.get("animation") || "");
+  assert.ok(animation.includes("atmenAuto"), `keine eigene Bewegung gefunden: ${animation}`);
+  assert.ok(zustand.stil.includes("@keyframes atmenAuto"), "die Bewegung muss es auch geben");
+  /* Und der Schein trägt die Marke, nicht das Grün. */
+  const stelle = zustand.stil.indexOf("@keyframes atmenAuto");
+  assert.ok(
+    zustand.stil.slice(stelle, stelle + 260).includes("91,141,239"),
+    "ein blauer Rahmen mit grünem Schein wären zwei Aussagen auf einmal"
+  );
 });

@@ -46,10 +46,30 @@ import {
 } from "./dienste.js";
 import { ausweisAusAblage } from "./konto.js";
 import { rechtZurueckgeben } from "./rechte.js";
-import { befehlAusfuehren, zaehlerNeu, laufBeenden } from "./ausfuehrer.js";
+import { tabAdresse } from "./seite.js";
+import { saeubern } from "./befehle.js";
+import * as protokollbuch from "./protokollbuch.js";
+/*
+ * Der Ausführer kommt als ganzes Modul herein und nicht mit benannten Feldern.
+ *
+ * Grund, Befund vom 14.08.2026: `laufAbbrechen()` (Vertrag v3.5 §5) entsteht in
+ * derselben Runde in `ausfuehrer.js`. Ein benannter Import auf ein Feld, das es
+ * in dem Augenblick noch nicht gibt, ist kein Laufzeitfehler an einer Stelle,
+ * sondern ein Ladefehler der ganzen Datei — und eine Brücke, die nicht lädt,
+ * kappt auch nichts. Über das Modulobjekt kann `laufKappen()` nehmen, was da
+ * ist, und die Notbremse greift in jedem Fall.
+ */
+import * as ausfuehrer from "./ausfuehrer.js";
 
 const WECKER = "smartrlink-wache";
 const ABLAGE = "link_sitzung";
+
+/* Die Schrittmodi, die auf dem Draht stehen dürfen (DRAHTFORMAT §2, Vertrag
+   v3.5 §11.3). Eine Positivliste, keine Aufzählung des Verbotenen: Was hier
+   nicht steht, fällt auf `confirm_each` — die vorsichtigste der drei Stufen.
+   Die Übersetzung in unsere eigenen Wörter (`manual`, `assist`, `auto`) macht
+   der Ausführer; hier wird nur durchgereicht, was der Server gesagt hat. */
+const SERVER_SCHRITTMODI = Object.freeze(["auto", "assist", "confirm_each"]);
 
 /* Alles Flüchtige liegt im Modul, nicht im Speicher. Stirbt der Worker,
    ist es weg — und genau das soll es. */
@@ -62,6 +82,29 @@ let sitzung = null;
    kommt VOR dem Schließcode an; ohne diese Zeile wäre er beim Schließen
    schon wieder vergessen. */
 let letzterGrund = null;
+
+/*
+ * Kappen, was gerade läuft — die erste Handlung jeder Notbremse.
+ *
+ * Sie ist absichtlich synchron und wartet auf nichts: Zwischen dem Ereignis
+ * und dem Zustand „nichts läuft mehr" liegt keine Netzrunde (Vertrag v3.5 §5).
+ * `laufAbbrechen` ist die Fassung aus v3.5, `laufBeenden` der Bestand; welche
+ * von beiden im Modul steht, entscheidet die Datei nebenan, nicht diese hier.
+ */
+function laufKappen() {
+  try {
+    const kappen =
+      typeof ausfuehrer.laufAbbrechen === "function"
+        ? ausfuehrer.laufAbbrechen
+        : ausfuehrer.laufBeenden;
+    if (typeof kappen === "function") kappen();
+    return true;
+  } catch (_) {
+    /* Ein Fehler im Ausführer darf das Ende der Sitzung nicht aufhalten. Die
+       Leitung wird gleich danach ohnehin zugemacht. */
+    return false;
+  }
+}
 
 /* Wer über Zustandswechsel unterrichtet wird. Die Seitenleiste hört zu,
    solange sie offen ist; ist sie zu, geht die Nachricht ins Leere. Das ist
@@ -89,6 +132,130 @@ function abzeichenSetzen(an) {
   } catch (_) {
     /* Ältere Chrome-Fassung ohne action-API im Worker: Der Rahmen im Tab
        bleibt das Hauptsignal, kein Grund zum Abbruch. */
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Sichtbarkeit einer Cloud-Sitzung (Vertrag v3.5 §8.4)
+ *
+ * Drei Zeichen, gleichzeitig, nicht verhandelbar:
+ *
+ *   1. die Dauerzeile in der Seitenleiste (`link:cloud-sitzung`),
+ *   2. das Abzeichen am Symbol,
+ *   3. EINE Systemmeldung beim Start der Sitzung.
+ *
+ * Warum alle drei durch EINE Funktion gehen und warum die in `sitzungSchreiben`
+ * hängt: Am 11.08.2026 lag eine fertige, geprüfte Wache über einem Weg, den im
+ * Auslieferungsstand niemand rief. Drei Zeichen, die an drei Stellen einzeln
+ * gesetzt werden, sind dieselbe Bauform — es genügt ein neuer Weg in die
+ * Sitzung hinein, und eines davon fehlt. Eine Sitzung entsteht dagegen
+ * ausschliesslich dadurch, dass sie geschrieben wird. Wer diesen einen Weg
+ * nimmt, setzt die Zeichen mit; einen zweiten gibt es nicht.
+ *
+ * Die Systemmeldung hängt am Sitzungscode, die Zeile am Agentennamen: Der Name
+ * kommt unter Umständen erst mit dem ersten Befehl an, und dann soll die Zeile
+ * ihn nachtragen, ohne den Menschen ein zweites Mal anzupiepsen.
+ * ------------------------------------------------------------------ */
+
+const MELDUNG_ID = "smartrlink-cloud-sitzung";
+
+/* Was zuletzt angezeigt wurde (`code|agent`) und für welchen Code die
+   Systemmeldung schon lief. Beides im Modul: Stirbt der Dienstprozess, stirbt
+   die Sitzung mit ihm, und dann ist auch nichts mehr anzuzeigen. */
+let gezeigterStand = null;
+let gemeldeterCode = null;
+
+/**
+ * Der Agentenname, wie ein Mensch ihn zu sehen bekommt.
+ *
+ * Er stammt vom Relay (§8.1) und damit nicht aus dieser Erweiterung. In die
+ * Oberfläche geht deshalb nur, was auch der Relay durchlässt: Buchstaben,
+ * Ziffern, Unterstrich und Strich. Was der AUSFÜHRER bekommt, wird davon nicht
+ * berührt — dort geht der Rahmen unverändert hin, geprüft wird er dort.
+ */
+export function agentAnzeige(roh) {
+  return saeubern(roh, 32)
+    .replace(/[^A-Za-z0-9_-]/g, "")
+    .slice(0, 32);
+}
+
+function titelSetzen(agent, an) {
+  try {
+    chrome.action.setTitle({
+      title: an
+        ? agent
+          ? `SMarTrChrome, Cloud-Sitzung aktiv, ${agent} steuert diesen Browser`
+          : "SMarTrChrome, Cloud-Sitzung aktiv"
+        : "SMarTrChrome, Niemand öffnen",
+    });
+  } catch (_) {
+    /* Ältere Fassung ohne action-API: Abzeichen und Rahmen bleiben. */
+  }
+}
+
+/*
+ * Die Systemmeldung. Sie ist das einzige der drei Zeichen, das den Menschen
+ * auch dann erreicht, wenn er in einem anderen Fenster arbeitet.
+ *
+ * ⚠️ Die Berechtigung `notifications` steht am 14.08.2026 NICHT im Manifest
+ * (gemeldet an A-SPRACHE). Ohne sie ist `chrome.notifications` schlicht nicht
+ * da. Deshalb bricht hier nichts ab: Eine fehlende Berechtigung darf den Start
+ * einer Sitzung nicht verhindern, sie kostet nur eines von drei Zeichen.
+ */
+function systemmeldung(agent) {
+  try {
+    const meldungen = globalThis.chrome && chrome.notifications;
+    if (!meldungen || typeof meldungen.create !== "function") return false;
+    const lauf = meldungen.create(MELDUNG_ID, {
+      type: "basic",
+      iconUrl: "icons/icon-128.png",
+      title: "Cloud-Sitzung aktiv",
+      message: agent
+        ? `${agent} steuert jetzt diesen Browser. Zum Beenden drückst du Alt, Umschalt und S.`
+        : "Ein Agent steuert jetzt diesen Browser. Zum Beenden drückst du Alt, Umschalt und S.",
+      priority: 2,
+    });
+    if (lauf && typeof lauf.catch === "function") lauf.catch(() => {});
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+/** Alle drei Zeichen setzen. Gibt zurück, ob sich etwas geändert hat. */
+function cloudSitzungZeigen(satz) {
+  const agent = agentAnzeige(satz && satz.agent);
+  const code = String((satz && satz.code) || "");
+  const stand = `${code}|${agent}`;
+  if (stand === gezeigterStand) return false;
+  gezeigterStand = stand;
+
+  melden({ typ: "link:cloud-sitzung", an: true, agent });
+  abzeichenSetzen(true);
+  titelSetzen(agent, true);
+
+  if (code !== gemeldeterCode) {
+    gemeldeterCode = code;
+    systemmeldung(agent);
+  }
+  return true;
+}
+
+/** Und alle drei wieder wegnehmen. */
+function cloudSitzungAus() {
+  gezeigterStand = null;
+  gemeldeterCode = null;
+  melden({ typ: "link:cloud-sitzung", an: false, agent: "" });
+  abzeichenSetzen(false);
+  titelSetzen("", false);
+  try {
+    const meldungen = globalThis.chrome && chrome.notifications;
+    if (meldungen && typeof meldungen.clear === "function") {
+      const lauf = meldungen.clear(MELDUNG_ID);
+      if (lauf && typeof lauf.catch === "function") lauf.catch(() => {});
+    }
+  } catch (_) {
+    /* Ohne Berechtigung gibt es auch nichts wegzuräumen. */
   }
 }
 
@@ -163,6 +330,11 @@ export function schliessgrund(code, grund = null) {
 
 async function sitzungSchreiben(daten) {
   sitzung = daten;
+  /* Hier und nur hier entsteht oder endet eine Cloud-Sitzung — also stehen
+     hier auch ihre drei Zeichen (§8.4). Vor der Ablage und nicht danach: Ein
+     Speicher, der klemmt, darf die Sichtbarkeit nicht kosten. */
+  if (daten) cloudSitzungZeigen(daten);
+  else cloudSitzungAus();
   try {
     if (daten) await chrome.storage.session.set({ [ABLAGE]: daten });
     else await chrome.storage.session.remove(ABLAGE);
@@ -403,7 +575,7 @@ async function aufraeumen(grund, text) {
   /* Was noch in der Warteschlange des Ausführers steht, wird nicht mehr
      ausgeführt. Es bekommt trotzdem eine Antwort — der Ausführer beantwortet
      jeden Weg, auch den abgebrochenen. */
-  laufBeenden();
+  laufKappen();
   const alt = await sitzungLesen();
   await sitzungSchreiben(null);
   try {
@@ -495,6 +667,59 @@ async function sitzungBeenden(grund, text, { ausweis = null, widerrufen = true }
   /* 5. Zum Schluss der Modulspeicher. Nicht früher. */
   ausweisImSpeicher = null;
   return alt;
+}
+
+/*
+ * Eine Absage an den Agenten, in der Form, die auch der Ausführer benutzt.
+ *
+ * Sie steht hier, weil die Brücke selbst absagen können muss, ohne den
+ * Ausführer zu bemühen: abgelaufene Frist, geschlossener Tab. In beiden Fällen
+ * ist die Antwort schon bekannt, und der Agent soll sie sofort hören und nicht
+ * hinter einer Warteschlange.
+ */
+function absageRahmen(rahmen, code, satz, hinweis = null) {
+  const antwort = {
+    type: "result",
+    id: typeof rahmen?.id === "string" ? rahmen.id : "",
+    cmd: typeof rahmen?.cmd === "string" ? rahmen.cmd.slice(0, 40) : "",
+    success: false,
+    error: { code, message: satz, retryable: false },
+  };
+  if (hinweis) antwort.error.hint = hinweis;
+  return antwort;
+}
+
+/*
+ * Der Eintrag ins Protokollbuch (§8.3).
+ *
+ * Gespeichert wird der ORT, nicht der Inhalt — das Buch selbst kürzt die
+ * Adresse auf Schema, Wirt und Pfad. Hier wird nur zusammengetragen, was der
+ * Weg ohnehin schon weiss, und zwar so, dass kein Weg ohne Zeile bleibt:
+ * gelungen, abgelehnt oder gar nicht erst versucht.
+ *
+ * Wirft nie. Ein Buch, das klemmt, hält keine Sitzung an.
+ */
+async function buchFuehren(rahmen, laufende, ergebnis, adresse) {
+  try {
+    await protokollbuch.eintragen({
+      zeit: Date.now(),
+      agent: agentAnzeige(rahmen && rahmen.agent) || (laufende && laufende.agent) || "",
+      cmd: (ergebnis && ergebnis.cmd) || (rahmen && rahmen.cmd) || "",
+      url: adresse || "",
+      ergebnis: ergebnis && ergebnis.success
+        ? "gelungen"
+        : (ergebnis && ergebnis.error && ergebnis.error.code) || "abgelehnt",
+      /* Die Aktionsklassen kennt der Ausführer, nicht die Brücke. Reicht er
+         sie in `meta` durch, stehen sie im Buch; tut er es nicht, steht dort
+         keine erfundene Klasse. */
+      klassen: Array.isArray(ergebnis && ergebnis.meta && ergebnis.meta.klassen)
+        ? ergebnis.meta.klassen
+        : [],
+    });
+    return true;
+  } catch (_) {
+    return false;
+  }
 }
 
 /*
@@ -678,7 +903,17 @@ export function verbinden({ ticket, ausweis, ursprungMuster = null, tabId = null
           stufe: rahmen.access === "write" ? "write" : "read",
           bereich: Array.isArray(rahmen.allow) ? rahmen.allow.map(String) : [],
           modus: rahmen.mode === "domains" ? "domains" : "tab",
-          schrittmodus: rahmen.step_mode === "auto" ? "auto" : "confirm_each",
+          /* Drei Werte, nicht zwei (Vertrag v3.5 §11.3): `auto`, `assist`,
+             `confirm_each`. Unbekanntes fällt weiterhin auf `confirm_each` —
+             wer nicht gelesen werden kann, bekommt weniger, nie mehr.
+             Befund vom 14.08.2026 (Verzahnung): Solange hier `assist` auf
+             `confirm_each` fiel, war die mittlere Stufe vom Server aus gar
+             nicht erreichbar. Der Ausführer verrechnet die drei Werte über
+             `SERVER_MODUS`, und er verrechnet sie einschränkend: Der Serverwert
+             kann den lokalen Modus nur senken. */
+          schrittmodus: SERVER_SCHRITTMODI.includes(rahmen.step_mode)
+            ? rahmen.step_mode
+            : "confirm_each",
           /* Die führende Größe: eine Dauer, keine Uhrzeit. */
           budgetMs,
           /* …und der Anker, ab dem monoton weitergezählt wird. */
@@ -696,10 +931,17 @@ export function verbinden({ ticket, ausweis, ursprungMuster = null, tabId = null
              läuft — und weil ein Befehl niemals in einem anderen Tab landen
              darf als in dem, für den der Mensch freigegeben hat. */
           tabId: Number.isInteger(tabId) ? tabId : null,
+          /* Wer steuert (§8.1). Nennt der Relay den Agenten schon beim
+             Handschlag, steht sein Name ab der ersten Sekunde in der
+             Seitenleiste. Nennt er ihn erst mit dem ersten Befehl, wird er
+             dort nachgetragen. Erfunden wird er nie: Ohne Angabe bleibt das
+             Feld leer, und die Zeile sagt „Ein Agent", nicht irgendeinen
+             Namen. */
+          agent: agentAnzeige(rahmen.agent),
         });
 
         /* Neue Sitzung, neue Deckel: Der Ausführer zählt Befehle je Sitzung. */
-        zaehlerNeu();
+        ausfuehrer.zaehlerNeu();
 
         herzschlag = setInterval(() => {
           senden({ type: "ping", ts: Math.floor(Date.now() / 1000) });
@@ -758,24 +1000,70 @@ export function verbinden({ ticket, ausweis, ursprungMuster = null, tabId = null
          verbraucht, wird nichts mehr ausgeführt — der Agent bekommt trotzdem
          seine Antwort, sonst wartet er bis zur Frist des Relays ins Leere. */
       if (laufende && fristAbgelaufen(laufende)) {
-        senden({
-          type: "result",
-          id: typeof rahmen.id === "string" ? rahmen.id : "",
-          cmd: typeof rahmen.cmd === "string" ? rahmen.cmd.slice(0, 40) : "",
-          success: false,
-          error: {
-            code: "frist_abgelaufen",
-            message: "Die vereinbarte Zeit ist um. Die Verbindung ist beendet.",
-            retryable: false,
-          },
-        });
+        const absage = absageRahmen(
+          rahmen,
+          "frist_abgelaufen",
+          "Die vereinbarte Zeit ist um. Die Verbindung ist beendet."
+        );
+        senden(absage);
+        await buchFuehren(rahmen, laufende, absage, "");
         await trennen("abgelaufen");
         return;
       }
 
+      /*
+       * Kein stilles Warten (§8.4).
+       *
+       * Die Leitung steht, aber der Tab, für den der Mensch freigegeben hat,
+       * ist zu: Dann gibt es hier eine Absage und keine Warteschlange. Ein
+       * Befehl, der eine Stunde später ausgeführt wird, ist ein anderer Befehl
+       * — er trifft auf eine andere Seite, einen anderen Warenkorb und einen
+       * Menschen, der längst etwas anderes tut.
+       *
+       * Der Ausführer prüft den Tab ebenfalls (Schritt 5). Diese Prüfung steht
+       * trotzdem hier und davor, weil sie VOR seiner Kette liegt: Steht dort
+       * gerade ein langsamer Schritt, wartete der Agent sonst auf eine Absage,
+       * die schon feststeht.
+       */
+      const tabNummer = laufende && Number.isInteger(laufende.tabId) ? laufende.tabId : null;
+      const adresse = tabNummer === null ? null : await tabAdresse(tabNummer);
+      if (laufende && !adresse) {
+        const absage = absageRahmen(
+          rahmen,
+          "tab_gone",
+          tabNummer === null
+            ? "Zu dieser Sitzung gehört kein Tab mehr. Ich führe nichts aus."
+            : "Der Tab, den ich steuern durfte, ist nicht mehr da. Ich führe nichts aus.",
+          "Den Nutzer bitten, eine neue Verbindung für den Tab freizugeben, den er meint."
+        );
+        senden(absage);
+        await buchFuehren(rahmen, laufende, absage, "");
+        melden({
+          typ: "link:befehl",
+          cmd: absage.cmd,
+          erfolg: false,
+          fehler: absage.error.code,
+          klartext: absage.error.message,
+        });
+        return;
+      }
+
+      /* Der Agentenname aus dem Rahmen wird nachgetragen, sobald er sich
+         ändert. Geprüft wird er im Ausführer (§8.1); hier geht es allein
+         darum, dass in der Seitenleiste steht, WER gerade steuert. */
+      if (laufende && agentAnzeige(rahmen.agent) && agentAnzeige(rahmen.agent) !== agentAnzeige(laufende.agent)) {
+        await sitzungSchreiben({ ...laufende, agent: agentAnzeige(rahmen.agent) });
+      }
+
       let ergebnis;
       try {
-        ergebnis = await befehlAusfuehren(rahmen, laufende ? sitzungMitFrist(laufende) : {});
+        /* Der Rahmen geht unverändert weiter, mitsamt `agent`. Diese Datei
+           fälscht nichts hinein und lässt nichts weg: Was der Ausführer prüft,
+           soll er an dem messen, was wirklich angekommen ist. */
+        ergebnis = await ausfuehrer.befehlAusfuehren(
+          rahmen,
+          laufende ? sitzungMitFrist((await sitzungLesen()) || laufende) : {}
+        );
       } catch (fehler) {
         ergebnis = {
           type: "result",
@@ -803,6 +1091,16 @@ export function verbinden({ ticket, ausweis, ursprungMuster = null, tabId = null
            Protokoll (Hausregel: Klartext statt Fehlernummer). */
         klartext: ergebnis.error ? ergebnis.error.message : null,
       });
+      /*
+       * Hier steht KEIN Eintrag ins Protokollbuch.
+       *
+       * Befund vom 14.08.2026, gemessen und nicht vermutet: Ein Befehl, der
+       * den Ausführer erreicht, wird DORT gebucht — sein Eintrag trägt die
+       * Aktionsklassen, die nur er kennt. Ein zweiter Eintrag an dieser Stelle
+       * machte aus jeder Fernaktion zwei Zeilen, und §8.3 sagt „genau einen".
+       * Die Brücke bucht deshalb ausschliesslich, was den Ausführer nie
+       * erreicht hat: abgelaufene Frist, geschlossener Tab, Sitzungsende.
+       */
     };
 
     ws.onerror = () => {
@@ -916,6 +1214,21 @@ export async function verlaengernMit({ ticket, ausweis }) {
  * ob sie das ist, weiß man in dem Moment, in dem man trennt, nicht sicher.
  */
 export async function trennen(grund = "nutzer", ausweis = null) {
+  /*
+   * Erst kappen, dann melden (Vertrag v3.5 §5).
+   *
+   * `laufKappen()` ist synchron und steht deshalb VOR jedem `await`. Zwischen
+   * dem Ereignis und dem Zustand „nichts läuft mehr" liegt damit keine
+   * Netzrunde: Weder der `disconnect`-Rahmen noch der Widerruf beim Relay noch
+   * das Protokollbuch stehen davor. Der Relay kann langsam sein, offline sein
+   * oder gar nicht mehr antworten — ausgeführt wird trotzdem nichts mehr.
+   *
+   * Die Reihenfolge ist der ganze Sinn dieser Funktion. Wer den Widerruf
+   * vorzieht, baut eine Notbremse, deren Wirkung von der Gegenstelle abhängt.
+   */
+  laufKappen();
+  const laufende = await sitzungLesen();
+
   senden({ type: "disconnect", reason: grund === "notbremse" ? "user_revoked" : grund });
 
   const texte = {
@@ -925,6 +1238,18 @@ export async function trennen(grund = "nutzer", ausweis = null) {
     verloren: "Die Verbindung ist abgerissen. Der Agent kann diesen Browser nicht mehr steuern.",
   };
   await sitzungBeenden(grund, texte[grund] || texte.nutzer, { ausweis, widerrufen: true });
+
+  /* Und zuletzt das Buch. Auch das Ende einer Sitzung ist eine Fernaktion, die
+     ein Mensch später nachlesen können muss — vor allem die, die er selbst
+     ausgelöst hat. */
+  if (laufende) {
+    await buchFuehren(
+      { cmd: "disconnect", agent: laufende.agent },
+      laufende,
+      { cmd: "disconnect", success: false, error: { code: grund } },
+      ""
+    );
+  }
 }
 
 /*
@@ -947,6 +1272,20 @@ export async function trennen(grund = "nutzer", ausweis = null) {
  * Aufwachen über die Wanduhr nachgeholt.
  */
 export async function wacheLaufen() {
+  /* Das Protokollbuch räumt an DIESEM Wecker mit auf (§8.3) und nicht an einem
+     zweiten. Ein zweiter Takt wäre ein zweiter Grund, den Dienstarbeiter zu
+     wecken, und damit genau das Provisorium, das MV3 bestraft. Es steht vor
+     jeder Rückkehr, damit auch der letzte Schlag einer endenden Sitzung noch
+     aufräumt.
+     Mit der EINGESTELLTEN Dauer, nicht mit der Voreinstellung: Befund vom
+     14.08.2026 (Verzahnung). Vorher galt, was der Mensch eingestellt hatte,
+     genau in dem Augenblick, in dem er den Knopf drückte, und danach wieder
+     dreissig Tage. */
+  await protokollbuch
+    .aufbewahrungLesen()
+    .then((tage) => protokollbuch.aufraeumen(tage))
+    .catch(() => {});
+
   const gespeichert = await sitzungLesen();
   if (!gespeichert) {
     try {
@@ -984,6 +1323,79 @@ export async function wacheLaufen() {
     ...ankerNeu(verbraucht, jetzt, mono),
     endetUm: jetzt + rest,
   });
+}
+
+/* ------------------------------------------------------------------ *
+ * Der Anlauf des Dienstarbeiters
+ *
+ * MV3-Wirklichkeit: Chrome beendet den Dienstarbeiter, wenn er nichts zu tun
+ * hat, und startet ihn beim nächsten Ereignis neu. Der Herzschlag über die
+ * Leitung hält ihn wach, solange die Leitung steht — aber er ist keine Garantie
+ * und war nie als eine gemeint. Wird der Prozess trotzdem beendet, ist die
+ * Leitung weg, und mit ihr die Befugnis.
+ *
+ * Bis zum 14.08.2026 merkte das ausschliesslich der 30-Sekunden-Wecker. Das
+ * liess zwei Lücken offen, die beide zu Lasten des Menschen gehen:
+ *
+ *   1. Bis zu 30 Sekunden lang behauptete das Abzeichen am Symbol eine
+ *      Steuerung, die es nicht mehr gab. Ein sichtbares Zeichen, das eine
+ *      Sitzung überlebt, ist schlimmer als gar keines.
+ *   2. Kam der Wecker gar nicht zustande — `chrome.alarms.create` kann
+ *      scheitern, und `wacheLaufen` löscht ihn selbst, sobald keine Sitzung
+ *      mehr da ist —, blieb der Sitzungssatz in der Ablage liegen, ohne dass
+ *      ihn jemals jemand ansah.
+ *
+ * Deshalb sieht der Dienstarbeiter jetzt bei JEDEM Start selbst nach. Erkannt
+ * wird ein fremdes Leben an `ankerLeben`: Diese Kennung liegt im Modul und
+ * stirbt mit dem Prozess. Steht in der Ablage eine andere, dann gehört die
+ * Sitzung einem Prozess, den es nicht mehr gibt.
+ *
+ * Und was NICHT passiert: Es wird nichts wieder aufgebaut. Die Freigabe galt
+ * einer Verbindung, nicht dem Recht, sie nachzubilden.
+ *
+ * @returns {Promise<{gefunden:boolean, beendet:boolean, grund:string}>}
+ */
+export async function anlaufPruefen() {
+  /* Läuft in diesem Leben schon eine Sitzung, ist der Anlauf längst vorbei —
+     dann ruft hier jemand ein zweites Mal, und aufzuräumen gäbe es nur die
+     eigene Arbeit. Die Leitung zählt mit: Der Dienstarbeiter startet oft
+     GERADE WEIL die Seitenleiste eine Verbindung aufbauen will, und zwischen
+     dem `new WebSocket` und dem `auth_ok` gibt es noch keine Sitzung, wohl
+     aber eine Leitung, die niemand zumachen darf. */
+  if (sitzung || draht) return { gefunden: false, beendet: false, grund: "eigene_sitzung" };
+
+  let alt = null;
+  try {
+    const daten = await chrome.storage.session.get(ABLAGE);
+    alt = (daten && daten[ABLAGE]) || null;
+  } catch (_) {
+    return { gefunden: false, beendet: false, grund: "keine_ablage" };
+  }
+  if (!alt) {
+    /* Keine Sitzung, also auch kein Zeichen dafür. Das Abzeichen am Symbol
+       überlebt den Dienstarbeiter; bliebe es stehen, behauptete das Symbol
+       eine Steuerung, die es nicht gibt. */
+    cloudSitzungAus();
+    return { gefunden: false, beendet: false, grund: "keine_sitzung" };
+  }
+
+  /* Zwischen dem Lesen und hier kann `verbinden()` eine eigene Leitung oder
+     Sitzung angelegt haben. Die eigene wird nicht abgeräumt. */
+  if (sitzung || draht) return { gefunden: false, beendet: false, grund: "eigene_sitzung" };
+  if (alt.ankerLeben === LEBEN) {
+    return { gefunden: true, beendet: false, grund: "eigene_sitzung" };
+  }
+
+  /* Ein fremdes Leben: Die Leitung dieser Sitzung ist mit ihrem Prozess
+     gestorben. Sie wird ehrlich beendet, mitsamt Widerruf beim Relay — der
+     weiss davon nichts und hielte sie sonst bis zum Ablauf ihrer Frist offen. */
+  sitzung = alt;
+  await sitzungBeenden(
+    "verloren",
+    "Die Verbindung ist abgerissen. Der Agent kann diesen Browser nicht mehr steuern. Baue sie bitte neu auf.",
+    { widerrufen: true }
+  );
+  return { gefunden: true, beendet: true, grund: "fremdes_leben" };
 }
 
 export const WECKER_NAME = WECKER;

@@ -21,15 +21,102 @@ import * as ticket from "../net/ticket.js";
 import * as rechte from "../net/rechte.js";
 import * as chat from "../net/chat.js";
 import { CLOUD_URSPRUNG, anfragen } from "../net/dienste.js";
+import { MODI, MODUS_STANDARD } from "../net/befehle.js";
+import * as startseite from "./startseite.js";
+import * as werkbank from "./werkbank.js";
 import {
   SPERRE,
   FREIGABE_ABGELEHNT,
   AUSWEIS_FEHLT,
   GUTHABEN_LAGETEXT,
+  MODUS_TEXT,
+  MODUS_RIEGEL,
+  NOTBREMSE_SAETZE,
+  TAB_LISTE,
+  /* Die Sprachschicht aus panel/sprache.js, durchgereicht — die Begruendung
+     steht im Kopf von erklaerungen.js. */
+  t,
+  sprechsprache,
+  spracheAnwenden,
+  textEinsetzen,
 } from "./erklaerungen.js";
 
 const $ = (id) => document.getElementById(id);
 const app = $("app");
+
+/* Derselbe Satz an zwei Stellen (Aufbau und Chat). Er stand zweimal wörtlich
+   da; mit Katalog wären das zwei Schlüssel für eine Aussage gewesen. */
+const DIENST_STUMM = t(
+  "fehler_dienst_stumm",
+  "Der Hintergrunddienst der Erweiterung hat nicht geantwortet. Das liegt an der Erweiterung, nicht an dir. Starte Chrome neu, dann geht es wieder.",
+);
+
+/* Zweimal derselbe Satz: beim Abbrechen des Dialogs und beim Abbrechen der
+   Anmeldekarte ohne laufende Sitzung. */
+const ABGEBROCHEN_OHNE_VERBINDUNG = t(
+  "dialog_abgebrochen",
+  "Abgebrochen. Es wurde keine Verbindung aufgebaut.",
+);
+
+/* ------------------------------------------------------------------ *
+ * Sprache (Vertrag §12)
+ *
+ * Der Katalog wird hier WIRKLICH benutzt und nicht nur mitgeliefert: Diese
+ * drei Aufrufe stehen im Produktivweg, ganz am Anfang, noch vor dem ersten
+ * setzeZustand. Was sie tun:
+ *
+ *  1. `spracheAnwenden` setzt `<html lang>` auf die Sprache, die WIRKLICH
+ *     ankommt, und löst jedes `data-i18n` in panel.html auf.
+ *  2. `merkmaleUebersetzen` holt nach, was nicht als `data-i18n-attr` im HTML
+ *     stehen kann: Prüfsatz I1 (A-PANEL) misst jeden Wert von `data-i18n…`
+ *     gegen `^[a-z][a-z0-9_]*$`, und die Form `aria-label:schluessel` aus §12
+ *     fällt dort durch. Bis das gelöst ist, stehen diese Merkmale hier.
+ *  3. `zusatztexteUebersetzen` deckt die eine Stelle ab, an der ein Prüfsatz
+ *     das Element ohne jedes Merkmal verlangt.
+ *
+ * Ohne diese drei Zeilen wäre der ganze Katalog eine grüne Prüfung über
+ * Funktionen, die niemand ruft. Das ist der Befund vom 11.08.2026.
+ * ------------------------------------------------------------------ */
+
+/** [Kennung, Merkmal, Schlüssel, deutsche Fassung] */
+const MERKMALSTEXTE = [
+  ["neu", "aria-label", "kopf_neues_gespraech", "Neues Gespräch"],
+  ["neu", "title", "kopf_neues_gespraech", "Neues Gespräch"],
+  ["menue-knopf", "aria-label", "kopf_menue", "Menü"],
+  ["menue-knopf", "title", "kopf_menue", "Menü"],
+  ["menue", "aria-label", "kopf_menue", "Menü"],
+  ["stufe-wahl", "aria-label", "dialog_stufe_gruppe", "Was der Agent darf"],
+  ["dauer-wahl", "aria-label", "dialog_dauer_gruppe", "Dauer der Verbindung"],
+  ["verlauf", "aria-label", "kopf_verlauf_marke", "Gespräch mit Niemand"],
+  ["chat-modus", "aria-label", "chat_modus_gruppe", "Antwortmodus"],
+  ["vorlesen-knopf", "aria-label", "kopf_vorlesen_knopf", "Letzte Antwort vorlesen"],
+  ["vorlesen-knopf", "title", "kopf_vorlesen_knopf", "Letzte Antwort vorlesen"],
+  ["senden", "aria-label", "kopf_senden", "Senden"],
+  ["senden", "title", "kopf_senden", "Senden"],
+];
+
+function merkmaleUebersetzen() {
+  for (const [kennung, merkmal, schluessel, deutsch] of MERKMALSTEXTE) {
+    const el = $(kennung);
+    if (el) el.setAttribute(merkmal, t(schluessel, deutsch));
+  }
+}
+
+/*
+ * Der fett gesetzte Halbsatz im Geltungsbereich.
+ *
+ * Er trägt kein `data-i18n`, weil der Prüfsatz „Stufe und Dauer sind echte
+ * Auswahlen" (A-PANEL) `<strong>Nur dieser eine Tab</strong>` ohne jedes
+ * Merkmal misst. Übersetzt wird er trotzdem, nur eben von hier.
+ */
+function zusatztexteUebersetzen() {
+  const stark = document.querySelector("#dialog-mehr .geltung strong");
+  if (stark) stark.textContent = t("dialog_geltung_stark", "Nur dieser eine Tab");
+}
+
+spracheAnwenden(document);
+merkmaleUebersetzen();
+zusatztexteUebersetzen();
 
 const zustand = {
   tabId: null,
@@ -66,6 +153,29 @@ const zustand = {
      Spur ausschließen konnte. */
   wahlDauer: null,
   wahlStufe: null,
+  /*
+   * Der Betriebsmodus dieses Tabs (Vertrag §2). Er gilt JE TAB und stirbt mit
+   * dem Browser; die Wahrheit dazu liegt im Hintergrunddienst
+   * (chrome.storage.session, Schlüssel sa_modus). Was hier steht, ist die
+   * Anzeige davon. Voreinstellung ist MODUS_STANDARD und nicht die stärkste
+   * Stufe: Ein Modus, an den sich niemand erinnert, wäre eine Vollmacht.
+   */
+  modus: MODUS_STANDARD,
+  /*
+   * Der Tab, mit dem der eine Klick verbinden würde, und die übrigen offenen
+   * Tabs. Beides steht VOR dem Klick fest, und das ist keine Bequemlichkeit:
+   * `chrome.permissions.request` verlangt eine Nutzergeste, und die ist nach
+   * dem ersten await verbraucht (siehe seitenrechteHolen). Wer den Tab erst im
+   * Klick nachschlägt, hat sie schon verloren.
+   */
+  aktuellerTab: null,
+  tabs: [],
+  /* Der Tab, dem die laufende Sitzung gehört — für die Statuskarte. Er kann
+     ein anderer sein als der gerade aktive: Die Sitzung überlebt einen
+     Tabwechsel, die Karte muss trotzdem den richtigen Titel zeigen. */
+  verbundenerTab: null,
+  /* Der Agent der laufenden Cloud-Sitzung (Vertrag §8.4), oder null. */
+  cloudAgent: null,
 };
 
 /* ------------------------------------------------------------------ *
@@ -151,8 +261,11 @@ const FOKUS_NACH_ZUSTAND = {
   aktiv: () => $("sitzungsleiste"),
   /* Im Ruhezustand ist die Karte weg, an der der Mensch eben stand: Abbrechen,
      Zurück und Stopp verschwinden mit ihr. Der nächste Schritt ist der Weg zur
-     Verbindung, also steht der Fokus dort. */
-  bereit: () => ($("verbindungsleiste").hidden ? null : $("verbinden-start")),
+     Verbindung, also steht der Fokus dort — seit 0.5.3 auf dem Knopf, der
+     wirklich verbindet, und nicht mehr auf dem Weg in den Dialog. */
+  bereit: () => ($("verbindungsleiste").hidden ? null : $("verbinden-tab")),
+  werkbank: () => $("werkbank"),
+  buch: () => $("buch"),
 };
 
 function fokusNachZustand(name) {
@@ -184,8 +297,23 @@ function setzeZustand(name) {
   $("anmeldung").hidden = name !== "anmeldung";
   $("kennwort").hidden = name !== "kennwort";
   $("erklaerkarte").hidden = name !== "erklaerung";
+  $("werkbank").hidden = name !== "werkbank";
+  $("buch").hidden = name !== "buch";
   $("verlauf").hidden = !(name === "aktiv" || (name === "bereit" && blasen));
-  $("sitzungsleiste").hidden = name !== "aktiv";
+  /*
+   * Der Not-Aus verschwindet nie.
+   *
+   * Bis 0.5.2 hing diese Leiste allein am Zustand `aktiv`. Jede Karte, die
+   * während einer laufenden Sitzung erscheinen kann — die Kennwortkarte bei
+   * der Selbsterneuerung, die Erklärkarte, die Anmeldung — nahm dem Menschen
+   * damit den Stopp-Knopf weg, während der Agent seine Rechte auf dem Tab
+   * behielt. Die Bedingung fragt deshalb nicht mehr nach dem Bildschirm,
+   * sondern danach, ob wirklich etwas läuft (Vertrag §5).
+   */
+  $("sitzungsleiste").hidden = !(name === "aktiv" || !!zustand.sitzung);
+  /* Die Statuskarte des verbundenen Tabs teilt die Lebensdauer der Sitzung,
+     nicht die eines Bildschirms — aus demselben Grund. */
+  $("tabkarte").hidden = !zustand.sitzung;
   /* Der Weg zur Verbindung steht nur im Ruhezustand offen, und nur solange
      KEINE Sitzung läuft. Die zweite Bedingung ist keine Zierde: Ohne sie böte
      das Panel in der Lage „Ausweis verfallen, Sitzung läuft weiter" einen
@@ -193,6 +321,10 @@ function setzeZustand(name) {
      hält. Bei laufender Sitzung führt der Weg über Stopp, nicht über einen
      zweiten Antrag. */
   $("verbindungsleiste").hidden = name !== "bereit" || !!zustand.sitzung;
+  /* Die Tab-Liste ist der Weg zu einem ANDEREN Fenster. Sie steht neben dem
+     einen Klick und geht mit ihm: Läuft eine Sitzung, führt der Weg über
+     Stopp, nicht über einen zweiten Antrag (siehe dialogVorbereiten). */
+  $("startseite").hidden = name !== "bereit" || !!zustand.sitzung;
   /* Der Beispielauftrag wohnte bis 0.4.0 in #leer und war damit nie zu sehen:
      sitzungAnzeigen() blendet ihn ein und schaltet unmittelbar danach auf
      `aktiv`, wo #leer verschwindet. Jetzt steht er neben der Sitzungsleiste
@@ -216,21 +348,23 @@ function setzeZustand(name) {
 function zustandChipSetzen() {
   const s = zustand.sitzung;
   if (s) {
-    const etikett = STUFENTEXT[s.stufe]?.etikett || "Nur zusehen";
+    const etikett = STUFENTEXT[s.stufe]?.etikett || t("kopf_stufe_read", "Nur zusehen");
     $("zustand-text").textContent = s.vorfuehrung
-      ? `Vorführung · ${etikett}`
-      : `Aktiv · ${etikett}`;
+      ? t("kopf_zustand_vorfuehrung", "Vorführung · $1", etikett)
+      : t("kopf_zustand_aktiv", "Aktiv · $1", etikett);
     return;
   }
   if (app.dataset.state === "kennwort") {
-    $("zustand-text").textContent = "Warte auf deine Freigabe";
+    $("zustand-text").textContent = t("kopf_zustand_warte", "Warte auf deine Freigabe");
     return;
   }
   /* Befund Inhaber 29.07.: „Nicht verbunden" stand auch dann da, wenn Konto
      und Guthaben längst verbunden waren — der Chip sprach nur über die
      Steuersitzung und verschwieg die Anmeldung. Jetzt benennt er beide Lagen:
      Wer angemeldet ist, liest das auch. */
-  $("zustand-text").textContent = zustand.ausweis ? "Angemeldet · bereit" : "Nicht verbunden";
+  $("zustand-text").textContent = zustand.ausweis
+    ? t("kopf_zustand_angemeldet", "Angemeldet · bereit")
+    : t("kopf_nicht_verbunden", "Nicht verbunden");
 }
 
 /*
@@ -308,7 +442,10 @@ function sprich(text) {
   try {
     speechSynthesis.cancel();
     const s = new SpeechSynthesisUtterance(text);
-    s.lang = "de-DE";
+    /* Bis 0.5.3 stand hier fest "de-DE". Eine englische Oberflaeche waere
+       damit von einer deutschen Stimme buchstabiert worden, und Vorlesen ist
+       der Haupt-Bedienweg des Inhabers (Befund 09.08.2026). */
+    s.lang = sprechsprache();
     s.rate = 1.0;
     speechSynthesis.speak(s);
   } catch (_) {
@@ -350,12 +487,17 @@ function merkenUndSprechen(text, dringend = false) {
  * an der er ihn liest, bevor er tippt (und an der ihn der Bildschirmleser
  * beim Betreten des Feldes vorliest).
  */
+/* Die beiden Saetze stehen als blanke Zeichenketten da und nicht schon als
+   `t(...)`: panel.html traegt denselben Platzhalter, und ein Pruefsatz haelt
+   beide woertlich gegeneinander. Uebersetzt wird deshalb erst beim Setzen. */
 const PLATZHALTER_GESPRAECH = "Schreib Niemand, was du brauchst …";
 const PLATZHALTER_TAB = "Sag Niemand, was er in diesem Tab tun soll …";
 
 function eingabePlatzhalterSetzen() {
   const gebunden = !!(zustand.sitzung && !zustand.sitzung.vorfuehrung && zustand.browserKontext);
-  $("eingabe").placeholder = gebunden ? PLATZHALTER_TAB : PLATZHALTER_GESPRAECH;
+  $("eingabe").placeholder = gebunden
+    ? t("kopf_platzhalter_tab", PLATZHALTER_TAB)
+    : t("kopf_platzhalter_gespraech", PLATZHALTER_GESPRAECH);
 }
 
 function sagen(wer, text) {
@@ -372,15 +514,67 @@ function sagen(wer, text) {
   if (wer === "niemand") zustand.letzteRede = text;
 }
 
-function protokollieren(text) {
+/* Zwei Ziffern, damit die Uhrzeit im Protokoll untereinander steht und nicht
+   springt. */
+const zwei = (n) => String(n).padStart(2, "0");
+
+/*
+ * Der Zeitstempel einer Protokollzeile.
+ *
+ * `zeit` kommt nach Vertrag §6 als Millisekunden seit der Epoche mit — vom
+ * Ausführer, also von der Stelle, die den Schritt wirklich getan hat. Fehlt
+ * sie oder ist sie unbrauchbar, gilt der Augenblick des Eintragens. Geraten
+ * wird nichts: Eine Zeile ohne Uhrzeit wäre im Nachhinein nicht mehr
+ * einzuordnen, und genau dafür gibt es das Protokoll.
+ */
+function zeitStempel(roh) {
+  const ms = Number(roh);
+  const wann = new Date(Number.isFinite(ms) && ms > 0 ? ms : Date.now());
+  return {
+    /* Für Maschinen und für den Bildschirmleser, der `datetime` vorliest. */
+    iso: wann.toISOString(),
+    kurz: `${zwei(wann.getHours())}:${zwei(wann.getMinutes())}:${zwei(wann.getSeconds())}`,
+  };
+}
+
+/*
+ * Eine Zeile im Live-Protokoll.
+ *
+ * Seit v3.5 nimmt sie `{ text, cmd, zeit, ergebnis }` (Vertrag §6). `text`
+ * bleibt Pflicht, und eine blanke Zeichenkette wird weiterhin angenommen: Der
+ * Bestand ruft diese Stelle an einem Dutzend Orten so auf, und eine
+ * Umstellung, die dort still Zeilen verschluckt, wäre schlimmer als das
+ * fehlende Feld.
+ *
+ * `cmd` und `ergebnis` stehen als Merkmale am Element und nicht im Satz: Der
+ * Satz ist das, was vorgelesen wird, und „Erledigt: click, ok" sagt einem
+ * Menschen nichts, was „Erledigt: click" nicht schon sagt. Für das Auge und
+ * für eine spätere Auswertung sind sie trotzdem da.
+ */
+function protokollieren(eintrag) {
+  const daten = typeof eintrag === "string" ? { text: eintrag } : eintrag || {};
+  const text = String(daten.text || "");
+  if (!text) return;
   const li = document.createElement("li");
+
+  const zeit = zeitStempel(daten.zeit);
+  const uhr = document.createElement("time");
+  uhr.className = "protokoll-zeit";
+  uhr.setAttribute("datetime", zeit.iso);
+  uhr.textContent = zeit.kurz;
+  li.appendChild(uhr);
+  li.append(" ");
+
+  if (daten.cmd) li.setAttribute("data-cmd", zitat(daten.cmd, 40));
+  if (daten.ergebnis) li.setAttribute("data-ergebnis", zitat(daten.ergebnis, 40));
+
   const trenner = text.indexOf(":");
   if (trenner > 0) {
     const kopf = document.createElement("strong");
     kopf.textContent = text.slice(0, trenner);
     li.append(kopf, text.slice(trenner));
   } else {
-    li.textContent = text;
+    li.append(text);
   }
   $("protokoll").appendChild(li);
   $("protokoll-box").hidden = false;
@@ -425,7 +619,7 @@ function guthabenAnzeigen() {
     return;
   }
   const stand = guthaben <= 0 ? "leer" : guthaben < KNAPP_AB ? "knapp" : "ok";
-  el.textContent = `Guthaben: ${gt(guthaben)} GT`;
+  el.textContent = t("kopf_guthaben", "Guthaben: $1 GT", gt(guthaben));
   el.setAttribute("data-stand", stand);
 }
 
@@ -489,12 +683,12 @@ async function cloudTabNeuLaden(tabId) {
     await chrome.tabs.update(tabId, { active: true });
     await chrome.tabs.reload(tabId);
     ansagen(
-      "Ich lade den SMarTrAgents-Tab neu. Sobald er da ist, habe ich deine Anmeldung.",
+      t("ausweis_neuladen", "Ich lade den SMarTrAgents-Tab neu. Sobald er da ist, habe ich deine Anmeldung."),
       true
     );
   } catch (_) {
     stoerung(
-      "Ich konnte den SMarTrAgents-Tab nicht neu laden. Wechsle bitte selbst dorthin und drücke F5."
+      t("fehler_neuladen", "Ich konnte den SMarTrAgents-Tab nicht neu laden. Wechsle bitte selbst dorthin und drücke F5.")
     );
   }
 }
@@ -522,10 +716,10 @@ async function guthabenLaden() {
   }
   guthabenAnzeigen();
   if (vorher !== null && vorher >= KNAPP_AB && guthaben < KNAPP_AB && guthaben > 0) {
-    ansagen(`Achtung, dein Guthaben wird knapp: noch ${gt(guthaben)} GT.`, true);
+    ansagen(t("kopf_guthaben_knapp", "Achtung, dein Guthaben wird knapp: noch $1 GT.", gt(guthaben)), true);
   }
   if (vorher !== 0 && guthaben === 0) {
-    ansagen("Dein Guthaben ist aufgebraucht. In der Cloud kannst du aufladen.", true);
+    ansagen(t("kopf_guthaben_leer", "Dein Guthaben ist aufgebraucht. In der Cloud kannst du aufladen."), true);
   }
 }
 
@@ -599,6 +793,238 @@ function ursprungAus(url) {
   }
 }
 
+/* Der Host einer Adresse, für die Anzeige. Leer heißt: nichts, was ein Mensch
+   als Adresse lesen könnte — dann steht dort auch nichts. */
+function hostWort(url) {
+  try {
+    return new URL(String(url || "")).host;
+  } catch (_) {
+    return "";
+  }
+}
+
+/* Wie ein Tab in der Liste und in der Statuskarte heißt. Titel kommen von
+   fremden Seiten und gehen deshalb durch `zitat` — sie werden nie in einen
+   Satz eingebaut und nie vorgelesen. */
+const tabWort = (tab) => zitat(tab && (tab.title || tab.url), 60) || hostWort(tab && tab.url);
+
+/* ------------------------------------------------------------------ *
+ * Die offenen Tabs — Grundlage des einen Klicks und der Tab-Liste
+ *
+ * Beides braucht dieselbe Auskunft, und beides braucht sie VOR dem Klick:
+ * `chrome.permissions.request` verlangt eine Nutzergeste, und die ist nach dem
+ * ersten await verbraucht. Deshalb wird der Bestand hier gepflegt und im Klick
+ * nur noch gelesen.
+ * ------------------------------------------------------------------ */
+
+let tabsLaufen = false;
+let tabsNochmal = false;
+
+async function tabsAuffrischen() {
+  /* Ein Lauf zur Zeit. Chrome feuert onUpdated je Tab mehrfach, und drei
+     gleichzeitige Abfragen lieferten drei Listen, von denen die letzte
+     gewinnt — nicht die neueste.
+     Verworfen wird ein Ereignis trotzdem nie: Trifft eines ein, während ein
+     Lauf unterwegs ist, wird nachgeholt. Ohne dieses Nachholen bliebe der
+     aktuelle Tab veraltet, und der eine Klick verbände mit dem Tab von
+     vorhin — mit dem, den der Mensch gerade NICHT ansieht. */
+  if (tabsLaufen) {
+    tabsNochmal = true;
+    return;
+  }
+  tabsLaufen = true;
+  try {
+    let alle = [];
+    let aktiv = null;
+    try {
+      alle = await chrome.tabs.query({});
+      const [einer] = await chrome.tabs.query({ active: true, currentWindow: true });
+      aktiv = einer || null;
+    } catch (_) {
+      /* Ohne Auskunft bleibt der letzte Stand stehen; eine geleerte Liste
+         sähe aus wie „kein Tab offen" und wäre eine Falschaussage. */
+      return;
+    }
+    const vorher = zustand.aktuellerTab ? zustand.aktuellerTab.id : null;
+    zustand.tabs = Array.isArray(alle) ? alle : [];
+    if (aktiv) zustand.aktuellerTab = aktiv;
+    if (zustand.sitzung && Number.isInteger(zustand.tabId)) {
+      const gefunden = zustand.tabs.find((t) => t && t.id === zustand.tabId);
+      if (gefunden) zustand.verbundenerTab = gefunden;
+    }
+    verbindungswegZeichnen();
+    /* Der Modus gilt je Tab. Wechselt der Tab, gilt der Modus des neuen — und
+       nicht der, der zufällig noch angezeigt wurde. Nur beim WECHSEL, sonst
+       liefe bei jedem Ladefortschritt eine Frage an den Dienst. */
+    const jetzt = zustand.aktuellerTab ? zustand.aktuellerTab.id : null;
+    if (jetzt !== vorher) await modusHolen();
+  } finally {
+    tabsLaufen = false;
+  }
+  if (tabsNochmal) {
+    tabsNochmal = false;
+    await tabsAuffrischen();
+  }
+}
+
+/*
+ * Welche Tabs überhaupt zur Auswahl stehen.
+ *
+ * Die Sperre steht in net/rechte.js und wird hier BENUTZT, nicht wiederholt:
+ * Eine zweite Hostliste in der Oberfläche liefe genau dann auseinander, wenn
+ * es darauf ankommt (DRAHTFORMAT §7.3). Was dort gesperrt ist — die eigene
+ * Freigabeseite, das Gateway, der Relay, alles, was keine gewöhnliche Webseite
+ * ist —, erscheint hier gar nicht erst. Ein Ziel anzubieten, das garantiert
+ * scheitert, ist keine Auswahl, sondern eine Falle (Befund 28.07.2026).
+ */
+function waehlbareTabs() {
+  return zustand.tabs.filter((t) => t && typeof t.url === "string" && !rechte.sperrgrund(t.url));
+}
+
+/* Der Verbindungsweg oben: Hinweiszeile, Statuskarte, Tab-Liste. */
+function verbindungswegZeichnen() {
+  verbindenHinweisSetzen();
+  tabkarteZeichnen();
+  startseiteZeichnen();
+}
+
+function verbindenHinweisSetzen() {
+  const t = zustand.aktuellerTab;
+  const name = t ? tabWort(t) : "";
+  /* Ohne lesbaren Tab bleibt der allgemeine Satz aus panel.html stehen. Ein
+     leerer Hinweis neben einem Knopf, der „diesen Tab" sagt, wäre die Frage,
+     welchen. */
+  if (name) $("verbinden-hinweis").textContent = name;
+}
+
+function tabkarteZeichnen() {
+  const t = zustand.verbundenerTab || (zustand.sitzung ? zustand.aktuellerTab : null);
+  if (!t) {
+    /* Kein Tab in der Hand, aber eine Sitzung: Dann steht wenigstens die
+       Adresse da, für die der Mensch freigegeben hat. Eine leere Karte neben
+       einem grünen Punkt behauptete eine Verbindung mit nichts. */
+    const ursprung = zustand.ursprung || "";
+    $("tabkarte-titel").textContent = hostWort(ursprung) || ursprung;
+    $("tabkarte-adresse").textContent = "";
+    $("tabkarte-bild").hidden = true;
+    $("tabkarte-glyph").hidden = false;
+    return;
+  }
+  $("tabkarte-titel").textContent = tabWort(t);
+  $("tabkarte-adresse").textContent = hostWort(t.url);
+  const bild = $("tabkarte-bild");
+  const glyph = $("tabkarte-glyph");
+  /* Ein Favicon ist ein Bild von einer fremden Seite. Es wird angezeigt, nie
+     ausgewertet; fehlt es, steht das Ersatzzeichen da statt einer Lücke. */
+  const symbol = typeof t.favIconUrl === "string" && /^https?:\/\//.test(t.favIconUrl) ? t.favIconUrl : "";
+  if (symbol) {
+    bild.setAttribute("src", symbol);
+    bild.hidden = false;
+    glyph.hidden = true;
+  } else {
+    bild.removeAttribute("src");
+    bild.hidden = true;
+    glyph.hidden = false;
+  }
+}
+
+/*
+ * Die Anker, in die A-WERKBANK ihre Ansichten baut (Vertrag §1).
+ *
+ * Der Griff wird gemerkt: Jede dieser Ansichten raeumt beim Aufbau ihren Anker
+ * leer, und ein zweiter Aufbau bei jedem Oeffnen wuerfe den Stand weg, an dem
+ * der Mensch gerade arbeitet.
+ */
+const anker = { startseite: null, werkbank: null, matrix: null, buch: null };
+
+/**
+ * Eine fremde Ansicht in einen Anker bauen — und ehrlich zurueckmelden, ob es
+ * geklappt hat.
+ *
+ * Fehlt die Funktion, wirft sie oder sagt sie selbst `ok:false`, kommt `null`
+ * zurueck und die Seitenleiste zeichnet ihre eigene, schlichte Fassung. Ein
+ * leerer Anker waere ein Weg ohne Antwort: Der Mensch saehe eine Ueberschrift
+ * und darunter nichts und wuesste nicht, ob es laedt, leer ist oder fehlt.
+ */
+function ankerBauen(name, zeichner, wurzel, dienste) {
+  if (anker[name]) return anker[name];
+  if (typeof zeichner !== "function" || !wurzel) return null;
+  try {
+    const griff = zeichner(wurzel, dienste);
+    if (griff && griff.ok === false) return null;
+    anker[name] = griff || { ok: true };
+    /* Was das fremde Modul eben gebaut hat, bekommt hier seine Sprache: Nur
+       ueber diesen Aufruf erreicht `data-i18n-attr` ueberhaupt einen Knoten,
+       denn in panel.html darf die Form nicht stehen (siehe Sprachblock). */
+    textEinsetzen(wurzel);
+    return anker[name];
+  } catch (_) {
+    return null;
+  }
+}
+
+/*
+ * Die Tab-Liste zeichnen.
+ *
+ * Gezeichnet wird sie von src/panel/startseite.js. Sie holt sich die Tabs
+ * ueber `tabsHolen` und meldet eine Wahl ueber `verbinden` zurueck — beides
+ * ohne Abwarten davor, damit die Nutzergeste bis zur Chrome-Abfrage haelt
+ * (siehe tabVerbindenMit).
+ */
+function startseiteZeichnen() {
+  const liste = waehlbareTabs();
+  const griff = ankerBauen("startseite", startseite.aufbauen, $("startseite"), {
+    tabsHolen: () => waehlbareTabs(),
+    verbinden: (tab) => tabVerbindenMit(tab),
+    trennen: () => beenden("nutzer"),
+  });
+  if (griff) {
+    if (typeof griff.tabsZeigen === "function") griff.tabsZeigen(liste);
+    if (typeof griff.standSetzen === "function") {
+      griff.standSetzen({
+        verbunden: !!zustand.sitzung,
+        tab: zustand.verbundenerTab || zustand.aktuellerTab,
+        agent: zustand.cloudAgent || "",
+      });
+    }
+    return "modul";
+  }
+  tabListeSelbstZeichnen($("startseite-liste"), {
+    tabs: liste,
+    aktuellerTabId: zustand.aktuellerTab ? zustand.aktuellerTab.id : null,
+    aufWaehlen: (tab) => tabVerbindenMit(tab),
+  });
+  return "ersatz";
+}
+
+function tabListeSelbstZeichnen(wurzel, angaben) {
+  wurzel.replaceChildren();
+  if (!angaben.tabs.length) {
+    const p = document.createElement("p");
+    p.className = "hinweis";
+    p.textContent = TAB_LISTE.leer.text;
+    wurzel.appendChild(p);
+    return;
+  }
+  for (const t of angaben.tabs) {
+    const knopf = document.createElement("button");
+    knopf.className = "tabzeile";
+    knopf.setAttribute("type", "button");
+    const worte = document.createElement("span");
+    worte.className = "tabzeile-worte";
+    const titel = document.createElement("span");
+    titel.className = "tabzeile-titel";
+    titel.textContent = tabWort(t);
+    const adresse = document.createElement("span");
+    adresse.className = "tabzeile-adresse";
+    adresse.textContent = hostWort(t.url);
+    worte.append(titel, adresse);
+    knopf.appendChild(worte);
+    knopf.addEventListener("click", () => angaben.aufWaehlen(t));
+    wurzel.appendChild(knopf);
+  }
+}
+
 /* ------------------------------------------------------------------ *
  * Verbindungsdialog
  * ------------------------------------------------------------------ */
@@ -649,10 +1075,12 @@ async function auswahlMerken() {
   }
 }
 
+/* Dieselben Schlüssel wie die drei Knöpfe im Dialog: Es ist derselbe Text am
+   selben Schalter, und zwei Schlüssel dafür wären zwei Fassungen. */
 const DAUERTEXT = {
-  600: "10 Minuten",
-  1800: "30 Minuten",
-  3600: "60 Minuten",
+  600: t("dialog_dauer_600", "10 Minuten"),
+  1800: t("dialog_dauer_1800", "30 Minuten"),
+  3600: t("dialog_dauer_3600", "60 Minuten"),
 };
 
 /* Für Zeitspannen, die NICHT aus der Knopfreihe stammen: was der Server
@@ -660,27 +1088,27 @@ const DAUERTEXT = {
    jeder Wert sein, DAUERTEXT deckt nur die vier wählbaren ab. */
 function zeitWort(sekunden) {
   const s = Math.max(0, Math.round(Number(sekunden) || 0));
-  if (s < 60) return `${s} Sekunden`;
+  if (s < 60) return t("zeit_sekunden", "$1 Sekunden", s);
   const min = Math.round(s / 60);
-  return min === 1 ? "eine Minute" : `${min} Minuten`;
+  return min === 1 ? t("zeit_eine_minute", "eine Minute") : t("zeit_minuten", "$1 Minuten", min);
 }
 
 /* Was die gewählte Stufe im Klartext bedeutet. */
 const STUFENTEXT = {
   read: {
-    etikett: "Nur zusehen",
-    tut: "zusehen und dir Dinge zeigen",
-    ansage: "Er schaut nur zu.",
+    etikett: t("kopf_stufe_read", "Nur zusehen"),
+    tut: t("dialog_stufe_read_tut", "zusehen und dir Dinge zeigen"),
+    ansage: t("dialog_stufe_read_ansage", "Er schaut nur zu."),
   },
   write: {
-    etikett: "Bedienen",
-    tut: "für dich klicken, tippen und ausfüllen",
-    ansage: "Er darf für dich klicken und tippen. Anmelden machst du selbst.",
+    etikett: t("kopf_stufe_write", "Bedienen"),
+    tut: t("dialog_stufe_write_tut", "für dich klicken, tippen und ausfüllen"),
+    ansage: t("dialog_stufe_write_ansage", "Er darf für dich klicken und tippen. Anmelden machst du selbst."),
   },
   voll: {
-    etikett: "Vollzugriff",
-    tut: "für dich klicken, tippen und selbständig weiterarbeiten",
-    ansage: "Er arbeitet selbständig weiter und fragt nicht bei jedem Schritt. Anmelden machst du selbst.",
+    etikett: t("kopf_stufe_voll", "Vollzugriff"),
+    tut: t("dialog_stufe_voll_tut", "für dich klicken, tippen und selbständig weiterarbeiten"),
+    ansage: t("dialog_stufe_voll_ansage", "Er arbeitet selbständig weiter und fragt nicht bei jedem Schritt. Anmelden machst du selbst."),
   },
 };
 
@@ -763,16 +1191,16 @@ const stufeText = () => STUFENTEXT[gewaehlteStufe()] || STUFENTEXT.read;
 function zusammenfassen() {
   const dauer = gewaehlteDauer();
   const dauerWort = dauer.unbegrenzt
-    ? "so lange, bis du beendest,"
-    : `${DAUERTEXT[String(dauer.sekunden)] || zeitWort(dauer.sekunden)} lang`;
-  const bereich = "in diesem einen Tab";
+    ? t("dialog_dauer_offen", "so lange, bis du beendest,")
+    : t("dialog_dauer_lang", "$1 lang", DAUERTEXT[String(dauer.sekunden)] || zeitWort(dauer.sekunden));
+  const bereich = t("dialog_bereich", "in diesem einen Tab");
   $("zusammenfassung").textContent =
-    `Ich beantrage: Der Agent darf ${dauerWort} ${bereich} ${stufeText().tut}. ` +
-    `Jeden Schritt bestätigst du einzeln. ` +
+    t("dialog_antrag", "Ich beantrage: Der Agent darf $1 $2 $3. ", dauerWort, bereich, stufeText().tut) +
+    t("dialog_antrag_schritt", "Jeden Schritt bestätigst du einzeln. ") +
     (dauer.unbegrenzt
-      ? "Ich verlängere die Freigabe selbst, bis du auf Stopp drückst. "
-      : "Danach ist die Verbindung von selbst zu Ende. ") +
-    "Wie lange der Server wirklich bewilligt, sage ich dir beim Verbinden.";
+      ? t("dialog_antrag_offen", "Ich verlängere die Freigabe selbst, bis du auf Stopp drückst. ")
+      : t("dialog_antrag_ende", "Danach ist die Verbindung von selbst zu Ende. ")) +
+    t("dialog_antrag_server", "Wie lange der Server wirklich bewilligt, sage ich dir beim Verbinden.");
 }
 
 /*
@@ -804,7 +1232,7 @@ async function dialogVorbereiten() {
    */
   if (zustand.sitzung) {
     ansagen(
-      "Es läuft schon eine Verbindung. Beende sie mit Stopp, dann kannst du eine neue aufbauen.",
+      t("kopf_schon_verbunden", "Es läuft schon eine Verbindung. Beende sie mit Stopp, dann kannst du eine neue aufbauen."),
       true
     );
     return;
@@ -841,9 +1269,71 @@ async function dialogVorbereiten() {
   $("einstellungen-aendern").setAttribute("aria-expanded", "false");
   setzeZustand("dialog");
   ansagen(
-    "Verbindung mit dieser Website. Zum Verbinden auf Verbindung herstellen. Dauer und Stufe kannst du vorher ändern. Jeden Schritt bestätigst du einzeln."
+    t(
+      "dialog_ansage",
+      "Verbindung mit dieser Website. Zum Verbinden auf Verbindung herstellen. Dauer und Stufe kannst du vorher ändern. Jeden Schritt bestätigst du einzeln."
+    )
   );
 }
+
+/*
+ * Der eine Klick.
+ *
+ * Befund Inhaber 14.08.2026: Bis 0.5.2 führte der Weg über den Dialog, und bis
+ * zur aktiven Verbindung waren es drei bis vier Klicks. Für jemanden, der sich
+ * die Seitenleiste vorlesen lässt, ist jeder davon ein eigener vorgelesener
+ * Bildschirm — der Weg zur Arbeit war länger als die Arbeit.
+ *
+ * Diese Funktion darf deshalb bis zur Chrome-Abfrage NICHTS awaiten. Das ist
+ * keine Stilfrage: `chrome.permissions.request` verlangt eine Nutzergeste, und
+ * die ist nach dem ersten await verbraucht. Alles, was sie braucht — der Tab,
+ * seine Adresse, die gemerkte Wahl —, steht deshalb schon fest, gepflegt von
+ * tabsAuffrischen(). Das erste await der ganzen Kette ist die Chrome-Abfrage
+ * in verbinden().
+ *
+ * Was hier NICHT abgekürzt wird: die Sperre aus net/rechte.js, die
+ * Seitenfreigabe durch Chrome, der Ausweis, das Ticket und die Freigabeseite.
+ * Ein Klick weniger heißt ein Klick weniger, nicht eine Prüfung weniger.
+ */
+function tabVerbindenMit(tab) {
+  /* Läuft schon eine Sitzung, gibt es hier nichts zu beantragen — derselbe
+     Riegel wie in dialogVorbereiten, aus demselben Grund (Befund 06.08.2026:
+     ein zweiter Anlauf nahm dem laufenden Agenten das Seitenrecht weg). */
+  if (zustand.sitzung) {
+    ansagen(
+      t("kopf_schon_verbunden", "Es läuft schon eine Verbindung. Beende sie mit Stopp, dann kannst du eine neue aufbauen."),
+      true
+    );
+    return Promise.resolve();
+  }
+  if (!tab || typeof tab.url !== "string") {
+    erklaerkarteZeigen(SPERRE.browser);
+    return Promise.resolve();
+  }
+  const grund = rechte.sperrgrund(tab.url);
+  if (grund) {
+    erklaerkarteZeigen(SPERRE[grund] || SPERRE.browser);
+    return Promise.resolve();
+  }
+  const u = ursprungAus(tab.url);
+  if (!u) {
+    erklaerkarteZeigen(SPERRE.browser);
+    return Promise.resolve();
+  }
+  zustand.tabId = tab.id;
+  zustand.ursprung = u.ursprung;
+  zustand.ursprungMuster = u.muster;
+  zustand.verbundenerTab = tab;
+  $("ursprung").textContent = u.ursprung;
+  /* Die gemerkte Wahl herstellen, bevor der Antrag daraus entsteht. Sie ist
+     dieselbe wie im Dialog — zwei Vorbelegungen wären zwei Wahrheiten, und der
+     Mensch bekäme je nach Weg eine andere Sitzung. */
+  auswahlHerstellen();
+  zusammenfassen();
+  return verbinden();
+}
+
+const tabVerbinden = () => tabVerbindenMit(zustand.aktuellerTab);
 
 /* ------------------------------------------------------------------ *
  * Sitzung: aufbauen, laufen, beenden
@@ -945,7 +1435,10 @@ async function verbinden() {
   });
   if (!eingespielt || !eingespielt.ok) {
     await aufbauAbbrechen(
-      "Ich konnte den Rahmen auf dieser Seite nicht anzeigen. Aus Sicherheitsgründen baue ich dann keine Sitzung auf."
+      t(
+        "fehler_rahmen_sicherheit",
+        "Ich konnte den Rahmen auf dieser Seite nicht anzeigen. Aus Sicherheitsgründen baue ich dann keine Sitzung auf."
+      )
     );
     return;
   }
@@ -971,12 +1464,12 @@ async function verbinden() {
   zustand.abbruch = abbruch;
   $("kennwort-wert").textContent = "";
   $("kennwort-funk").textContent = "";
-  $("kennwort-lage").textContent = "Ich frage die Freigabe an …";
+  $("kennwort-lage").textContent = t("dialog_kennwort_anfrage", "Ich frage die Freigabe an …");
   /* Die Kennwortkarte erscheint erst, wenn wirklich ein Kennwort kommt
      (Rückruf `kennwortZeigen`). Bei der Sofortfreigabe der Lesestufe gibt es
      keines — der Nutzer drückt Verbinden und ist verbunden, ohne Umweg über
      eine Karte, die nichts zu vergleichen hätte. */
-  ansagen("Ich stelle die Verbindung her …");
+  ansagen(t("dialog_verbinde", "Ich stelle die Verbindung her …"));
 
   let freigabe;
   try {
@@ -990,8 +1483,8 @@ async function verbinden() {
         if (app.dataset.state !== "kennwort") return;
         $("kennwort-lage").textContent =
           versuch < 3
-            ? "Ich warte auf deine Freigabe im anderen Tab."
-            : "Ich warte weiter. Gib die Verbindung im anderen Tab frei oder brich hier ab.";
+            ? t("dialog_kennwort_warten", "Ich warte auf deine Freigabe im anderen Tab.")
+            : t("dialog_kennwort_warten_lang", "Ich warte weiter. Gib die Verbindung im anderen Tab frei oder brich hier ab.");
       },
     });
   } catch (fehler) {
@@ -1001,7 +1494,7 @@ async function verbinden() {
   }
 
   if (app.dataset.state === "kennwort") {
-    $("kennwort-lage").textContent = "Freigabe da. Ich stelle die Verbindung her.";
+    $("kennwort-lage").textContent = t("dialog_kennwort_da", "Freigabe da. Ich stelle die Verbindung her.");
   }
 
   const antwort = await anWorker({
@@ -1023,10 +1516,7 @@ async function verbinden() {
      der Hintergrunddienst nicht erreichbar — das ist ein Fehler der
      Erweiterung und wird auch so benannt (Regel Inhaber 28.07.). */
   if (!antwort || !antwort.ok) {
-    await aufbauAbbrechen(
-      (antwort && antwort.klartext) ||
-        "Der Hintergrunddienst der Erweiterung hat nicht geantwortet. Das liegt an der Erweiterung, nicht an dir. Starte Chrome neu, dann geht es wieder."
-    );
+    await aufbauAbbrechen((antwort && antwort.klartext) || DIENST_STUMM);
     return;
   }
 
@@ -1055,10 +1545,14 @@ async function verbinden() {
  * aber jede Frage liefe ins gewöhnliche Gespräch. Ein Versprechen, das niemand
  * einlöst, ist schlimmer als eine Absage.
  */
-const BINDUNG_FEHLT =
-  "Die Verbindung steht, aber ich konnte sie dem Agenten nicht übergeben. Der Beispielauftrag unten geht trotzdem. Für Aufträge im Gespräch baue die Verbindung bitte neu auf.";
-const BINDUNG_OHNE_AUSWEIS =
-  "Die Verbindung steht, aber ich konnte sie dem Agenten nicht übergeben: Mir fehlt gerade deine Anmeldung. Melde dich in der Cloud an oder lade den SMarTrAgents-Tab neu, dann baue die Verbindung bitte neu auf.";
+const BINDUNG_FEHLT = t(
+  "fehler_bindung",
+  "Die Verbindung steht, aber ich konnte sie dem Agenten nicht übergeben. Der Beispielauftrag unten geht trotzdem. Für Aufträge im Gespräch baue die Verbindung bitte neu auf.",
+);
+const BINDUNG_OHNE_AUSWEIS = t(
+  "fehler_bindung_ausweis",
+  "Die Verbindung steht, aber ich konnte sie dem Agenten nicht übergeben: Mir fehlt gerade deine Anmeldung. Melde dich in der Cloud an oder lade den SMarTrAgents-Tab neu, dann baue die Verbindung bitte neu auf.",
+);
 
 async function agentenBindung() {
   const s = zustand.sitzung;
@@ -1093,8 +1587,14 @@ async function agentenBindung() {
       sagen(
         "niemand",
         s.stufe === "write"
-          ? "Ich habe jetzt Hände für diesen Tab: Sag mir, was ich klicken, ausfüllen oder nachsehen soll. Jeden Schritt bestätigst du einzeln."
-          : "Ich sehe diesen Tab jetzt: Frag mich, was auf der Seite steht, oder lass dir Dinge zeigen."
+          ? t(
+              "sitzung_haende_write",
+              "Ich habe jetzt Hände für diesen Tab: Sag mir, was ich klicken, ausfüllen oder nachsehen soll. Jeden Schritt bestätigst du einzeln."
+            )
+          : t(
+              "sitzung_haende_read",
+              "Ich sehe diesen Tab jetzt: Frag mich, was auf der Seite steht, oder lass dir Dinge zeigen."
+            )
       );
     }
   } catch (_) {
@@ -1107,10 +1607,10 @@ async function agentenBindung() {
 /* Was auf der Freigabeseite als Zweck steht. Bewusst aus unseren eigenen
    Worten gebaut — Text von der besuchten Seite kommt hier nie hinein. */
 function zweckText(gewuenscht) {
-  const wo = zustand.ursprung || "der geöffneten Seite";
+  const wo = zustand.ursprung || t("dialog_zweck_ort", "der geöffneten Seite");
   return gewuenscht.access === "write"
-    ? `Auf ${wo} für dich klicken und tippen`
-    : `Auf ${wo} mitlesen und dir Dinge zeigen`;
+    ? t("dialog_zweck_write", "Auf $1 für dich klicken und tippen", wo)
+    : t("dialog_zweck_read", "Auf $1 mitlesen und dir Dinge zeigen", wo);
 }
 
 /*
@@ -1154,7 +1654,7 @@ function klartextVon(fehler) {
   if (fehler && fehler.kennung === "abgebrochen") return null;
   return (
     (fehler && fehler.klartext) ||
-    "Das hat nicht geklappt. Es ist keine Verbindung entstanden."
+    t("fehler_kein_erfolg", "Das hat nicht geklappt. Es ist keine Verbindung entstanden.")
   );
 }
 
@@ -1168,11 +1668,16 @@ function kennwortZeigen({ kennwort, buchstabiert, ansage, adresse }) {
   setzeZustand("kennwort");
   const feld = $("kennwort-wert");
   feld.textContent = kennwort;
-  feld.setAttribute("aria-label", `Kennwort: ${buchstabiert}`);
+  feld.setAttribute("aria-label", t("dialog_kennwort_marke", "Kennwort: $1", buchstabiert));
   $("kennwort-funk").textContent = ansage;
-  $("kennwort-lage").textContent =
-    "Gleich geht ein Tab auf. Vergleiche dort das Kennwort und gib die Verbindung frei.";
-  ansagen(`Kennwort: ${ansage}. Vergleiche es im neuen Tab, bevor du freigibst.`, true);
+  $("kennwort-lage").textContent = t(
+    "dialog_kennwort_lage",
+    "Gleich geht ein Tab auf. Vergleiche dort das Kennwort und gib die Verbindung frei.",
+  );
+  ansagen(
+    t("dialog_kennwort_ansage", "Kennwort: $1. Vergleiche es im neuen Tab, bevor du freigibst.", ansage),
+    true,
+  );
 }
 
 /*
@@ -1217,12 +1722,19 @@ async function sitzungAnzeigen(serverSitzung, { verlaengern = false } = {}) {
     const bewilligt = Math.round((Number(serverSitzung.endetUm) - Date.now()) / 1000);
     if (gewuenscht > 0 && bewilligt > 0 && gewuenscht - bewilligt > 60) {
       hinweise.push(
-        `Du hast ${zeitWort(gewuenscht)} gewählt, bekommen hast du ${zeitWort(bewilligt)}.`,
+        t(
+          "sitzung_dauer_gekuerzt",
+          "Du hast $1 gewählt, bekommen hast du $2.",
+          zeitWort(gewuenscht),
+          zeitWort(bewilligt),
+        ),
       );
     }
     const leerlauf = Number(serverSitzung.leerlaufSekunden) || 0;
     if (leerlauf > 0) {
-      hinweise.push(`Ohne Auftrag endet die Verbindung nach ${zeitWort(leerlauf)} von selbst.`);
+      hinweise.push(
+        t("sitzung_leerlauf", "Ohne Auftrag endet die Verbindung nach $1 von selbst.", zeitWort(leerlauf)),
+      );
     }
     if (hinweise.length) ansagen(hinweise.join(" "), true);
   }
@@ -1230,7 +1742,7 @@ async function sitzungAnzeigen(serverSitzung, { verlaengern = false } = {}) {
   await anTab({
     typ: "overlay:an",
     gross: zustand.grosseSicht,
-    text: "SMarTrAgent steuert diesen Tab. Esc Esc = Stopp",
+    text: t("overlay_schild", "SMarTrAgent steuert diesen Tab. Esc Esc = Stopp"),
   });
 
   const st = STUFENTEXT[stufe] || STUFENTEXT.read;
@@ -1238,7 +1750,10 @@ async function sitzungAnzeigen(serverSitzung, { verlaengern = false } = {}) {
   const codeFeld = $("sitzungscode");
   if (zustand.sitzung.code) {
     codeFeld.textContent = zustand.sitzung.code;
-    codeFeld.setAttribute("aria-label", `Sitzungscode ${ticket.buchstabiert(zustand.sitzung.code)}`);
+    codeFeld.setAttribute(
+      "aria-label",
+      t("sitzung_code_marke", "Sitzungscode $1", ticket.buchstabiert(zustand.sitzung.code)),
+    );
     codeFeld.hidden = false;
   } else {
     codeFeld.hidden = true;
@@ -1250,6 +1765,10 @@ async function sitzungAnzeigen(serverSitzung, { verlaengern = false } = {}) {
      Zwei Schreiber auf dasselbe `hidden` waren die Ursache dafür, dass der
      Knopf jahrelang unsichtbar blieb, ohne dass es jemandem auffiel. */
   stoerung(null);
+  /* Erst die Karte füllen, dann zeigen: setzeZustand hebt ihr `hidden` auf,
+     und eine leere Karte, die eine Sekunde lang „verbunden mit nichts" sagt,
+     wäre schlimmer als gar keine. */
+  tabkarteZeichnen();
   setzeZustand("aktiv");
   /* Der Platzhalter wird hier selbst nachgezogen und nicht der Startreihenfolge
      überlassen (Befund Gegenlesung 29.07.): Zwischen dieser Anzeige und der
@@ -1266,12 +1785,20 @@ async function sitzungAnzeigen(serverSitzung, { verlaengern = false } = {}) {
      lässt, muss hören, dass jetzt NICHT mehr gefragt wird. */
   const schrittSatz =
     zustand.sitzung.modus === "auto"
-      ? "Ich arbeite selbständig weiter und frage nicht bei jedem Schritt. "
-      : "Ich frage dich vor jedem Schritt. ";
-  sagen("niemand", `Verbunden. ${schrittSatz}Ich bin noch etwa ${rest} Minuten für dich da.`);
+      ? t("sitzung_schritt_auto", "Ich arbeite selbständig weiter und frage nicht bei jedem Schritt. ")
+      : t("sitzung_schritt_einzeln", "Ich frage dich vor jedem Schritt. ");
+  sagen(
+    "niemand",
+    t("sitzung_verbunden_blase", "Verbunden. $1Ich bin noch etwa $2 Minuten für dich da.", schrittSatz, rest),
+  );
   ansagen(
-    `Verbunden. ${schrittSatz}Der Agent ist jetzt auf diesem Tab. Noch etwa ${rest} Minuten. ` +
-      `${st.ansage} Zweimal Escape beendet sofort.`,
+    t(
+      "sitzung_verbunden_ansage",
+      "Verbunden. $1Der Agent ist jetzt auf diesem Tab. Noch etwa $2 Minuten. $3 Zweimal Escape beendet sofort.",
+      schrittSatz,
+      rest,
+      st.ansage,
+    ),
     true
   );
 
@@ -1310,7 +1837,7 @@ async function vorfuehrungStarten() {
     tabId: zustand.tabId,
   });
   if (!eingespielt || !eingespielt.ok) {
-    await aufbauAbbrechen("Ich konnte den Rahmen auf dieser Seite nicht anzeigen.");
+    await aufbauAbbrechen(t("fehler_rahmen", "Ich konnte den Rahmen auf dieser Seite nicht anzeigen."));
     return;
   }
 
@@ -1329,20 +1856,23 @@ async function vorfuehrungStarten() {
   await anTab({
     typ: "overlay:an",
     gross: zustand.grosseSicht,
-    text: "Vorführung ohne Agent. Esc Esc = Stopp",
+    text: t("overlay_schild_vorfuehrung", "Vorführung ohne Agent. Esc Esc = Stopp"),
   });
 
-  $("stufe-anzeige").textContent = "Vorführung";
+  $("stufe-anzeige").textContent = t("kopf_stufe_vorfuehrung", "Vorführung");
   $("sitzungscode").hidden = true;
   $("protokoll").replaceChildren();
   setzeZustand("aktiv");
 
   sagen(
     "niemand",
-    "Das ist eine Vorführung ohne Server. Kein Agent ist verbunden, es wird nichts gesteuert. " +
-      "Du siehst nur, was diese Erweiterung anzeigt."
+    t(
+      "vorfuehrung_blase",
+      "Das ist eine Vorführung ohne Server. Kein Agent ist verbunden, es wird nichts gesteuert. " +
+        "Du siehst nur, was diese Erweiterung anzeigt.",
+    )
   );
-  ansagen("Vorführung gestartet. Es ist kein Agent verbunden. Zehn Minuten.", true);
+  ansagen(t("vorfuehrung_ansage", "Vorführung gestartet. Es ist kein Agent verbunden. Zehn Minuten."), true);
 
   zustand.sitzung.ticker = setInterval(tick, 1000);
   tick();
@@ -1371,11 +1901,11 @@ function tick() {
   }
   if (rest <= 120 && !s.gewarnt120) {
     s.gewarnt120 = true;
-    ansagen("Noch zwei Minuten.");
+    ansagen(t("sitzung_zwei_minuten", "Noch zwei Minuten."));
   }
   if (rest <= 60 && !s.gewarnt60) {
     s.gewarnt60 = true;
-    ansagen("Noch eine Minute. Danach endet die Verbindung von selbst.", true);
+    ansagen(t("sitzung_eine_minute", "Noch eine Minute. Danach endet die Verbindung von selbst."), true);
   }
   if (rest === 0) beenden("abgelaufen");
 }
@@ -1414,15 +1944,18 @@ async function verlaengern() {
     const codeFeld = $("sitzungscode");
     if (s.code) {
       codeFeld.textContent = s.code;
-      codeFeld.setAttribute("aria-label", `Sitzungscode ${ticket.buchstabiert(s.code)}`);
+      codeFeld.setAttribute("aria-label", t("sitzung_code_marke", "Sitzungscode $1", ticket.buchstabiert(s.code)));
       codeFeld.hidden = false;
     }
-    protokollieren("Verlängert: die Freigabe läuft weiter");
+    protokollieren(t("protokoll_verlaengert", "Verlängert: die Freigabe läuft weiter"));
     /* Der Agent bekommt den neuen Sitzungsschein in denselben Auftrag. */
     await agentenBindung();
   } catch (fehler) {
     ansagen(
-      "Ich konnte die Verbindung nicht verlängern. Sie endet zur angezeigten Zeit. Du kannst danach neu verbinden.",
+      t(
+        "fehler_verlaengern",
+        "Ich konnte die Verbindung nicht verlängern. Sie endet zur angezeigten Zeit. Du kannst danach neu verbinden."
+      ),
       true
     );
   } finally {
@@ -1441,6 +1974,11 @@ async function beenden(grund, klartext = null) {
   zustand.browserKontext = null;
   zustand.wunsch = null;
   zustand.verlaengerungLaeuft = false;
+  /* Die Statuskarte gehört der Sitzung. Der Agent der Cloud-Sitzung dagegen
+     NICHT: Die läuft in der Cloud weiter, und sie hier stillschweigend
+     wegzuräumen hieße, dem Menschen eine laufende Fernsitzung zu verschweigen
+     (Vertrag §8.4). Sie endet, wenn die Brücke es meldet. */
+  zustand.verbundenerTab = null;
   if (zustand.freigabeLaeuft) {
     zustand.freigabeLaeuft(false);
     zustand.freigabeLaeuft = null;
@@ -1489,11 +2027,14 @@ async function beenden(grund, klartext = null) {
   /* Die Rechte überleben die Sitzung nicht. */
   await seitenrechteZurueckgeben();
 
+  /* `notbremse` teilt sich den Schlüssel mit NOTBREMSE_SAETZE.seitenleiste:
+     Es ist derselbe Satz für dieselbe Lage, und zwei Schlüssel dafür liefen
+     beim ersten Redigieren auseinander. */
   const texte = {
-    notbremse: "Gestoppt. Der Agent steuert nicht mehr.",
-    abgelaufen: "Die Sitzung ist beendet. Die Freigabe habe ich zurückgegeben.",
-    verloren: "Die Verbindung ist abgerissen. Die Freigabe habe ich zurückgegeben.",
-    nutzer: "Beendet. Die Freigabe habe ich zurückgegeben.",
+    notbremse: t("notaus_seitenleiste", "Gestoppt. Der Agent steuert nicht mehr."),
+    abgelaufen: t("sitzung_ende_abgelaufen", "Die Sitzung ist beendet. Die Freigabe habe ich zurückgegeben."),
+    verloren: t("sitzung_ende_verloren", "Die Verbindung ist abgerissen. Die Freigabe habe ich zurückgegeben."),
+    nutzer: t("sitzung_ende_nutzer", "Beendet. Die Freigabe habe ich zurückgegeben."),
   };
   const text = klartext || texte[grund] || texte.nutzer;
   sagen("niemand", text);
@@ -1545,8 +2086,11 @@ function antwortfristMs(nachricht) {
    sichtbar: Eine Absage ist eine Aussage, und „ich weiß es nicht" ist die
    einzige, die hier stimmt. Die Ansage dazu steht in `freigabeHolen` — sie
    gehört in DIESELBE Ansage wie die Frage, nicht in eine zweite. */
-const OHNE_UHR_ZEILE = "Wie lange der Agent noch wartet, weiß ich hier nicht.";
-const OHNE_UHR_ANSAGE = "Wie lange du Zeit hast, weiß ich nicht, antworte am besten sofort.";
+const OHNE_UHR_ZEILE = t("freigabe_ohne_uhr_zeile", "Wie lange der Agent noch wartet, weiß ich hier nicht.");
+const OHNE_UHR_ANSAGE = t(
+  "freigabe_ohne_uhr_ansage",
+  "Wie lange du Zeit hast, weiß ich nicht, antworte am besten sofort.",
+);
 
 let freigabeUhr = null;
 
@@ -1577,9 +2121,11 @@ function freigabeUhrStarten(fristMs) {
   const zeigen = () => {
     const uebrig = endeUm - Date.now();
     const rest = Math.max(0, Math.ceil(uebrig / 1000));
-    $("freigabe-rest-text").textContent = rest
-      ? `Noch ${rest} Sekunde${rest === 1 ? "" : "n"} für deine Antwort.`
-      : "Die Zeit für diese Antwort ist gleich um.";
+    $("freigabe-rest-text").textContent = !rest
+      ? t("freigabe_rest_gleich", "Die Zeit für diese Antwort ist gleich um.")
+      : rest === 1
+        ? t("freigabe_rest_eine", "Noch 1 Sekunde für deine Antwort.")
+        : t("freigabe_rest_viele", "Noch $1 Sekunden für deine Antwort.", rest);
     $("freigabe-balken-fuellung").style.width =
       `${Math.max(0, Math.min(100, (uebrig / fristMs) * 100))}%`;
     /* Bei null schließt sich hier nichts. Ein „Nein" von der Uhr wäre eine
@@ -1646,7 +2192,11 @@ function freigabeHolen(frage, quelle = "", fristMs = 0) {
        DIESELBE Ansage wie die Frage — eine zweite bräche die erste ab. Nur
        wenn wirklich jemand wartet (fristMs === 0) und niemand weiß, wie lange:
        Beim Beispielauftrag (null) gibt es keine Zeit, über die zu reden wäre. */
-    ansagen(`${frage} Freigeben oder ablehnen?${fristMs === 0 ? ` ${OHNE_UHR_ANSAGE}` : ""}`, true);
+    ansagen(
+      t("freigabe_frage_ansage", "$1 Freigeben oder ablehnen?", frage) +
+        (fristMs === 0 ? ` ${OHNE_UHR_ANSAGE}` : ""),
+      true,
+    );
     /* Vorausgewählt ist „Ablehnen", und dort landet auch der Fokus: Wer die
        Eingabetaste drückt, ohne hinzusehen, lehnt ab.
        Über `fokusHin` und nicht über ein blankes focus(): Tippt gerade jemand,
@@ -1700,7 +2250,7 @@ chrome.runtime.onMessage.addListener((n, _absender, antworten) => {
   }
 
   freigabeHolen(
-    String(n.frage || "Der Agent möchte einen Schritt ausführen."),
+    String(n.frage || t("freigabe_standardfrage", "Der Agent möchte einen Schritt ausführen.")),
     zitat(n.quelle),
     antwortfristMs(n)
   )
@@ -1717,7 +2267,7 @@ chrome.runtime.onMessage.addListener((n) => {
   if (n.typ === "link:freigabe-zurueckziehen") {
     if (zustand.freigabeLaeuft) {
       freigabeSchliessen(false);
-      protokollieren("Abgelaufen: der Agent hat auf die Antwort nicht mehr gewartet");
+      protokollieren(t("protokoll_abgelaufen", "Abgelaufen: der Agent hat auf die Antwort nicht mehr gewartet"));
       /* Sichtbar UND hörbar. Bisher stand der Ablauf nur im Protokoll und in
          der Live-Region — und die (#ansage) ist ausschließlich für den
          Bildschirmleser da. Wer die Karte verschwinden sah, bekam dafür keine
@@ -1725,18 +2275,41 @@ chrome.runtime.onMessage.addListener((n) => {
          passiert ist nur dieser eine Schritt. */
       sagen(
         "niemand",
-        "Ich habe nicht länger auf deine Antwort gewartet. Dieser Schritt ist nicht passiert. " +
-          "Sag mir, ob ich es noch einmal versuchen soll."
+        t(
+          "freigabe_zurueckgezogen_blase",
+          "Ich habe nicht länger auf deine Antwort gewartet. Dieser Schritt ist nicht passiert. " +
+            "Sag mir, ob ich es noch einmal versuchen soll.",
+        )
       );
-      ansagen("Der Agent hat nicht länger gewartet. Dieser Schritt ist nicht passiert.", true);
+      ansagen(
+        t(
+          "freigabe_zurueckgezogen_ansage",
+          "Der Agent hat nicht länger gewartet. Dieser Schritt ist nicht passiert.",
+        ),
+        true,
+      );
     }
     return false;
   }
 
   /* Was der Agent gerade tut, steht im Protokoll. Der Satz stammt vom Agenten
-     und aus unseren eigenen Worten — Text von der Seite steht dort nie. */
+     und aus unseren eigenen Worten — Text von der Seite steht dort nie.
+     Seit v3.5 kommen Befehl, Zeitpunkt und Ergebnis mit (Vertrag §6); `text`
+     bleibt Pflicht, eine Meldung ohne die neuen Felder ist weiterhin gültig. */
   if (n.typ === "link:protokoll") {
-    protokollieren(String(n.text || "").slice(0, 300));
+    protokollieren({
+      text: String(n.text || "").slice(0, 300),
+      cmd: n.cmd,
+      zeit: n.zeit,
+      ergebnis: n.ergebnis,
+    });
+    return false;
+  }
+
+  /* Läuft eine Cloud-Sitzung, steht das durchgehend in der Leiste
+     (Vertrag §8.4). Der Name kommt von außen und wird entschärft. */
+  if (n.typ === "link:cloud-sitzung") {
+    cloudSitzungZeigen(n.an === true, n.agent);
     return false;
   }
 
@@ -1744,12 +2317,19 @@ chrome.runtime.onMessage.addListener((n) => {
      bekommt der Agent, der Mensch braucht die Zeile, die zeigt, dass etwas
      passiert ist. */
   if (n.typ === "link:befehl") {
-    if (n.erfolg) protokollieren(`Erledigt: ${String(n.cmd || "").slice(0, 40)}`);
+    if (n.erfolg) protokollieren(t("protokoll_erledigt", "Erledigt: $1", String(n.cmd || "").slice(0, 40)));
     /* Der Satz, nicht die Kennung. Hier stand `n.fehler`, also der reine
        Maschinencode, und der Mensch las „Nicht ausgeführt: tab_gone". Der
        fertige Satz kommt jetzt als `klartext` mit; die Kennung bleibt für den
        Fall, dass einmal keiner mitkommt. */
-    else protokollieren(`Nicht ausgeführt: ${String(n.klartext || n.fehler || "Der Schritt hat nicht geklappt.").slice(0, 160)}`);
+    else
+      protokollieren(
+        t(
+          "protokoll_nicht_ausgefuehrt",
+          "Nicht ausgeführt: $1",
+          String(n.klartext || n.fehler || t("fehler_schritt", "Der Schritt hat nicht geklappt.")).slice(0, 160),
+        ),
+      );
     return false;
   }
 
@@ -1764,20 +2344,28 @@ async function demoAuftrag() {
   if (!zustand.sitzung) return;
   $("vorschlag").disabled = true;
   try {
-    sagen("du", "Zeig mir, was hier anklickbar ist.");
-    protokollieren("Lese die Seite: sichtbare Bedienelemente einsammeln");
+    sagen("du", t("demo_frage", "Zeig mir, was hier anklickbar ist."));
+    protokollieren(t("protokoll_lesen", "Lese die Seite: sichtbare Bedienelemente einsammeln"));
     const antwort = await anTab({ typ: "overlay:lesen", grenze: 5 });
     if (!antwort || !antwort.ok || !antwort.elemente.length) {
-      sagen("niemand", "Ich finde auf dieser Seite gerade nichts Anklickbares im sichtbaren Bereich.");
-      ansagen("Ich finde hier nichts Anklickbares im sichtbaren Bereich.");
+      sagen(
+        "niemand",
+        t("demo_nichts_blase", "Ich finde auf dieser Seite gerade nichts Anklickbares im sichtbaren Bereich."),
+      );
+      ansagen(t("demo_nichts_ansage", "Ich finde hier nichts Anklickbares im sichtbaren Bereich."));
       return;
     }
     const liste = antwort.elemente;
 
     sagen(
       "niemand",
-      `Ich habe ${liste.length} Bedienelement${liste.length === 1 ? "" : "e"} gefunden und ` +
-        `zeige sie dir eins nach dem anderen.`
+      liste.length === 1
+        ? t("demo_gefunden_eins", "Ich habe 1 Bedienelement gefunden und zeige es dir.")
+        : t(
+            "demo_gefunden_viele",
+            "Ich habe $1 Bedienelemente gefunden und zeige sie dir eins nach dem anderen.",
+            liste.length,
+          )
     );
 
     for (const [i, el] of liste.entries()) {
@@ -1786,7 +2374,7 @@ async function demoAuftrag() {
       /* `null`: Diese Frage wartet in der Seitenleiste selbst, kein Ausführer
          hält dazu eine Frist. Eine Restzeitzeile wäre hier eine Erfindung. */
       const ja = await freigabeHolen(
-        `Schritt ${i + 1} von ${liste.length}: ein Bedienelement zeigen.`,
+        t("demo_schritt_frage", "Schritt $1 von $2: ein Bedienelement zeigen.", i + 1, liste.length),
         name,
         null
       );
@@ -1796,7 +2384,7 @@ async function demoAuftrag() {
            käme sonst dieselbe Aussage doppelt, und die zweite Ansage bräche
            die erste mitten im Satz ab (sprich() bricht ab, bevor es spricht).
            Was hier fehlt, ist nur der Satz zum Beispielauftrag. */
-        sagen("niemand", "Alles klar, dann lasse ich den Rest. Die Verbindung bleibt bestehen.");
+        sagen("niemand", t("demo_abbruch", "Alles klar, dann lasse ich den Rest. Die Verbindung bleibt bestehen."));
         return;
       }
       await anTab({
@@ -1806,15 +2394,20 @@ async function demoAuftrag() {
         beschriftung: el.name,
         rect: el.rect,
       });
-      protokollieren(`Zeigen: „${name}“ (${zitat(el.rolle, 20)}, ${i + 1} von ${liste.length})`);
-      ansagen(`Schritt ${i + 1} von ${liste.length} gezeigt.`);
+      protokollieren(
+        t("protokoll_zeigen", "Zeigen: „$1“ ($2, $3 von $4)", name, zitat(el.rolle, 20), i + 1, liste.length),
+      );
+      ansagen(t("demo_schritt_gezeigt", "Schritt $1 von $2 gezeigt.", i + 1, liste.length));
       await new Promise((r) => setTimeout(r, 1400));
     }
 
     await anTab({ typ: "overlay:zeiger", x: -200, y: -200 });
-    protokollieren("Fertig: alle gefundenen Elemente gezeigt");
-    sagen("niemand", "Das war alles, was ich hier gefunden habe. Sag mir, was ich damit tun soll.");
-    ansagen("Auftrag erledigt.");
+    protokollieren(t("protokoll_demo_fertig", "Fertig: alle gefundenen Elemente gezeigt"));
+    sagen(
+      "niemand",
+      t("demo_fertig_blase", "Das war alles, was ich hier gefunden habe. Sag mir, was ich damit tun soll."),
+    );
+    ansagen(t("demo_fertig_ansage", "Auftrag erledigt."));
   } finally {
     $("vorschlag").disabled = false;
     /* Der Knopf war während des Auftrags abgeschaltet, und ein abgeschaltetes
@@ -1827,17 +2420,307 @@ async function demoAuftrag() {
 }
 
 /* ------------------------------------------------------------------ *
+ * Der Betriebsmodus des Tabs (Vertrag §2)
+ *
+ * Drei Stufen, ein Umschalter, keine Klapptür. Der Modus gilt je Tab und liegt
+ * beim Hintergrunddienst; was hier steht, ist die Bedienung davon. Die Liste
+ * der Modi kommt aus net/befehle.js und wird hier nicht noch einmal
+ * eingetippt — eine zweite Liste liefe genau dann auseinander, wenn eine Stufe
+ * dazukäme.
+ * ------------------------------------------------------------------ */
+
+const modusText = (m) => MODUS_TEXT[m] || MODUS_TEXT[MODUS_STANDARD];
+
+/* Für welchen Tab der Modus gilt. Läuft eine Sitzung, ist es ihrer; sonst der
+   Tab, mit dem der eine Klick verbinden würde. Ein Modus ohne Tab wäre eine
+   globale Einstellung, und genau die schließt Vertrag §2 aus. */
+function modusTabId() {
+  if (Number.isInteger(zustand.tabId)) return zustand.tabId;
+  const t = zustand.aktuellerTab;
+  return t && Number.isInteger(t.id) ? t.id : null;
+}
+
+function modusSpiegeln() {
+  for (const m of MODI) {
+    const knopf = $(`modus-${m}`);
+    if (!knopf) continue;
+    const gewaehlt = m === zustand.modus;
+    knopf.setAttribute("aria-checked", String(gewaehlt));
+    /* Wandertabulator: Der Umschalter ist EIN Halt in der Tabulatorreihe, die
+       Wahl darin trifft man mit den Pfeiltasten. Drei einzelne Halte wären für
+       jemanden, der sich durch die Leiste tabbt, drei Hindernisse. */
+    knopf.setAttribute("tabindex", gewaehlt ? "0" : "-1");
+  }
+  const t = modusText(zustand.modus);
+  $("modus-auskunft").textContent = t.auskunft;
+  /* Der Riegel steht bei der Wahl und wird nie ausgeblendet: Er gilt in jedem
+     Modus, also darf ihn kein Modus verstecken. */
+  $("modus-riegel").textContent = MODUS_RIEGEL;
+  /* Der Chip an der Eingabekarte spiegelt denselben Modus. Zwei Anzeigen mit
+     zwei Wahrheiten waren schon einmal der Grund für einen Fehlbefund. */
+  $("modus-chip").textContent = t.etikett;
+}
+
+/**
+ * Den Modus setzen und ihn dem Hintergrunddienst sagen.
+ *
+ * Fail-closed: Ein Wert, der nicht in MODI steht, wird abgelehnt und ändert
+ * nichts. Es gibt keinen Weg, über den eine fremde Angabe hier eine Stufe
+ * einstellt, die niemand gewählt hat.
+ *
+ * @returns {Promise<boolean>} ob wirklich etwas gesetzt wurde
+ */
+async function modusSetzen(neu, { melden = true } = {}) {
+  if (typeof neu !== "string" || !MODI.includes(neu)) return false;
+  zustand.modus = neu;
+  modusSpiegeln();
+  const tabId = modusTabId();
+  if (tabId !== null) await anWorker({ typ: "modus:setzen", tabId, modus: neu });
+  if (melden) {
+    const t = modusText(neu);
+    /* Der Riegel wird beim selbständigen Modus mitgesprochen und sonst nicht.
+       Das ist kein Zufall: Genau dort könnte das Etikett mehr versprechen, als
+       gilt, und wer sich alles vorlesen lässt, muss die Grenze im selben
+       Atemzug hören. In den anderen beiden Stufen wäre derselbe Satz jedes Mal
+       Lärm, und Lärm überhört man. */
+    ansagen(neu === "auto" ? `${t.etikett}. ${t.auskunft} ${MODUS_RIEGEL}` : `${t.etikett}. ${t.auskunft}`, true);
+  }
+  return true;
+}
+
+/* Beim Öffnen: Was gilt für diesen Tab? Die Wahrheit steht im
+   Hintergrunddienst, nicht hier. Bekommt die Leiste keine oder eine unbekannte
+   Auskunft, gilt die Voreinstellung aus dem Vertrag — nie die zuletzt
+   angezeigte, denn die stammte aus einem anderen Tab. */
+async function modusHolen() {
+  let stand = null;
+  const tabId = modusTabId();
+  if (tabId !== null) stand = await anWorker({ typ: "modus:stand?", tabId });
+  const gemeldet = stand && typeof stand.modus === "string" ? stand.modus : null;
+  zustand.modus = gemeldet && MODI.includes(gemeldet) ? gemeldet : MODUS_STANDARD;
+  modusSpiegeln();
+}
+
+/* ------------------------------------------------------------------ *
+ * Die Cloud-Sitzung (Vertrag §8.4)
+ * ------------------------------------------------------------------ */
+
+/*
+ * Die Dauerzeile „Cloud-Sitzung aktiv: …".
+ *
+ * Der Agentenname kommt vom Relay und damit von außen. Er geht deshalb durch
+ * dieselbe Entschärfung wie jeder Fremdtext (`zitat`) und wird nie in einen
+ * Satz eingebaut, den die Stimme spricht. Die Zeile selbst ist keine
+ * Vorlesezone: Der Start der Sitzung wird einmal angesagt, danach ist sie eine
+ * Auskunft, die dasteht (F7).
+ */
+function cloudSitzungZeigen(an, agent) {
+  const zeile = $("cloud-zeile");
+  if (!an) {
+    zustand.cloudAgent = null;
+    $("cloud-agent").textContent = "";
+    zeile.hidden = true;
+    return;
+  }
+  const name = zitat(agent, 40);
+  zustand.cloudAgent = name || null;
+  $("cloud-agent").textContent = name;
+  zeile.hidden = false;
+}
+
+/* ------------------------------------------------------------------ *
+ * Not-Aus
+ *
+ * Zusage aus Vertrag §5: Zwischen dem Ereignis und „nichts läuft mehr" liegt
+ * weniger als eine Sekunde, und zwar ohne auf eine Antwort des Relays zu
+ * warten. Erst kappen, dann melden.
+ * ------------------------------------------------------------------ */
+
+function notAus(grund = "notbremse") {
+  const s = zustand.sitzung;
+  if (!s) return Promise.resolve();
+  /* Bewusst OHNE await: Der Dienst soll die Leitung sofort kappen, und diese
+     Meldung darf den Abbau hier nicht aufhalten. Eine Vorführung hat keine
+     Leitung, für sie gibt es nichts zu kappen. */
+  if (!s.vorfuehrung) anWorker({ typ: "link:notaus", grund });
+  return beenden("notbremse");
+}
+
+/* ------------------------------------------------------------------ *
+ * Regeln, Abläufe und Protokollbuch (Vertrag §4 und §8.3)
+ *
+ * Gezeichnet werden beide Ansichten von src/panel/werkbank.js. Die
+ * Seitenleiste holt die Daten, stellt den Anker hin und ruft. Fehlt die
+ * Funktion dort, zeichnet sie eine schlichte Fassung selbst: Ein leerer Anker
+ * wäre ein Weg ohne Antwort.
+ * ------------------------------------------------------------------ */
+
+function listeSelbstZeichnen(wurzel, zeilen, leerText) {
+  wurzel.replaceChildren();
+  if (!zeilen.length) {
+    const p = document.createElement("p");
+    p.className = "hinweis";
+    p.textContent = leerText;
+    wurzel.appendChild(p);
+    return;
+  }
+  for (const zeile of zeilen) {
+    const p = document.createElement("p");
+    p.className = "hinweis";
+    p.textContent = zeile;
+    wurzel.appendChild(p);
+  }
+}
+
+/*
+ * Eine Zeichenkette als Datei anbieten.
+ *
+ * Bewusst ueber einen Verweis mit `data:`-Adresse und nicht ueber die
+ * Download-Schnittstelle des Browsers: Dafuer braeuchte das Manifest eine
+ * weitere Pflichtberechtigung, und eine Berechtigung fuer einen Knopf, der
+ * einmal im Monat gedrueckt wird, ist zu teuer. Der Verweis bleibt danach
+ * sichtbar stehen — fuehrt der Browser den Klick von sich aus nicht aus, ist
+ * der Weg trotzdem da.
+ *
+ * Denselben Weg bekommt src/panel/werkbank.js als Dienst `ausgeben`
+ * hingestellt, damit es nicht einen zweiten baut.
+ */
+function dateiAnbieten(text, dateiname) {
+  const inhalt = typeof text === "string" ? text : "";
+  if (!inhalt) return false;
+  const verweis = $("buch-datei");
+  const wann = zeitStempel(Date.now()).iso.slice(0, 19).replace(/[:T]/g, "-");
+  const name = typeof dateiname === "string" && /^[A-Za-z0-9._-]{1,80}$/.test(dateiname)
+    ? dateiname
+    : `smartrchrome-protokollbuch-${wann}.json`;
+  verweis.setAttribute("href", `data:application/json;charset=utf-8,${encodeURIComponent(inhalt)}`);
+  verweis.setAttribute("download", name);
+  verweis.hidden = false;
+  if (typeof verweis.click === "function") verweis.click();
+  return true;
+}
+
+async function werkbankOeffnen() {
+  setzeZustand("werkbank");
+  ansagen(t("werkbank_ansage", "Regeln und Abläufe. Hier stellst du je Website ein, was ohne Rückfrage laufen darf."));
+  /* Die Regeln je Domain (Vertrag §4) und die Abläufe (§7.3) sind zwei
+     Ansichten und bekommen zwei Anker: Eine gemeinsame Wurzel hiesse, dass die
+     eine beim Aufbau die andere wegräumt. */
+  ankerBauen("matrix", werkbank.matrixAufbauen, $("matrix-inhalt"));
+  const griff = ankerBauen("werkbank", werkbank.aufbauen, $("werkbank-inhalt"), {
+    spielen: (id, params) => anWorker({ typ: "werkbank:spielen", id, params: params || {} }),
+    ausgeben: dateiAnbieten,
+    /* Der Weg des Menschen in den Teach-Modus (§7.2). Der Tab kommt von hier
+       und nicht aus der Werkbank: Aufgezeichnet wird in dem Tab, den der
+       Mensch gerade vor sich hat, und welcher das ist, weiss die Leiste. */
+    aufnahmeStart: () => anWorker({ typ: "rekorder:start", tabId: modusTabId() }),
+    aufnahmeStop: () => anWorker({ typ: "rekorder:stop", tabId: modusTabId() }),
+  });
+  if (griff) {
+    if (typeof griff.laden === "function") await griff.laden();
+    return "modul";
+  }
+  const antwort = await anWorker({ typ: "werkbank:liste" });
+  const workflows = Array.isArray(antwort && antwort.workflows) ? antwort.workflows : [];
+  listeSelbstZeichnen(
+    $("werkbank-inhalt"),
+    workflows.map((w) => zitat(w && (w.name || w.id), 80)).filter(Boolean),
+    t(
+      "werkbank_ersatz_leer",
+      "Für diese Website ist noch nichts freigeschaltet, und gespeicherte Abläufe gibt es auch noch keine.",
+    )
+  );
+  return "ersatz";
+}
+
+async function buchOeffnen() {
+  setzeZustand("buch");
+  $("buch-datei").hidden = true;
+  ansagen(t("buch_ansage", "Protokollbuch. Jede Fernaktion steht hier mit Zeit, Agent und Adresse."));
+  const griff = ankerBauen("buch", werkbank.buchAufbauen, $("buch-inhalt"), { ausgeben: dateiAnbieten });
+  if (griff) {
+    if (typeof griff.laden === "function") await griff.laden();
+    return "modul";
+  }
+  const antwort = await anWorker({ typ: "buch:lesen", von: 0, bis: Date.now() });
+  const eintraege = Array.isArray(antwort && antwort.eintraege) ? antwort.eintraege : [];
+  listeSelbstZeichnen(
+    $("buch-inhalt"),
+    eintraege.map((e) => {
+      const zeit = zeitStempel(e && e.zeit);
+      return `${zeit.kurz} ${zitat(e && e.agent, 24)} ${zitat(e && e.cmd, 24)} ${zitat(e && e.url, 60)}`.trim();
+    }),
+    t(
+      "buch_ersatz_leer",
+      "Es steht noch nichts im Protokollbuch. Sobald ein Agent von außen etwas tut, kommt hier eine Zeile dazu.",
+    )
+  );
+  return "ersatz";
+}
+
+/*
+ * Das Protokollbuch als Datei — der Knopf, der immer da ist.
+ *
+ * Er holt die Ausgabe beim Dienst (Vertrag §6, `buch:ausgeben`) und legt sie
+ * in denselben Verweis, den auch werkbank.js benutzt. Kommt nichts zurueck,
+ * wird nichts behauptet: eine Absage mit Weg statt eines toten Knopfes.
+ */
+async function buchAusgeben() {
+  const antwort = await anWorker({ typ: "buch:ausgeben" });
+  const json = antwort && typeof antwort.json === "string" ? antwort.json : "";
+  if (!dateiAnbieten(json)) {
+    stoerung(
+      t("fehler_buch_ausgabe", "Ich konnte das Protokollbuch gerade nicht ausgeben. Versuche es bitte gleich noch einmal.")
+    );
+    return false;
+  }
+  ansagen(t("buch_datei_bereit", "Das Protokollbuch liegt als Datei bereit."), true);
+  return true;
+}
+
+/* ------------------------------------------------------------------ *
  * Ereignisse
  * ------------------------------------------------------------------ */
 
+/* Der Regelweg: ein Klick, eine Verbindung. Der Dialog daneben bleibt der Weg
+   für Dauer und Geltung. */
+$("verbinden-tab").addEventListener("click", tabVerbinden);
+$("trennen").addEventListener("click", () => beenden("nutzer"));
 $("verbinden-start").addEventListener("click", dialogVorbereiten);
+
+/* Der Umschalter. Die Modi kommen aus dem Vertrag, nicht aus dieser Datei —
+   kommt eine Stufe dazu, hängt sie hier von selbst mit drin, sobald sie einen
+   Knopf hat. */
+for (const m of MODI) {
+  const knopf = $(`modus-${m}`);
+  if (knopf) knopf.addEventListener("click", () => modusSetzen(m));
+}
+
+/* Die Rueckgabe wird durchgereicht und nicht verschluckt: Wer den Punkt
+   drueckt, wartet auf eine Ansicht, und ein Aufrufer, der nicht warten kann,
+   sieht eine leere. */
+$("menue-werkbank").addEventListener("click", () => {
+  menueOeffnen(false);
+  return werkbankOeffnen();
+});
+$("menue-buch").addEventListener("click", () => {
+  menueOeffnen(false);
+  return buchOeffnen();
+});
+$("werkbank-zurueck").addEventListener("click", () => {
+  setzeZustand(zustand.sitzung ? "aktiv" : "bereit");
+});
+$("buch-zurueck").addEventListener("click", () => {
+  setzeZustand(zustand.sitzung ? "aktiv" : "bereit");
+});
+$("buch-ausgeben").addEventListener("click", buchAusgeben);
 $("menue-verbinden").addEventListener("click", () => {
   menueOeffnen(false);
   dialogVorbereiten();
 });
 $("dialog-abbrechen").addEventListener("click", () => {
   setzeZustand(zustand.sitzung ? "aktiv" : "bereit");
-  ansagen("Abgebrochen. Es wurde keine Verbindung aufgebaut.");
+  ansagen(ABGEBROCHEN_OHNE_VERBINDUNG);
 });
 /* Stufe und Dauer sind wieder Auswahlfelder — die Zusammenfassung folgt der
    Auswahl, damit vorgelesen wird, was wirklich beantragt wird. */
@@ -1862,7 +2745,7 @@ $("einstellungen-aendern").addEventListener("click", () => {
     const erstes = $("dialog-mehr").querySelector('input[name="dauer"]:checked')
       || $("dialog-mehr").querySelector('input[name="dauer"]');
     if (erstes && erstes.focus) erstes.focus();
-    ansagen("Dauer und Stufe. Ändere, was du möchtest, dann auf Verbindung herstellen.");
+    ansagen(t("dialog_mehr_ansage", "Dauer und Stufe. Ändere, was du möchtest, dann auf Verbindung herstellen."));
   }
 });
 $("vorfuehrung").addEventListener("click", vorfuehrungStarten);
@@ -1872,7 +2755,7 @@ $("vorfuehrung").addEventListener("click", vorfuehrungStarten);
    Handlung, die zur Erklärung gehört (Tab neu laden, noch einmal versuchen). */
 $("erklaer-zurueck").addEventListener("click", () => {
   setzeZustand(zustand.sitzung ? "aktiv" : "bereit");
-  ansagen("Verstanden. Es wurde nichts verändert.");
+  ansagen(t("dialog_erklaer_ansage", "Verstanden. Es wurde nichts verändert."));
 });
 $("erklaer-tun").addEventListener("click", () => {
   const tun = erklaerAktion;
@@ -1884,7 +2767,7 @@ $("zur-anmeldung").addEventListener("click", async () => {
   try {
     await konto.anmeldeseiteOeffnen();
     ansagen(
-      "Ich habe die Anmeldeseite geöffnet. Melde dich dort an und komm dann hierher zurück.",
+      t("dialog_anmeldung_geoeffnet", "Ich habe die Anmeldeseite geöffnet. Melde dich dort an und komm dann hierher zurück."),
       true
     );
   } catch (fehler) {
@@ -1914,8 +2797,8 @@ $("anmeldung-abbrechen").addEventListener("click", () => {
   setzeZustand(zustand.sitzung ? "aktiv" : "bereit");
   ansagen(
     zustand.sitzung
-      ? "Abgebrochen. Die laufende Verbindung bleibt bestehen, Stopp ist weiter da."
-      : "Abgebrochen. Es wurde keine Verbindung aufgebaut.",
+      ? t("dialog_abgebrochen_laufend", "Abgebrochen. Die laufende Verbindung bleibt bestehen, Stopp ist weiter da.")
+      : ABGEBROCHEN_OHNE_VERBINDUNG,
   );
 });
 
@@ -1924,7 +2807,7 @@ $("anmeldung-abbrechen").addEventListener("click", () => {
 $("kennwort-abbrechen").addEventListener("click", async () => {
   if (zustand.abbruch) zustand.abbruch.abort();
   await aufbauAbbrechen(null);
-  ansagen("Abgebrochen. Es ist keine Verbindung entstanden.", true);
+  ansagen(t("dialog_abgebrochen_kennwort", "Abgebrochen. Es ist keine Verbindung entstanden."), true);
 });
 $("kennwort-erneut").addEventListener("click", async () => {
   if (!zustand.freigabeAdresse) return;
@@ -1935,7 +2818,10 @@ $("kennwort-erneut").addEventListener("click", async () => {
   }
 });
 
-$("stopp").addEventListener("click", () => beenden("nutzer"));
+/* Der Stopp-Knopf ist der Not-Aus, nicht das höfliche Beenden. Das höfliche
+   Beenden steht als „Trennen" an der Statuskarte. Der Unterschied ist kein
+   Wortspiel: Der Not-Aus meldet dem Dienst zuerst und wartet auf nichts. */
+$("stopp").addEventListener("click", () => notAus());
 $("menue-beenden").addEventListener("click", () => {
   menueOeffnen(false);
   beenden("nutzer");
@@ -1951,10 +2837,13 @@ $("freigabe-ja").addEventListener("click", () => freigabeSchliessen(true));
  */
 $("freigabe-nein").addEventListener("click", () => {
   freigabeSchliessen(false);
-  protokollieren("Abgelehnt: dieser Schritt findet nicht statt");
+  protokollieren(t("protokoll_abgelehnt", "Abgelehnt: dieser Schritt findet nicht statt"));
   ansagen(
-    "Abgelehnt. Dieser Schritt findet nicht statt, die Verbindung bleibt bestehen. " +
-      "Zum Beenden drückst du auf Stopp.",
+    t(
+      "freigabe_abgelehnt_ansage",
+      "Abgelehnt. Dieser Schritt findet nicht statt, die Verbindung bleibt bestehen. " +
+        "Zum Beenden drückst du auf Stopp.",
+    ),
     true
   );
 });
@@ -1987,7 +2876,7 @@ $("neu").addEventListener("click", async () => {
   setzeZustand(zustand.sitzung ? "aktiv" : "bereit");
   await chatKontextMerken(null);
   await anWorker({ typ: "chat:neu" });
-  ansagen("Neues Gespräch. Die Verbindung bleibt, wie sie ist.");
+  ansagen(t("kopf_neues_gespraech_ansage", "Neues Gespräch. Die Verbindung bleibt, wie sie ist."));
   if (zustand.sitzung && !zustand.sitzung.vorfuehrung) await agentenBindung();
 });
 
@@ -2006,9 +2895,9 @@ for (const b of document.querySelectorAll("[data-vorlesen]")) {
     menueOeffnen(false);
     if (zustand.vorlesen === "aus") speechSynthesis.cancel();
     const worte = {
-      aus: "Vorlesen ist aus.",
-      sicher: "Ich lese nur noch wichtige Ansagen vor.",
-      alles: "Ich lese alles vor.",
+      aus: t("kopf_vorlesen_aus_ansage", "Vorlesen ist aus."),
+      sicher: t("kopf_vorlesen_sicher_ansage", "Ich lese nur noch wichtige Ansagen vor."),
+      alles: t("kopf_vorlesen_alles_ansage", "Ich lese alles vor."),
     };
     $("ansage").textContent = worte[zustand.vorlesen];
     if (zustand.vorlesen !== "aus") sprich(worte[zustand.vorlesen]);
@@ -2019,7 +2908,11 @@ $("menue-sicht").addEventListener("click", async () => {
   await chrome.storage.local.set({ grosseSicht: zustand.grosseSicht }).catch(() => {});
   menueSpiegeln();
   anTab({ typ: "overlay:gross", gross: zustand.grosseSicht });
-  ansagen(zustand.grosseSicht ? "Große Sichtbarkeit an." : "Große Sichtbarkeit aus.");
+  ansagen(
+    zustand.grosseSicht
+      ? t("kopf_sicht_an", "Große Sichtbarkeit an.")
+      : t("kopf_sicht_aus", "Große Sichtbarkeit aus."),
+  );
 });
 
 /* Der Antwortmodus — Normal Mode oder SMarTrMode, nach dem Muster von
@@ -2034,7 +2927,11 @@ async function chatModusSetzen(modus) {
   zustand.chatModus = modus === "smartr" ? "smartr" : "normal";
   await chrome.storage.local.set({ chatModus: zustand.chatModus }).catch(() => {});
   chatModusSpiegeln();
-  ansagen(zustand.chatModus === "smartr" ? "SMarTr Modus." : "Normal Modus.");
+  ansagen(
+    zustand.chatModus === "smartr"
+      ? t("chat_modus_smartr", "SMarTr Modus.")
+      : t("chat_modus_normal", "Normal Modus."),
+  );
 }
 
 $("modus-normal").addEventListener("click", () => chatModusSetzen("normal"));
@@ -2044,13 +2941,22 @@ $("zustand-chip").addEventListener("click", () => {
   const e = $("zustand-erklaerung");
   const offen = e.hidden;
   e.textContent = zustand.sitzung
-    ? `Der Agent ist auf diesem Tab: ${STUFENTEXT[zustand.sitzung.stufe]?.etikett}. ` +
-      `Die Freigabe endet mit der Sitzung und wird zurückgegeben.`
+    ? t(
+        "kopf_chip_sitzung",
+        "Der Agent ist auf diesem Tab: $1. Die Freigabe endet mit der Sitzung und wird zurückgegeben.",
+        STUFENTEXT[zustand.sitzung.stufe]?.etikett,
+      )
     : zustand.ausweis
-      ? "Du bist angemeldet; Konto und Guthaben sind verbunden. Eine Steuersitzung läuft gerade " +
-        "nicht. Öffne die Seite, die der Agent bedienen soll, und drücke dort auf " +
-        "Verbindung aufbauen."
-      : "Es besteht keine Verbindung. Der Agent kann auf dieser Seite nichts sehen und nichts tun.";
+      ? t(
+          "kopf_chip_angemeldet",
+          "Du bist angemeldet; Konto und Guthaben sind verbunden. Eine Steuersitzung läuft gerade " +
+            "nicht. Öffne die Seite, die der Agent bedienen soll, und drücke dort auf " +
+            "Mit diesem Tab verbinden.",
+        )
+      : t(
+          "kopf_chip_getrennt",
+          "Es besteht keine Verbindung. Der Agent kann auf dieser Seite nichts sehen und nichts tun.",
+        );
   e.hidden = !offen;
   $("zustand-chip").setAttribute("aria-expanded", String(offen));
 });
@@ -2058,7 +2964,7 @@ $("zustand-chip").addEventListener("click", () => {
 /* Vorlesen auf Knopfdruck — der Weg, der immer funktioniert. */
 $("vorlesen-knopf").addEventListener("click", () => {
   if (!zustand.letzteRede) {
-    $("ansage").textContent = "Es gibt noch nichts vorzulesen.";
+    $("ansage").textContent = t("kopf_nichts_vorzulesen", "Es gibt noch nichts vorzulesen.");
     return;
   }
   sprich(zustand.letzteRede);
@@ -2074,7 +2980,7 @@ $("vorlesen-knopf").addEventListener("click", () => {
  * zurück. Modellnamen des Backends erscheinen hier nie; es spricht Niemand.
  * ------------------------------------------------------------------ */
 
-const WARTEWORT = "Niemand arbeitet …";
+const WARTEWORT = t("chat_warten", "Niemand arbeitet …");
 
 function chatWartenZeigen(an, fuer = null) {
   zustand.chatLaeuft = an;
@@ -2107,12 +3013,13 @@ function chatWartenZeigen(an, fuer = null) {
 /* Die fünf Arten, auf die der Chat-Weg die Schritte des Gateways abbildet
    (net/chat.js, `schritteLesen`). Was nicht darunterfällt, heißt „Arbeitet" —
    ein Wort zu viel ist besser als eine Zeile ohne Kopf. */
+const ARBEITET = t("chat_schritt_info", "Arbeitet");
 const SCHRITTWORT = {
-  thinking: "Überlegt",
-  tool_call: "Werkzeug",
-  response: "Sagt",
-  error: "Störung beim Agenten",
-  info: "Arbeitet",
+  thinking: t("chat_schritt_thinking", "Überlegt"),
+  tool_call: t("chat_schritt_tool", "Werkzeug"),
+  response: t("chat_schritt_response", "Sagt"),
+  error: t("chat_schritt_error", "Störung beim Agenten"),
+  info: ARBEITET,
 };
 
 function schrittZeigen(roh) {
@@ -2128,14 +3035,19 @@ function schrittZeigen(roh) {
   /* `art` kommt von außen und wird deshalb nur als eigener Schlüssel gelesen.
      Ohne diese Prüfung lieferte etwa die Art „constructor" den Object-
      Konstruktor — und der stünde als ganzer Quelltext im Protokoll. */
-  const wort = Object.hasOwn(SCHRITTWORT, art) ? SCHRITTWORT[art] : "Arbeitet";
-  const kopf = werkzeug ? `Werkzeug ${werkzeug}` : wort;
-  const zeile = text ? `${kopf}: ${text}` : kopf;
+  const wort = Object.hasOwn(SCHRITTWORT, art) ? SCHRITTWORT[art] : ARBEITET;
+  const kopf = werkzeug ? t("chat_schritt_werkzeug", "Werkzeug $1", werkzeug) : wort;
+  const zeile = text ? t("chat_zeile", "$1: $2", kopf, text) : kopf;
   protokollieren(zeile);
   /* Die Wartezeile ist die einzige Stelle, die immer sichtbar ist — das
      Protokoll darf der Nutzer zuklappen. Dort steht deshalb die Kurzfassung. */
   if (zustand.chatLaeuft) {
-    $("kostenhinweis").textContent = `${WARTEWORT.replace(" …", "")}: ${zitat(text || werkzeug, 40)}`;
+    $("kostenhinweis").textContent = t(
+      "chat_zeile",
+      "$1: $2",
+      WARTEWORT.replace(" …", ""),
+      zitat(text || werkzeug, 40),
+    );
   }
   /*
    * Steht gerade eine Freigabefrage offen, gehört die Live-Region ihr.
@@ -2175,14 +3087,17 @@ async function chatFehlerZeigen(kennung, klartext) {
     zustand.ausweis = null;
     setzeZustand("anmeldung");
     ansagen(
-      "Deine Anmeldung gilt nicht mehr. Melde dich bitte in der Cloud neu an, dann reden wir weiter.",
+      t("fehler_anmeldung_abgelaufen", "Deine Anmeldung gilt nicht mehr. Melde dich bitte in der Cloud neu an, dann reden wir weiter."),
       true
     );
     return;
   }
   stoerung(
     klartext ||
-      "In der Erweiterung ist etwas schiefgegangen. Deine Frage ist nicht angekommen. Das liegt an uns, nicht an dir."
+      t(
+        "fehler_intern",
+        "In der Erweiterung ist etwas schiefgegangen. Deine Frage ist nicht angekommen. Das liegt an uns, nicht an dir.",
+      )
   );
 }
 
@@ -2191,7 +3106,7 @@ $("chatform").addEventListener("submit", async (e) => {
   const text = $("eingabe").value.trim();
   if (!text) return;
   if (zustand.chatLaeuft) {
-    ansagen("Ich arbeite noch an deiner vorigen Frage. Warte bitte, bis die Antwort da ist.", true);
+    ansagen(t("chat_noch_beschaeftigt", "Ich arbeite noch an deiner vorigen Frage. Warte bitte, bis die Antwort da ist."), true);
     return;
   }
 
@@ -2232,8 +3147,7 @@ $("chatform").addEventListener("submit", async (e) => {
   if (!antwort || !antwort.ok) {
     await chatFehlerZeigen(
       antwort && antwort.kennung,
-      (antwort && antwort.klartext) ||
-        "Der Hintergrunddienst der Erweiterung hat nicht geantwortet. Das liegt an der Erweiterung, nicht an dir. Starte Chrome neu, dann geht es wieder."
+      (antwort && antwort.klartext) || DIENST_STUMM
     );
     return;
   }
@@ -2254,7 +3168,26 @@ $("eingabe").addEventListener("keydown", (e) => {
 });
 
 chrome.runtime.onMessage.addListener((n) => {
-  if (n.typ === "notbremse:an-panel" && zustand.sitzung) beenden("notbremse");
+  /* Der Zählerstand der Aufzeichnung (§6, `rekorder:stand`). Er kommt aus dem
+     Tab und wird angezeigt, nicht geglaubt: Die Werkbank stellt damit nichts
+     ein, sie zeigt nur, dass mitgeschrieben wird. Eine Aufnahme, von der der
+     Mensch nichts sieht, wäre eine Mitschrift, um die niemand gebeten hat. */
+  if (n.typ === "rekorder:stand") {
+    const wb = anker.werkbank;
+    if (wb && typeof wb.aufnahmeStandSetzen === "function") {
+      wb.aufnahmeStandSetzen({ anzahl: n.anzahl, laeuft: n.laeuft === true });
+    }
+  }
+
+  /* Die Notbremse hat mehrere Absender: Esc Esc im Tab, der Stoppknopf im
+     Schild (`quelle: "schild"`, Vertrag v3.5 §5), das Tastenkürzel und die
+     Seitenleiste selbst. Gestoppt wird immer gleich; nur der Satz sagt, wo der
+     Mensch gedrückt hat. Ein unbekannter Absender endet in demselben Stopp mit
+     dem allgemeinen Satz — eine Quelle, die niemand kennt, darf keine
+     Notbremse verschlucken. */
+  if (n.typ === "notbremse:an-panel" && zustand.sitzung) {
+    beenden("notbremse", NOTBREMSE_SAETZE[n.quelle] || null);
+  }
 
   /* Die Live-Schritte des laufenden Auftrags. Der Chat-Weg meldet sie im Bund
      (`chat:schritte`, net/chat.js); der Einzahlname und die rohen Feldnamen
@@ -2319,7 +3252,7 @@ chrome.runtime.onMessage.addListener((n) => {
     zustand.ausweis = null;
     zustandChipSetzen();
     if (app.dataset.state === "anmeldung") {
-      ansagen("Du bist in der Cloud jetzt abgemeldet. Melde dich dort an, dann geht es weiter.", true);
+      ansagen(t("fehler_abgemeldet", "Du bist in der Cloud jetzt abgemeldet. Melde dich dort an, dann geht es weiter."), true);
     }
   }
 
@@ -2347,6 +3280,10 @@ async function zustandNachfragen() {
   const u = tab ? ursprungAus(tab.url || "") : null;
   if (Number.isInteger(laufend.tabId)) zustand.tabId = laufend.tabId;
   else if (tab) zustand.tabId = tab.id;
+  /* Damit die Statuskarte beim Wiederöffnen nicht leer dasteht: Ist der
+     laufende Tab genau der aktive, steht sein Titel schon fest. Sonst holt ihn
+     tabsAuffrischen() gleich nach. */
+  if (tab && tab.id === zustand.tabId) zustand.verbundenerTab = tab;
   if (laufend.ursprungMuster) zustand.ursprungMuster = laufend.ursprungMuster;
   else if (u) zustand.ursprungMuster = u.muster;
   if (u && (!Number.isInteger(laufend.tabId) || laufend.tabId === (tab && tab.id))) {
@@ -2448,7 +3385,9 @@ window.addEventListener("keydown", (e) => {
     return;
   }
   const jetzt = performance.now();
-  if (jetzt - letztesEsc < 800 && zustand.sitzung) beenden("notbremse");
+  /* Zweimal Escape in der Seitenleiste ist derselbe Not-Aus wie im Tab
+     (content/overlay.js) und wie der Stopp-Knopf. Drei Wege, ein Ablauf. */
+  if (jetzt - letztesEsc < 800 && zustand.sitzung) notAus("esc");
   letztesEsc = jetzt;
 });
 
@@ -2503,8 +3442,33 @@ window.addEventListener("pagehide", () => {
  */
 $("rest").setAttribute("aria-live", "off");
 
+/*
+ * Der Bestand an Tabs wird gepflegt, nicht im Klick nachgeschlagen.
+ *
+ * Grund steht bei tabVerbindenMit: `chrome.permissions.request` verlangt eine
+ * Nutzergeste, und die ist nach dem ersten await verbraucht. Wer den Tab erst
+ * im Klick sucht, hat sie verloren, bevor er fragt — und der eine Klick wäre
+ * wieder zwei. Fehlt einer der Anschlüsse (ältere Chrome-Fassung), arbeitet die
+ * Leiste mit dem Stand vom Öffnen weiter, statt beim Laden auszusteigen.
+ */
+for (const anschluss of [
+  chrome.tabs && chrome.tabs.onActivated,
+  chrome.tabs && chrome.tabs.onUpdated,
+  chrome.tabs && chrome.tabs.onRemoved,
+]) {
+  if (anschluss && typeof anschluss.addListener === "function") {
+    anschluss.addListener(() => {
+      tabsAuffrischen();
+    });
+  }
+}
+
 setzeZustand("bereit");
 eingabePlatzhalterSetzen();
+/* Der Umschalter steht mit seiner Voreinstellung da, bevor der Dienst
+   antwortet. Ein leerer Umschalter wäre für einen Sekundenbruchteil eine
+   Oberfläche ohne Aussage, und wer sich vorlesen lässt, träfe genau darauf. */
+modusSpiegeln();
 einstellungenLaden();
 /* Die Leiste ist offen, es sieht also wieder jemand zu. Gegenstück zum
    pagehide weiter unten. */
@@ -2517,3 +3481,7 @@ zustandNachfragen()
   .catch(() => {})
   .then(() => guthabenLaden());
 chatZustandHolen();
+/* Zum Schluss, weil es den Bildschirm füllt und nichts entscheidet: der eine
+   Klick bekommt seinen Tab, die Liste ihre Zeilen, der Umschalter den Modus
+   dieses Tabs. */
+tabsAuffrischen();

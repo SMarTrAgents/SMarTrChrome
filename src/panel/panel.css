@@ -146,12 +146,119 @@ body {
    sonst schluckt er den Hinweistext daneben. */
 .verbindungsleiste {
   flex: 0 0 auto;
-  display: flex; align-items: center; gap: 8px;
-  min-height: 44px; padding: 6px 12px;
+  display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 8px;
+  min-height: 44px; padding: 8px 12px;
   border-bottom: 1px solid var(--rand);
 }
 .verbindungsleiste .haupt { flex: 0 0 auto; min-height: 32px; padding: 4px 14px; }
-.verbinden-hinweis { color: var(--leise); font-size: 14px; }
+.verbinden-hinweis { color: var(--leise); font-size: 14px; min-width: 0; overflow-wrap: anywhere; }
+.verbindungsleiste .einstellungen-aendern { justify-self: end; min-height: 36px; margin: 0; }
+
+/* Der eine Klick. Der Markenverlauf ist hier nicht Zierde, sondern die
+   Rangfolge: Dieser Knopf ist der Regelweg, „Dauer und Geltung ändern"
+   daneben ist die Ausnahme und trägt deshalb keine Fläche. Mindestens 48 px
+   hoch, weil er der am häufigsten getroffene Knopf der ganzen Leiste ist. */
+.verbinden-tab {
+  grid-column: 1 / -1;
+  min-height: 48px; padding: 10px 16px;
+  border: 0; border-radius: 12px;
+  background: linear-gradient(90deg, #4CC2F1 0%, #5B8DEF 50%, #8D7CF6 100%);
+  color: #05132a; font: 700 17px/1.2 inherit;
+  cursor: pointer;
+}
+.verbinden-tab:hover { filter: brightness(1.06); }
+.verbinden-tab:focus-visible { outline: 3px solid var(--text); outline-offset: 2px; }
+
+/* Die Karte des verbundenen Tabs: Favicon, Titel, grüner Punkt, Trennen.
+   Sie sagt WELCHER Tab gemeint ist — „aktiv" allein beantwortet das nicht. */
+.tabkarte {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 8px;
+  min-height: 44px; padding: 6px 12px;
+  border-bottom: 1px solid rgba(42,255,42,.55);
+  background: rgba(42,255,42,.06);
+}
+.tabkarte .punkt { width: 10px; height: 10px; border-radius: 50%; background: var(--gruen); flex: 0 0 auto; }
+.tabkarte-bild { width: 16px; height: 16px; flex: 0 0 auto; border-radius: 3px; }
+.tabkarte-glyph { font-size: 15px; line-height: 1; flex: 0 0 auto; }
+.tabkarte-worte { display: grid; min-width: 0; }
+.tabkarte-titel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tabkarte-adresse { color: var(--leise); font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trennen { margin-left: auto; min-height: 36px; padding: 4px 12px; flex: 0 0 auto; }
+
+/* Die Dauerzeile der Cloud-Sitzung (Vertrag §8.4). Sie ist eine Auskunft und
+   kein Alarm: ruhige Farbe, kein Blinken, und sie steht so lange da, wie die
+   Sitzung läuft. */
+.cloud-zeile {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 8px;
+  margin: 0; padding: 6px 12px; min-height: 32px;
+  border-bottom: 1px solid rgba(0,212,255,.4);
+  background: rgba(0,212,255,.08);
+  font-size: 14px; color: var(--leise);
+}
+.cloud-punkt { width: 8px; height: 8px; border-radius: 50%; background: var(--cyan); flex: 0 0 auto; }
+.cloud-agent { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------------- Betriebsmodus ---------------- */
+
+.modus-bereich {
+  flex: 0 0 auto;
+  display: grid; gap: 4px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--rand);
+}
+.modus-titel { font-size: 15px; color: var(--leise); font-weight: 600; }
+.segmentwahl {
+  display: flex; gap: 4px;
+  padding: 2px; border: 1px solid var(--rand); border-radius: 999px;
+}
+.segment {
+  flex: 1 1 0; min-width: 0;
+  min-height: 44px; padding: 0 8px;
+  border: 1px solid transparent; border-radius: 999px;
+  background: none; color: var(--leise);
+  font: 14px/1.2 inherit; cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.segment:focus-visible { outline: 3px solid var(--cyan); outline-offset: 1px; }
+/* Farbe ist nie das einzige Signal: aria-checked trägt die Aussage, die
+   Schriftstärke doppelt sie für das Auge. */
+.segment[aria-checked="true"] {
+  background: var(--cyan); color: #05213a; border-color: var(--cyan);
+  font-weight: 700;
+}
+.modus-auskunft { margin: 0; font-size: 14px; color: var(--leise); line-height: 1.4; }
+/* Der Riegel steht ruhig da und wird nicht rot: Er beschreibt, was gilt, und
+   nicht, dass etwas schiefgegangen wäre. */
+.modus-riegel {
+  margin: 0; padding: 4px 8px; border-radius: 8px;
+  border-left: 2px solid var(--cyan);
+  background: rgba(0,212,255,.06);
+  font-size: 14px; line-height: 1.4;
+}
+
+/* ---------------- Tab-Liste ---------------- */
+
+.startseite { display: grid; gap: 4px; }
+.startseite-titel { font-size: 15px; color: var(--leise); }
+.startseite-liste { display: grid; gap: 4px; }
+.tabzeile {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  min-height: 44px; padding: 4px 8px;
+  background: none; border: 1px solid var(--rand); border-radius: 8px;
+  color: var(--text); font: 15px/1.3 inherit; text-align: left; cursor: pointer;
+}
+.tabzeile:hover { background: rgba(255,255,255,.06); }
+.tabzeile-bild { width: 16px; height: 16px; flex: 0 0 auto; border-radius: 3px; }
+.tabzeile-worte { display: grid; min-width: 0; }
+.tabzeile-titel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tabzeile-adresse { color: var(--leise); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------------- Protokollbuch und Werkbank ---------------- */
+
+.werkbank-inhalt, .buch-inhalt { display: grid; gap: 4px; font-size: 14px; color: var(--leise); }
+.buch-datei { color: var(--cyan); min-height: 44px; display: inline-flex; align-items: center; }
 
 /* Die beiden Knöpfe, die seit 0.4.1 in der Kopfzone stehen statt in #leer:
    der Beispielauftrag unter der Sitzungsleiste, die Vorführung unter der

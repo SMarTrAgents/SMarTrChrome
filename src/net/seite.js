@@ -24,10 +24,28 @@
 
 import { istGesperrterUrsprung } from "./rechte.js";
 
-/* Das Inhaltsskript. Es steht hier als Zeichenkette, damit es nur an einer
-   Stelle gepflegt wird — im Manifest steht es bewusst nicht: Eingespielt wird
-   erst, wenn eine Sitzung besteht, nicht schon beim Besuch einer Seite. */
-const OVERLAY_DATEI = "src/content/overlay.js";
+/* Die Inhaltsskripte. Sie stehen hier als Liste, damit sie nur an einer Stelle
+   gepflegt werden — im Manifest stehen sie bewusst nicht: Eingespielt wird
+   erst, wenn eine Sitzung besteht, nicht schon beim Besuch einer Seite.
+   Die Reihenfolge ist verbindlich. `overlay.js` findet beim Start vor, was vor
+   ihm steht; ein Inhaltsskript kann `src/net/*.js` nicht importieren, und genau
+   daran ist die Verdeckungswache am 11.08.2026 gescheitert — sie lag in einem
+   Modul, das im Klickweg niemand rufen konnte. */
+const OVERLAY_DATEIEN = [
+  "src/content/klickwache.js",
+  "src/content/selektor.js",
+  "src/content/overlay.js",
+];
+
+/* Ohne diese zwei gibt es keine Bedienung: `overlay.js` bedient, und
+   `klickwache.js` ist der einzige Weg, auf dem es das darf.
+   `selektor.js` gehört dem Teach-Modus und entsteht in einem anderen Gebiet.
+   Fehlt sie, wird die ganze Einspielung von Chrome abgelehnt — dann stünde die
+   Erweiterung ohne Zeichen und ohne Wache in der Seite, wegen einer Datei, die
+   für Klicken gar nicht gebraucht wird. Deshalb der zweite Anlauf mit dem
+   Pflichtteil. Ein zweites Einspielen ist harmlos: `klickwache.js` schreibt
+   dieselbe Wache noch einmal, `overlay.js` bricht an seinem eigenen Riegel ab. */
+const PFLICHT_DATEIEN = ["src/content/klickwache.js", "src/content/overlay.js"];
 
 /** Die aktuelle Adresse eines Tabs — oder null, wenn es ihn nicht mehr gibt. */
 export async function tabAdresse(tabId) {
@@ -68,6 +86,24 @@ export async function anSeite(tabId, nachricht, frist = 8000) {
 }
 
 /**
+ * Skripte in einen Tab einspielen. Wirft nie — der Aufrufer bekommt eine
+ * Aussage, mit der er weiterarbeiten kann.
+ *
+ * @returns {Promise<boolean>}
+ */
+async function einspielen(tabId, dateien) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: false },
+      files: dateien,
+    });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
  * Sicherstellen, dass das Overlay in diesem Tab läuft.
  *
  * Nach jeder Navigation ist das Inhaltsskript weg — der Rahmen wäre also
@@ -85,16 +121,14 @@ export async function overlaySicherstellen(tabId) {
   const ping = await anSeite(tabId, { typ: "overlay:ping" }, 2000);
   if (ping.ok && ping.antwort.ok) return { ok: true, schonDa: true };
 
-  try {
-    await chrome.scripting.executeScript({
-      target: { tabId, allFrames: false },
-      files: [OVERLAY_DATEI],
-    });
-  } catch (_) {
+  if (!(await einspielen(tabId, OVERLAY_DATEIEN))) {
     /* Kein Recht für diesen Ursprung, Seite nicht einspielbar (Chrome Web
-       Store, PDF-Betrachter, Fehlerseite) — in allen Fällen dasselbe für den
-       Aufrufer: hier kann nicht gearbeitet werden. */
-    return { ok: false, fehler: "einspielen_fehlgeschlagen" };
+       Store, PDF-Betrachter, Fehlerseite) — oder eine Datei der Kür fehlt. Der
+       Pflichtteil bekommt deshalb einen eigenen Anlauf; scheitert auch der,
+       gilt für den Aufrufer dasselbe: hier kann nicht gearbeitet werden. */
+    if (!(await einspielen(tabId, PFLICHT_DATEIEN))) {
+      return { ok: false, fehler: "einspielen_fehlgeschlagen" };
+    }
   }
 
   const nachPruefung = await anSeite(tabId, { typ: "overlay:ping" }, 2000);

@@ -18,6 +18,13 @@
  * Inhalte von Geheimfeldern — Passwort, Karte, Einmalcode — werden nie
  * ausgelesen, auch nicht für den eigenen Agenten (spec-01 V10). Der Name des
  * Feldes darf stehen bleiben, sein Inhalt nie.
+ *
+ * Seit 14.08.2026 geht jede Handlung an einem Element durch die Klickwache in
+ * `src/content/klickwache.js` (`globalThis.SMARTR_KLICKWACHE`). Sie wird VOR
+ * dieser Datei eingespielt. Fehlt sie, wird nicht bedient: Der Befund vom
+ * 11.08.2026 war eine fertige, geprüfte und nirgends gerufene Wache, und ein
+ * Weg, der bei fehlender Prüfung durchwinkt, wäre genau derselbe Weg noch
+ * einmal.
  */
 
 (() => {
@@ -49,14 +56,15 @@
      ohne display, visibility oder opacity anzufassen. `animation` und
      `transition` stehen dazu, damit die Seite die Deckkraft nicht an der
      Kaskade vorbei wegfahren kann.
-     Nachgezogen 11.08.2026, zweiter Teil: Der Wirt legt sich seit dieser
-     Fassung selbst in den obersten Belag (siehe unten, `popover`). Das
-     Standard-Stylesheet des Browsers gibt JEDEM `[popover]` einen eigenen
-     Hintergrund (`background-color: Canvas`), einen Rahmen, Innenabstand und
-     `overflow:auto`. Ohne eigene Angabe malte der Wirt damit eine
-     undurchsichtige Fläche über die ganze Seite — das Zeichen wäre da, die
-     Seite darunter aber weg. Deshalb stehen Hintergrund und Überlauf
-     ausdrücklich hier.
+     Richtiggestellt am 14.08.2026: Der Satz „das deckt auch schlicht
+     `*{display:none!important}` ab" stimmte NICHT, im echten Chrome gemessen
+     (Funktionstest 0.5.3, F-2). `*` trifft auch `html` und `body`, und ein
+     unsichtbarer Vorfahre schlägt jeden Inline-Stil des Kindes. Abgewehrt wird
+     der gezielte Angriff `#smartrchrome-host{…}`; der Rundumschlag nimmt die
+     Seite mitsamt Zeichen weg, und weil dann auch kein bedienbares Element mehr
+     dasteht, entsteht daraus kein blindes Bedienen, sondern ein blindes
+     Fenster. Der Wirt liegt auf der höchsten Ebene und hängt an <html> nach
+     <body>: Bei gleichem z-index gewinnt damit die Baumreihenfolge.
      Der Stil steht als Konstante, weil der Wächter ihn wieder herstellen muss,
      wenn ein Seitenskript ihn überschreibt. */
   const WIRT_STIL =
@@ -132,6 +140,18 @@
         0%,100% { filter: drop-shadow(0 0 0 rgba(42,255,42,0)); }
         50%     { filter: drop-shadow(0 0 6px rgba(42,255,42,.45)); }
       }
+      /* Die Automatik atmet in ihrer eigenen Farbe. Ein blauer Rahmen mit
+         grünem Schein wäre zwei Aussagen auf einmal.
+         Das :not([data-zustand]) ist kein Schmuck: Diese Regel steht später im
+         Blatt als die für das tote und das gestoppte Zeichen und ist genauso
+         spezifisch — sie würde dort sonst gewinnen. */
+      .rahmen[data-an="1"][data-modus="auto"]:not([data-zustand]) {
+        animation: atmenAuto 2.4s ease-in-out infinite;
+      }
+      @keyframes atmenAuto {
+        0%,100% { filter: drop-shadow(0 0 0 rgba(91,141,239,0)); }
+        50%     { filter: drop-shadow(0 0 7px rgba(91,141,239,.55)); }
+      }
     }
 
     .schild {
@@ -153,6 +173,13 @@
     }
     .schild[data-zustand="gestoppt"] .punkt { background: ${ROT}; }
     .schild[data-zustand="tot"] .punkt { background: ${GRAU}; }
+
+    /* Der Not-Aus im Schild. Maße, Farbe und Durchlässigkeit stehen inline mit
+       !important (siehe NOTAUS_STIL), damit kein Blatt der Seite die Reißleine
+       wegschalten kann. Hier steht nur, was ohnehin niemand von außen erreicht:
+       die Spur für die Tastatur. Sie ist Pflicht, nicht Zierde — dieser Knopf
+       ist der einzige Weg, den ein Mensch ohne Anleitung findet. */
+    .notaus:focus-visible { outline: 3px solid #ffffff; outline-offset: 2px; }
 
     .zeiger {
       position: absolute; left: 0; top: 0;
@@ -246,8 +273,14 @@
   rahmen.className = "rahmen";
   const schild = document.createElement("div");
   schild.className = "schild";
-  schild.innerHTML =
-    '<span class="punkt"></span><span class="text"></span>';
+  /* Die Teile des Schildes entstehen als Knoten und nicht mehr aus innerHTML.
+     Grund: Der Punkt trägt seit dem Auto-Rahmen eine eigene Farbe, und der
+     Not-Aus-Knopf braucht einen Ereignishörer. Beides geht an einer
+     Zeichenkette nicht, ohne sie danach wieder aufzusuchen. */
+  const punktZeichen = document.createElement("span");
+  punktZeichen.className = "punkt";
+  const textZeichen = document.createElement("span");
+  textZeichen.className = "text";
   const zeiger = document.createElement("div");
   zeiger.className = "zeiger";
   const fahne = document.createElement("div");
@@ -256,6 +289,92 @@
   ziel.className = "ziel";
   const puls = document.createElement("div");
   puls.className = "puls";
+
+  /* ------------------------------------------------------------------ *
+   * Der Not-Aus im Schild.
+   *
+   * Bis 0.5.2 lag die Reißleine an zwei Stellen, an denen sie im Ernstfall
+   * nicht liegt: in der Seitenleiste, die geschlossen sein kann, und auf der
+   * Tastatur (Esc Esc), die man kennen muss. Sichtbar war im Tab nur die
+   * Aufforderung, sie zu drücken. Ein Stoppknopf, den man sieht, ist kein
+   * Beiwerk: Er ist der einzige Weg, den ein Mensch ohne Anleitung findet.
+   *
+   * Zwei Dinge machen ihn treffbar, auch wenn die Seite eigene Überzüge legt:
+   * Der Wirt liegt auf der höchsten Ebene, die Chrome kennt, und hängt an
+   * <html> NACH <body> — bei gleichem z-index gewinnt damit die Baumreihenfolge
+   * (im echten Chrome am 10.08.2026 gemessen: fremdes Element mit
+   * z-index 2147483647 darüber, Schild weiterhin sichtbar). Und der Wirt selbst
+   * bleibt durchlässig (`pointer-events:none`), damit die Seite bedienbar
+   * bleibt; genau EIN Knoten nimmt Zeigerereignisse an, dieser hier.
+   *
+   * Der Stil steht inline mit !important, aus demselben Grund wie am Wirt:
+   * Ein Blatt der Seite darf die Reißleine nicht wegschalten können.
+   * ------------------------------------------------------------------ */
+  const NOTAUS_STIL =
+    "pointer-events:auto !important;cursor:pointer !important;" +
+    "display:inline-flex !important;align-items:center !important;" +
+    "visibility:visible !important;opacity:1 !important;" +
+    "margin:0 0 0 6px !important;padding:7px 12px !important;" +
+    "min-width:74px !important;min-height:34px !important;" +
+    "justify-content:center !important;" +
+    "border:2px solid " + ROT + " !important;border-radius:8px !important;" +
+    "background:" + ROT + " !important;color:#0b0f1a !important;" +
+    "font:700 15px/1 system-ui, -apple-system, \"Segoe UI\", sans-serif !important;" +
+    "letter-spacing:.04em !important;text-transform:none !important;" +
+    "box-shadow:0 0 0 2px rgba(3,6,18,.94) !important;" +
+    "clip-path:none !important;transform:none !important;filter:none !important;";
+
+  /* ------------------------------------------------------------------ *
+   * Sprache (Vertrag §12)
+   *
+   * Ein Inhaltsskript kann `src/panel/sprache.js` nicht einfuehren — es ist
+   * kein Modul, und genau daran ist die Verdeckungswache am 11.08.2026
+   * gescheitert. `chrome.i18n.getMessage` steht hier aber sehr wohl zur
+   * Verfuegung, also geht der Weg direkt darueber.
+   *
+   * `notfall` ist die deutsche Fassung und keine Bequemlichkeit: Fehlt der
+   * Schluessel, gibt Chrome die leere Zeichenkette zurueck. Ein Schild ohne
+   * Text saehe aus wie ein totes Schild, und das ist die eine Anzeige, an der
+   * ein Mensch ablesen soll, dass hier eine Maschine arbeitet.
+   * ------------------------------------------------------------------ */
+  const spr = (schluessel, notfall, ...werte) => {
+    let text = "";
+    try {
+      text = chrome.i18n.getMessage(schluessel, werte.map(String)) || "";
+    } catch (_) {
+      text = "";
+    }
+    if (!text) {
+      text = notfall;
+      for (let i = werte.length; i >= 1; i -= 1) {
+        text = text.split("$" + i).join(String(werte[i - 1]));
+      }
+    }
+    return text;
+  };
+
+  const notaus = document.createElement("button");
+  notaus.className = "notaus";
+  notaus.setAttribute("type", "button");
+  const NOTAUS_MARKE = spr("overlay_notaus_marke", "Stopp, die Steuerung sofort beenden");
+  notaus.setAttribute("aria-label", NOTAUS_MARKE);
+  notaus.setAttribute("title", NOTAUS_MARKE);
+  notaus.textContent = spr("overlay_notaus", "STOPP");
+  notaus.style.cssText = NOTAUS_STIL;
+
+  /* Der Knopf nimmt Klicks an — deshalb darf es ihn nur geben, solange das
+     Schild wirklich steht. Ein unsichtbarer Knopf, der weiter Zeigerereignisse
+     schluckt, wäre ein Loch in der Seite des Menschen, und zwar genau an der
+     Stelle, an der eben noch etwas stand. */
+  const notausZeigen = (an) => {
+    try {
+      notaus.style.setProperty("display", an ? "inline-flex" : "none", "important");
+      notaus.style.setProperty("pointer-events", an ? "auto" : "none", "important");
+    } catch (_) {}
+  };
+  notausZeigen(false);
+
+  schild.append(punktZeichen, textZeichen, notaus);
   root.append(rahmen, ziel, puls, zeiger, fahne, schild);
   document.documentElement.appendChild(host);
 
@@ -284,11 +403,96 @@
     }
   };
 
+  /* ------------------------------------------------------------------ *
+   * Der Betriebsmodus am Zeichen (VERTRAG v3.5 §6, `overlay:modus`).
+   *
+   * Warum die Automatik eine eigene Farbe bekommt: In `assist` fragt jeder
+   * Schritt, der etwas verändert. In `auto` laufen die je Domain
+   * freigeschalteten weichen Klassen ohne Rückfrage durch. Das ist von außen
+   * genau dann zu unterscheiden, wenn es am Rahmen steht, und nicht erst,
+   * wenn etwas passiert ist, das der Mensch nicht wollte.
+   *
+   * Grün bleibt grün: `manual` und `assist` behalten das Zeichen, das der
+   * Mensch seit der ersten Fassung kennt. Nur die Automatik trägt den
+   * Markenverlauf — eine neue Farbe für eine neue Lage, nicht drei Farben für
+   * drei Namen.
+   *
+   * Gefärbt wird inline und mit !important, aus demselben Grund wie am Wirt:
+   * Ein Blatt der Seite darf das Zeichen nicht umfärben oder abschalten
+   * (Befund 10.08.2026). Das data-Merkmal steht zusätzlich da, damit das
+   * Stylesheet im Schattenbaum daran hängen kann. */
+  const MODI_ANZEIGE = {
+    manual: spr("overlay_modus_manual", "Handbetrieb"),
+    assist: spr("overlay_modus_assist", "Begleitet"),
+    auto: spr("overlay_modus_auto", "Automatik"),
+  };
+  const MODUS_VERLAUF = "linear-gradient(90deg, #4CC2F1 0%, #5B8DEF 50%, #8D7CF6 100%)";
+  const MODUS_MITTE = "#5B8DEF";
+  const SCHILD_GRUNDTEXT = spr("overlay_schild_grund", "SMarTrAgent steuert diesen Tab, Esc Esc = Stopp");
+
+  let modusJetzt = "assist";
+  let schildBasis = SCHILD_GRUNDTEXT;
+
+  const schildSchreiben = () => {
+    const wort = MODI_ANZEIGE[modusJetzt] || MODI_ANZEIGE.assist;
+    schildText(spr("overlay_schild_zeile", "$1, $2", wort, schildBasis));
+  };
+
+  /* Die Farbe der Automatik wieder abnehmen. Das braucht es an drei Stellen,
+     und die dritte ist der Grund, warum es eine eigene Funktion ist: Ein
+     Inline-Stil mit !important schlägt auch das eigene Stylesheet im
+     Schattenbaum. Bliebe der Verlauf stehen, trüge ein GESTOPPTES oder totes
+     Zeichen weiterhin die Farbe der laufenden Automatik — und genau dann
+     stimmt sie nicht mehr. */
+  const modusFarbenLoeschen = () => {
+    try {
+      for (const eigenschaft of ["border", "border-image-source", "border-image-slice", "box-shadow"]) {
+        rahmen.style.removeProperty(eigenschaft);
+      }
+      schild.style.removeProperty("border-color");
+      punktZeichen.style.removeProperty("background-image");
+    } catch (_) {}
+  };
+
+  const modusFaerben = () => {
+    rahmen.setAttribute("data-modus", modusJetzt);
+    schild.setAttribute("data-modus", modusJetzt);
+    if (modusJetzt !== "auto") {
+      modusFarbenLoeschen();
+      return;
+    }
+    try {
+      /* Ein Verlauf lässt sich nicht als box-shadow malen, wohl aber als
+         Rahmenbild. Der dunkle Innenring bleibt als Schatten stehen, damit
+         die Kante auch auf hellen Seiten steht. */
+      rahmen.style.setProperty("border", "8px solid transparent", "important");
+      rahmen.style.setProperty("border-image-source", MODUS_VERLAUF, "important");
+      rahmen.style.setProperty("border-image-slice", "1", "important");
+      rahmen.style.setProperty("box-shadow", "inset 0 0 0 4px rgba(3,6,18,.92)", "important");
+      schild.style.setProperty("border-color", MODUS_MITTE, "important");
+      punktZeichen.style.setProperty("background-image", MODUS_VERLAUF, "important");
+    } catch (_) {
+      /* Ein Browser, der einzelne Eigenschaften nicht kennt, bekommt weiterhin
+         das grüne Zeichen. Farbe ist eine Zugabe, das Zeichen selbst nicht. */
+    }
+  };
+
+  const modusSetzen = (roh) => {
+    const modus = String(roh || "");
+    if (!MODI_ANZEIGE[modus]) return false;
+    modusJetzt = modus;
+    modusFaerben();
+    schildSchreiben();
+    return true;
+  };
+
   const anzeigen = (an, text) => {
     if (overlayTot) return;
     rahmen.setAttribute("data-an", an ? "1" : "0");
     schild.setAttribute("data-an", an ? "1" : "0");
-    if (text) schild.querySelector(".text").textContent = text;
+    if (text) schildBasis = text;
+    if (an) schildSchreiben();
+    notausZeigen(an);
     /* Der Wächter läuft genau so lange, wie das Zeichen etwas verspricht.
        Ohne laufende Sitzung gibt es nichts zu bewachen, und kein fremdes Blatt
        soll einen Beobachter mitschleppen, den niemand braucht. */
@@ -318,9 +522,12 @@
   const gestoppt = () => {
     if (overlayTot) return;
     zielBezug = null;
+    /* Ein gestopptes Zeichen ist rot, in jedem Modus. Bliebe die Farbe der
+       Automatik stehen, sagte der Rahmen weiter „hier läuft etwas allein". */
+    modusFarbenLoeschen();
     rahmen.setAttribute("data-zustand", "gestoppt");
     schild.setAttribute("data-zustand", "gestoppt");
-    schild.querySelector(".text").textContent = "GESTOPPT, der Agent steuert nicht mehr";
+    schildText(spr("overlay_gestoppt", "GESTOPPT, der Agent steuert nicht mehr"));
     zeiger.setAttribute("data-an", "0");
     fahne.setAttribute("data-an", "0");
     ziel.setAttribute("data-an", "0");
@@ -362,10 +569,14 @@
   const WAECHTER_GRENZE = 3;      // so viele Eingriffe
   const WAECHTER_FENSTER = 4000;  // in so vielen Millisekunden sind ein Angriff
 
-  const ANGRIFF_SATZ =
-    "Diese Seite entfernt das Sichtzeichen immer wieder, deshalb ist die Sitzung jetzt beendet.";
-  const KONTEXT_SATZ =
-    "Die Verbindung zur Erweiterung ist weg, die Sitzung ist damit ohnehin beendet.";
+  const ANGRIFF_SATZ = spr(
+    "overlay_angriff",
+    "Diese Seite entfernt das Sichtzeichen immer wieder, deshalb ist die Sitzung jetzt beendet.",
+  );
+  const KONTEXT_SATZ = spr(
+    "overlay_kontext_weg",
+    "Die Verbindung zur Erweiterung ist weg, die Sitzung ist damit ohnehin beendet.",
+  );
 
   let beobachter = null;
   let eingriffe = [];
@@ -402,6 +613,14 @@
       if (arbeitsLauf) { clearInterval(arbeitsLauf); arbeitsLauf = null; }
     } catch (_) {}
     zielBezug = null;
+    /* Ein totes Zeichen hat keinen Betriebsmodus mehr: weder die Farbe noch
+       das Merkmal, an dem das Stylesheet sie festmacht. Sonst atmete ein
+       totes Overlay weiter in der Farbe einer Automatik, die nicht läuft. */
+    modusFarbenLoeschen();
+    try {
+      rahmen.removeAttribute("data-modus");
+      schild.removeAttribute("data-modus");
+    } catch (_) {}
     try {
       rahmen.setAttribute("data-an", "1");
       rahmen.setAttribute("data-zustand", "tot");
@@ -409,6 +628,9 @@
       schild.setAttribute("data-zustand", "tot");
       schildText(satz);
       for (const el of [zeiger, fahne, ziel, puls]) el.setAttribute("data-an", "0");
+      /* Ein totes Zeichen bekommt keine Reißleine: Es gibt nichts mehr zu
+         stoppen, und ein Knopf, der nichts tut, ist ein falsches Versprechen. */
+      notausZeigen(false);
     } catch (_) {}
     /* Der Titel gehört wieder der Seite: Das Präfix verspricht einen
        gesteuerten Tab, und gesteuert wird hier nichts mehr. */
@@ -929,9 +1151,21 @@
         .map((n) => n.textContent || "");
       if (teile.join(" ").trim()) return teile.join(" ");
     }
+    /* Befund vom 14.08.2026 (Verzahnung): `geheim()` und `wertVon()` decken den
+       WERT eines Feldes ab, den Namen nicht. Bei einem <div contenteditable>
+       mit Geheiminhalt hat `wertVon` den Wert richtig verweigert, derselbe
+       getippte Text stand aber als `name` im Textbaum und ging so an den
+       Agenten. Der Inhalt eines Elements, das Inhalt trägt, ist nie seine
+       Beschriftung — dieselbe Trennung, die `beschriftungVon` gleich darunter
+       begründet, und in `rekorder.js` ist sie von Anfang an gezogen. Die
+       Geheimlisten beider Dateien gehören zusammen und werden zusammen
+       gepflegt. */
+    const inhaltIstGeheim = geheim(el);
     const kandidaten = [
       el.getAttribute("aria-label"),
-      el.tagName === "INPUT" || el.tagName === "TEXTAREA" ? null : el.innerText,
+      el.tagName === "INPUT" || el.tagName === "TEXTAREA" || inhaltIstGeheim
+        ? null
+        : el.innerText,
       el.getAttribute("title"),
       el.getAttribute("placeholder"),
       el.getAttribute("alt"),
@@ -1173,6 +1407,41 @@
     };
   };
 
+  /* Die Bauform eines Elements: HTML-Marke, sein `type`-Merkmal und ob das
+     Formular, in dem es steht, ein Geheimfeld enthält.
+     Warum das mitgeht: Der Klassifizierer in `befehle.js` (VERTRAG v3.5 §3.1)
+     erkennt vier seiner zwölf Auslöser sonst nur am Wort — `input[type=file]`,
+     `type=submit`, ein Passwortfeld ohne Beschriftung und das Absenden einer
+     Anmeldemaske. Am Wort erkannt heisst: eine fremde Seite entscheidet über
+     die Rückfrage, indem sie ihren Knopf anders beschriftet.
+     Es sind ausschliesslich Angaben über die BAUFORM. Ein Formular meldet,
+     DASS es ein Geheimfeld enthält, nie was darin steht. */
+  const bauformVon = (el) => {
+    let formularGeheim = false;
+    try {
+      const form = typeof el.closest === "function" ? el.closest("form") : null;
+      if (form && typeof form.querySelectorAll === "function") {
+        for (const feld of form.querySelectorAll("input, textarea, select, [contenteditable]")) {
+          if (geheim(feld)) {
+            formularGeheim = true;
+            break;
+          }
+        }
+      }
+    } catch (_) {
+      /* Kein Formular, kein Zugriff, keine Aussage. Fehlt die Angabe, fällt der
+         Befund milder aus und nie strenger — deshalb ist sie freiwillig und
+         nicht Bedingung. */
+    }
+    return {
+      marke: String(el.tagName || "").toLowerCase(),
+      /* `feldtyp` und nicht `typ`: In den Nachrichten dieser Erweiterung heisst
+         `typ` immer die Art der Nachricht selbst. */
+      feldtyp: String(el.getAttribute("type") || "").toLowerCase(),
+      formularGeheim,
+    };
+  };
+
   /* Eine Referenz auflösen. Fail-closed: unbekannte Epoche, verschwundenes
      oder unsichtbares Element ergeben eine benannte Absage, nie ein geratenes
      Ersatzelement. Ein Zeiger, der auf das falsche Element zeigt, ist
@@ -1192,7 +1461,109 @@
       name: nameVon(el).slice(0, 200),
       rect: { left: r.left, top: r.top, width: r.width, height: r.height },
       mitte: { x: r.left + r.width / 2, y: r.top + r.height / 2 },
+      ...bauformVon(el),
     };
+  };
+
+  /* ------------------------------------------------------------------ *
+   * Ankerkaskade → Referenz (VERTRAG v3.5 §7.1, Nachricht `overlay:kaskade`).
+   *
+   * Ohne diesen Weg ist kein aufgezeichneter Ablauf abspielbar: Ein Workflow
+   * trägt Anker, die Befehlsschleife braucht eine Referenz. Bis zum 14.08.2026
+   * antwortete die Seite hier mit `unbekannte_nachricht`; der Ausführer meldete
+   * sauber `workflow_step_failed` nach §7.4, aber KEIN Ablauf mit
+   * click/input/select/scroll lief.
+   *
+   * Referenz UND Epoche kommen zusammen zurück. Eine Referenz ohne ihre Epoche
+   * ist eine Zahl, die auf der nächsten Wahrnehmung etwas anderes bedeutet.
+   * ------------------------------------------------------------------ */
+
+  const juengsteEpoche = () => [...epochen.keys()].slice(-1)[0] || null;
+
+  /* Eine Referenz, die in dieser Tabelle noch frei ist. Sie muss dem Muster des
+     Drahtformats folgen (`/^e[0-9]{1,4}$/`, `refPruefen` in befehle.js) — eine
+     eigene Schreibweise wie „k1" würde der Ausführer zu Recht verwerfen. */
+  const frischeRef = (tabelle) => {
+    let hoechste = 0;
+    for (const ref of tabelle.keys()) {
+      const t = /^e([0-9]{1,4})$/.exec(ref);
+      if (t) hoechste = Math.max(hoechste, Number(t[1]));
+    }
+    return hoechste < 9999 ? `e${hoechste + 1}` : null;
+  };
+
+  const kaskadeZuRef = (kaskade) => {
+    const selektor = globalThis.SMARTR_SELEKTOR;
+    /* `selektor.js` gehört dem Teach-Modus und steht in der Kür der
+       Einspielliste (net/seite.js). Fehlt sie, gilt dasselbe wie bei einem
+       Anker, der nichts trifft: Der Schritt ist nicht abspielbar. Eine eigene
+       Kennung dafür hätte der Ausführer nicht im Vertrag stehen. */
+    if (!selektor || typeof selektor.kaskadeAufloesen !== "function") {
+      return { ok: false, fehler: "kaskade_gebrochen" };
+    }
+    if (!Array.isArray(kaskade) || !kaskade.length) {
+      return { ok: false, fehler: "kaskade_gebrochen" };
+    }
+
+    let treffer = null;
+    try {
+      treffer = selektor.kaskadeAufloesen(kaskade, document);
+    } catch (_) {
+      treffer = null;
+    }
+    if (!treffer || treffer.ok !== true || !treffer.el) {
+      return { ok: false, fehler: "kaskade_gebrochen" };
+    }
+
+    /* Aufgelöst wird gegen die JÜNGSTE Wahrnehmung. Steht noch keine, oder
+       kennt sie das Element nicht (es lag ausserhalb des Sichtfelds, oder die
+       Seite hat es seither nachgeladen), wird einmal neu wahrgenommen. Das ist
+       genau das, was ein `readPage` auch täte, und es ist der einzige Weg, zu
+       einer Referenz zu kommen, die auf der Gegenseite etwas bedeutet. */
+    let epoche = juengsteEpoche();
+    let tabelle = epoche ? epochen.get(epoche) : null;
+    let ref = tabelle ? refZuElement(tabelle, treffer.el) : null;
+
+    if (!ref) {
+      try {
+        baumErheben({ offscreen: true });
+      } catch (_) {
+        /* Eine gescheiterte Wahrnehmung nimmt die alte nicht mit. */
+      }
+      epoche = juengsteEpoche();
+      tabelle = epoche ? epochen.get(epoche) : null;
+      ref = tabelle ? refZuElement(tabelle, treffer.el) : null;
+    }
+    if (!tabelle || !epoche) return { ok: false, fehler: "kaskade_gebrochen" };
+
+    if (!ref) {
+      /* Der Anker trifft ein Element, das die Wahrnehmung nicht aufführt — ein
+         Knopf ohne Namen zum Beispiel. Es hier einzutragen ist ehrlicher als
+         abzusagen: Der Anker hat getroffen, und was danach kommt (Sichtbarkeit,
+         Verdeckungswache, Geheimfeld), prüft der Bedienweg ohnehin selbst. */
+      ref = frischeRef(tabelle);
+      if (!ref) return { ok: false, fehler: "kaskade_gebrochen" };
+      tabelle.set(ref, treffer.el);
+    }
+
+    return {
+      ok: true,
+      ref,
+      epoche,
+      /* Welcher Anker getroffen hat, gehört in die Antwort: Nur so kann die
+         Werkbank später anzeigen, dass Anker 1 gebrochen ist und Anker 2 trägt
+         (§7.4). Der Anker ist ein Selektor aus der eigenen Aufzeichnung, kein
+         Seitentext. */
+      anker: typeof treffer.anker === "string" ? treffer.anker.slice(0, 200) : "",
+      stelle: Number.isInteger(treffer.stelle) ? treffer.stelle : 0,
+    };
+  };
+
+  const refZuElement = (tabelle, el) => {
+    for (const [ref, kandidat] of tabelle) {
+      if (kandidat === el) return ref;
+    }
+    return null;
   };
 
   /* ------------------------------------------------------------------ *
@@ -1222,24 +1593,83 @@
     return { ok: true, el, treffer };
   };
 
+  /* Die Umgebung, die die Klickwache braucht. Sie sieht selbst keinen Browser;
+     Dokument, Sichtfeld und Stilabfrage werden hereingereicht, damit dieselbe
+     Logik im Prüfstand gefahren werden kann wie in der Seite.
+     `getComputedStyle` wird eingepackt und nicht als blanke Referenz gereicht:
+     Losgelöst von ihrem Fenster wirft sie in Chrome „Illegal invocation", und
+     der Wurf liefe in den try der Wache. Aus dem Test auf `pointer-events`
+     würde dann ein stilles Nichts — die teuerste Sorte Fehler, weil alles
+     weiterhin grün aussieht. */
+  const wacheUmgebung = () => ({
+    dokument: document,
+    sichtfeld: { breite: innerWidth, hoehe: innerHeight },
+    stil: (el) => getComputedStyle(el),
+  });
+
+  /*
+   * Der einzige Weg, auf dem dieses Skript ein Element der Seite anfasst.
+   *
+   * Befund vom 11.08.2026: Die Verdeckungswache lag fertig in befehle.js, mit
+   * achtzehn grünen Prüfstellen darüber, und der Klickweg rief sie nirgends.
+   * Über einem freigegebenen „Jetzt kaufen" lag ein ganzseitiger Überzug,
+   * elementFromPoint gab eindeutig den Überzug zurück, und die Erweiterung
+   * klickte trotzdem und meldete Erfolg. Deshalb geht ab hier jede Handlung an
+   * einem Element durch `klickFreigeben`, und zwar als AUSLÖSER: Wer die Absage
+   * übersehen könnte, könnte trotzdem klicken; wer den Auslöser abgibt, kann es
+   * nicht.
+   *
+   * Fehlt die Wache, wird nicht gehandelt. Ohne Wache keine Bedienung ist die
+   * einzige Lesart, die den Befund wirklich schließt: Eine Bedienung, die bei
+   * fehlender Prüfung durchwinkt, ist genau die Bedienung von vorher.
+   */
+  const durchDieWache = (el, ausloesen) => {
+    const wache = globalThis.SMARTR_KLICKWACHE;
+    if (!wache || typeof wache.klickFreigeben !== "function") {
+      return { ok: false, fehler: "wache_fehlt" };
+    }
+    const frei = wache.klickFreigeben(el, wacheUmgebung(), ausloesen);
+    if (frei && frei.ok === true) return { ok: true, punkt: frei.punkt };
+
+    /* Die Namen der Wache in die Kennungen übersetzen, die der Ausführer in
+       Sätze für den Agenten fasst. Der Satz steht dort und nicht hier: Dieses
+       Skript läuft in einer fremden Seite, und was von hier kommt, wird dort
+       gemessen und nicht geglaubt. */
+    const name = (frei && frei.name) || "leer";
+    const absage =
+      name === "kein_ziel"
+        ? { ok: false, fehler: "element_not_found" }
+        : name === "verdeckt"
+          ? { ok: false, fehler: "element_covered" }
+          : { ok: false, fehler: "element_not_visible" };
+    absage.wache = name;
+    if (frei && frei.darueber) absage.darueber = frei.darueber;
+    return absage;
+  };
+
   const klicken = ({ ref, epoche }) => {
     const z = elementAus(ref, epoche);
     if (!z.ok) return { ok: false, fehler: z.fehler };
     const { el, treffer } = z;
-    /* Der Puls am Klickpunkt sagt „jetzt ist etwas passiert". Den Zeiger selbst
-       setzt der Ausführer per overlay:zeiger, BEVOR dieser Klick kommt — so ist
-       die Bewegung über die Spur prüfbar und geschieht nur nach dem Ja. */
-    klickPuls(treffer.mitte && treffer.mitte.x, treffer.mitte && treffer.mitte.y);
-    /* Erst antworten, dann klicken — siehe Kopf dieses Abschnitts. */
-    setTimeout(() => {
-      try {
-        el.focus({ preventScroll: true });
-        echterKlick(el);
-      } catch (_) {
-        /* Ein fehlgeschlagener Klick nach der Antwort ist nicht mehr meldbar;
-           der Agent sieht es an der nächsten Wahrnehmung. */
-      }
-    }, 0);
+    const frei = durchDieWache(el, (punkt) => {
+      /* Der Puls am Klickpunkt sagt „jetzt ist etwas passiert". Den Zeiger
+         selbst setzt der Ausführer per overlay:zeiger, BEVOR dieser Klick
+         kommt — so ist die Bewegung über die Spur prüfbar und geschieht nur
+         nach dem Ja. Der Puls steht hier im Auslöser und nicht davor: Er soll
+         nur dann aufgehen, wenn wirklich geklickt wird. */
+      klickPuls(punkt.x, punkt.y);
+      /* Erst antworten, dann klicken — siehe Kopf dieses Abschnitts. */
+      setTimeout(() => {
+        try {
+          el.focus({ preventScroll: true });
+          echterKlick(el);
+        } catch (_) {
+          /* Ein fehlgeschlagener Klick nach der Antwort ist nicht mehr meldbar;
+             der Agent sieht es an der nächsten Wahrnehmung. */
+        }
+      }, 0);
+    });
+    if (!frei.ok) return frei;
     return { ok: true, rolle: treffer.rolle, name: treffer.name };
   };
 
@@ -1309,12 +1739,36 @@
     }, 0);
   };
 
+  /*
+   * Tippen geht durch dieselbe Wache wie Klicken.
+   *
+   * Die Entscheidung dahinter, und der Grund dafür: Wer in ein verdecktes Feld
+   * tippt, tippt genauso ins Falsche. Der Mensch hat in der Einzelfreigabe ein
+   * Feld gesehen und ihm zugestimmt; liegt darüber ein Zustimmungsfenster oder
+   * eine Bannerleiste, dann hat er einer Lage zugestimmt, die es nicht gibt.
+   * Der Schaden ist ein anderer als beim Klick, aber er ist derselbe Bruch: Die
+   * Freigabe meint etwas anderes, als sie zeigt. Und ein Feld, das kein Mensch
+   * anklicken könnte, ist auch keines, in das eine Erweiterung schreiben darf.
+   *
+   * Die Prüfung auf Geheimfelder steht bewusst DAVOR: Sie gilt unbedingt. Ein
+   * Passwortfeld bleibt auch dann verboten, wenn gar nichts darüber liegt, und
+   * die Absage dafür heißt `feld_geheim` und nicht `element_covered`.
+   */
   const tippen = ({ ref, epoche, text, leeren, absenden }) => {
     const z = elementAus(ref, epoche);
     if (!z.ok) return { ok: false, fehler: z.fehler };
     const { el, treffer } = z;
     if (geheim(el)) return { ok: false, fehler: "feld_geheim" };
 
+    let ergebnis = { ok: false, fehler: "kein_eingabefeld" };
+    const frei = durchDieWache(el, () => {
+      ergebnis = tippenAusfuehren(el, treffer, { text, leeren, absenden });
+    });
+    if (!frei.ok) return frei;
+    return ergebnis;
+  };
+
+  const tippenAusfuehren = (el, treffer, { text, leeren, absenden }) => {
     const wert = String(text == null ? "" : text).slice(0, 2000);
     const tag = el.tagName;
     const abgesendet = absenden === true;
@@ -1417,11 +1871,26 @@
     return null;
   };
 
+  /* Auch das Auswählen geht durch die Wache, und aus demselben Grund wie das
+     Tippen: Ein Ankreuzfeld wird über einen echten `click` bedient, und eine
+     Liste, die unter einem Zustimmungsfenster liegt, hat der Mensch nicht
+     gesehen, als er zustimmte. Die Reihenfolge ist dieselbe: Geheimes bleibt
+     unbedingt verboten, danach entscheidet die Wache. */
   const auswaehlen = ({ ref, epoche, wert, etikett, index }) => {
     const z = elementAus(ref, epoche);
     if (!z.ok) return { ok: false, fehler: z.fehler };
     const { el, treffer } = z;
     if (geheim(el)) return { ok: false, fehler: "feld_geheim" };
+
+    let ergebnis = { ok: false, fehler: "kein_auswahlfeld" };
+    const frei = durchDieWache(el, () => {
+      ergebnis = auswaehlenAusfuehren(el, treffer, { wert, etikett, index });
+    });
+    if (!frei.ok) return frei;
+    return ergebnis;
+  };
+
+  const auswaehlenAusfuehren = (el, treffer, { wert, etikett, index }) => {
     const rolle = treffer.rolle;
 
     if (el.tagName === "SELECT") {
@@ -1832,12 +2301,53 @@
   };
   window.addEventListener("keydown", aufTaste, true);
 
+  /* Der Stoppknopf im Schild. Er meldet dieselbe Notbremse wie Esc Esc, nur mit
+     eigener Quelle (VERTRAG v3.5 §5: `overlay:notaus-knopf`, gesendet als
+     `notbremse` mit `quelle: "schild"`).
+     Erst kappen, dann melden: Das Zeichen springt sofort auf GESTOPPT, ohne auf
+     eine Antwort des Dienstes zu warten. Wer stoppt, will sehen, dass gestoppt
+     ist, und nicht auf eine Leitung warten. Erreicht die Meldung den Dienst
+     gar nicht, ist die Erweiterung weg — dann ist die Sitzung ohnehin vorbei,
+     und genau das steht dann im Schild. */
+  const notausGedrueckt = (e) => {
+    try {
+      if (e && typeof e.preventDefault === "function") e.preventDefault();
+      if (e && typeof e.stopPropagation === "function") e.stopPropagation();
+    } catch (_) {}
+    if (!notbremseSenden("schild")) {
+      totMelden(KONTEXT_SATZ);
+      return;
+    }
+    gestoppt();
+  };
+  try {
+    notaus.addEventListener("click", notausGedrueckt, true);
+    /* Auch auf pointerdown: Eine Seite, die ihre eigenen Klicks abfängt, darf
+       die Reißleine nicht verschlucken. Ein doppeltes Auslösen kostet nichts,
+       der Dienst beendet dieselbe Sitzung zweimal. */
+    notaus.addEventListener("pointerdown", notausGedrueckt, true);
+  } catch (_) {
+    /* Ohne Ereignishörer bleibt Esc Esc. Ein Knopf, der nicht hört, wird
+       weiter unten nicht angezeigt — er säße sonst als Versprechen da. */
+    try { notaus.style.setProperty("display", "none", "important"); } catch (_) {}
+  }
+
   /* Scrollt der Mensch selbst, wandert das freigegebene Element genauso wie
      beim Bildlauf des Agenten. `passive` sagt Chrome zu, dass hier nichts
      abgefangen wird — der Bildlauf der Seite bleibt flüssig. */
   window.addEventListener("scroll", zielNachfuehren, { passive: true, capture: true });
 
   chrome.runtime.onMessage.addListener((n, _absender, antwort) => {
+    /* Live-Blocker vom 14.08.2026: `rekorderSenden` (worker.js) fragt ZUERST
+       den Tab, ob dort schon ein Rekorder läuft, und spielt ihn nur ein, wenn
+       niemand antwortet. Läuft eine Agentensitzung, hängt dieses Overlay im
+       Tab und beantwortete `rekorder:start` in seinem Vorgabezweig mit
+       `unbekannte_nachricht`. Der Worker las das als Erfolg, spielte den
+       Rekorder nie ein, und der Mensch bekam einen Startknopf, der nichts tut.
+       Deshalb: Auf alles mit Präfix `rekorder:` antwortet dieses Skript nicht,
+       sondern gibt die Nachricht frei. Zuständig ist `rekorder.js`. */
+    if (typeof n?.typ === "string" && n.typ.startsWith("rekorder:")) return false;
+
     /* Ein totes Overlay nimmt nichts mehr an. Es könnte den Befehl zwar
        ausführen, aber nicht mehr zeigen — und unsichtbar bedienen ist genau
        das, was hier nie passieren darf. Die Absage ist benannt, damit der
@@ -1849,7 +2359,7 @@
     switch (n.typ) {
       case "overlay:an":
         grossSetzen(n.gross);
-        anzeigen(true, n.text || "SMarTrAgent steuert diesen Tab, Esc Esc = Stopp");
+        anzeigen(true, n.text || SCHILD_GRUNDTEXT);
         antwort({ ok: true });
         break;
       case "overlay:aus":
@@ -1863,6 +2373,13 @@
       case "overlay:gross":
         grossSetzen(n.gross);
         antwort({ ok: true });
+        break;
+      /* Der Betriebsmodus am Zeichen (VERTRAG v3.5 §6). Ein unbekannter Wert
+         ändert nichts und sagt genau das: Ein Rahmen, der eine Lage behauptet,
+         die niemand gesetzt hat, wäre schlimmer als ein unveränderter. Deshalb
+         steht in der Antwort, was jetzt wirklich zu sehen ist. */
+      case "overlay:modus":
+        antwort({ ok: true, gesetzt: modusSetzen(n.modus), modus: modusJetzt });
         break;
       case "overlay:zeiger":
         bezugMerken(n);
@@ -1894,6 +2411,16 @@
           antwort(nachschlagen(n.ref, n.epoche));
         } catch (fehler) {
           antwort({ ok: false, fehler: "element_not_found" });
+        }
+        break;
+      /* Der Weg, ohne den kein aufgezeichneter Ablauf abspielbar ist (§7.1).
+         Er bedient nichts und bewegt nichts — er beantwortet nur die Frage
+         „welches Element ist das heute". */
+      case "overlay:kaskade":
+        try {
+          antwort(kaskadeZuRef(n.kaskade));
+        } catch (fehler) {
+          antwort({ ok: false, fehler: "kaskade_gebrochen" });
         }
         break;
       case "overlay:scrollen":

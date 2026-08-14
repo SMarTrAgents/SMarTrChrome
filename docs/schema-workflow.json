@@ -1,0 +1,286 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smartragents.ai/schema/smartrchrome/workflow-v1.json",
+  "title": "SMarTrChrome Ablauf (Workflow) v1",
+  "description": "Ein gespeicherter Ablauf, wie er in chrome.storage.local unter sa_workflows liegt. Massgeblich ist der Code, nicht dieses Schema: workflowPruefen() in src/net/werkstatt.js entscheidet, was gespeichert wird. Dieses Schema beschreibt die GEPRÜFTE Form, also das, was nach workflowPruefen in der Ablage steht. Beim Einlesen ist die Erweiterung an drei Stellen milder als das Schema hier: name, beschreibung und reason werden gekürzt statt abgelehnt (saeubern), created wird auf 40 Zeichen gekürzt, und doppelte Einträge in params werden zusammengefasst. Alles andere ist eine Positivliste, unbekannte Felder und unbekannte Schritttypen sind eine benannte Absage.",
+  "$comment": "Quelle: src/net/werkstatt.js (SCHRITT_TYPEN, SCHRITT_FELDER, WERKSTATT_GRENZEN, WARTE_ARTEN, TASTEN) und src/net/befehle.js (WORKFLOW_ID_MUSTER, PARAM_NAME_MUSTER, GRENZEN.schritteDeckel, GRENZEN.workflowParams, GRENZEN.scrollPixel, GRENZEN.schrittFristMs, SCROLL_RICHTUNGEN, SCROLL_MENGEN). Stand 14.08.2026.",
+  "type": "object",
+  "required": ["id", "name", "steps"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^wf_[a-z0-9_]{1,40}$",
+      "description": "Kennung des Ablaufs. Sie wird zum Schlüssel in der Ablage, deshalb eng gefasst.",
+      "examples": ["wf_ebay_relist"]
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "description": "Der Name, den der Mensch in der Rückfrage zu hören bekommt. Pflicht."
+    },
+    "beschreibung": {
+      "type": "string",
+      "maxLength": 400,
+      "default": ""
+    },
+    "version": {
+      "const": 1,
+      "description": "WORKFLOW_VERSION. Eine andere Fassung wird mit version_ungueltig abgelehnt."
+    },
+    "created": {
+      "type": "string",
+      "maxLength": 40,
+      "description": "Zeitpunkt des Speicherns, ISO 8601. Er entsteht beim Speichern, nicht beim Prüfen, damit zweimal Prüfen zweimal dasselbe ergibt.",
+      "examples": ["2026-08-14T10:00:00.000Z"]
+    },
+    "params": {
+      "type": "array",
+      "maxItems": 20,
+      "default": [],
+      "items": {
+        "type": "string",
+        "pattern": "^[a-zA-Z0-9_]{1,40}$"
+      },
+      "description": "Die Namen der Werte, die beim Abspielen eingesetzt werden. Jeder Platzhalter {{name}} in einem Schritt muss hier stehen, sonst ist der Ablauf ungültig.",
+      "$comment": "Diese eine Regel kann ein JSON-Schema nicht messen: Sie verbindet den Inhalt einer Zeichenkette in einem Schritt mit dieser Liste. workflowPruefen lehnt einen Ablauf mit platzhalter_unbekannt ab, der hier durchkäme. Ein Ablauf, der dieses Schema erfüllt, ist also noch nicht zwingend einer, den die Erweiterung annimmt."
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 500,
+      "items": { "$ref": "#/$defs/schritt" },
+      "description": "Die Schritte, in der Reihenfolge der Aufzeichnung. Der Deckel ist GRENZEN.schritteDeckel."
+    }
+  },
+  "$defs": {
+    "anker": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 400,
+      "description": "Ein einzelner Anker aus der Selektor-Kaskade."
+    },
+    "kaskade": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": { "$ref": "#/$defs/anker" },
+      "description": "Die Selektor-Kaskade, stärkster Anker zuerst: data-Merkmal, aria-label mit Rolle, stabiler CSS-Pfad, text=..., XPath. Bricht die ganze Kaskade, meldet der Ausführer workflow_step_failed mit Beschreibung und Ankern, damit der Agent selbst ein Ziel benennen kann."
+    },
+    "warteArt": {
+      "enum": ["load", "domcontentloaded", "networkidle", "idle"]
+    },
+    "gemeinsameFelder": {
+      "type": "object",
+      "properties": {
+        "type": { "type": "string" },
+        "beschreibung": {
+          "type": "string",
+          "maxLength": 400,
+          "description": "Beschreibung des gesuchten Elements. Sie ist die Datengrundlage der Selbstheilung nach Vertrag 7.4."
+        },
+        "screenshot": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+          "description": "Name des Miniaturbildes zu diesem Schritt. Das Bild selbst liegt getrennt unter sa_rekorder_bilder und wird beim Browserstart gelöscht."
+        }
+      }
+    },
+    "schritt": {
+      "type": "object",
+      "required": ["type"],
+      "oneOf": [
+        { "$ref": "#/$defs/schrittNavigate" },
+        { "$ref": "#/$defs/schrittClick" },
+        { "$ref": "#/$defs/schrittDblclick" },
+        { "$ref": "#/$defs/schrittInput" },
+        { "$ref": "#/$defs/schrittSelect" },
+        { "$ref": "#/$defs/schrittScroll" },
+        { "$ref": "#/$defs/schrittKey" },
+        { "$ref": "#/$defs/schrittWait" },
+        { "$ref": "#/$defs/schrittUserInput" }
+      ]
+    },
+    "schrittNavigate": {
+      "type": "object",
+      "required": ["type", "url"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "navigate" },
+        "beschreibung": { "$ref": "#/$defs/gemeinsameFelder/properties/beschreibung" },
+        "screenshot": { "$ref": "#/$defs/gemeinsameFelder/properties/screenshot" },
+        "url": {
+          "type": "string",
+          "pattern": "^https?://(?![^/?#]*@)[^\\s]+$",
+          "description": "Nur https und http. Kein javascript:, data:, file: oder chrome:, und kein Benutzername im Ort, denn eine Adresse mit Benutzernamen zeigt vorn den Namen, den der Mensch lesen soll, und geht hinten zu einem anderen Wirt. Geprüft wird mit adresseZerlegen; enthält die Adresse einen Platzhalter, wird nur das Schema gemessen, weil sie erst beim Abspielen vollständig ist. Der freigegebene BEREICH wird hier ausdrücklich nicht geprüft, er gilt je Sitzung und steht beim Speichern noch nicht fest."
+        },
+        "wait": { "$ref": "#/$defs/warteArt" }
+      }
+    },
+    "schrittClick": {
+      "type": "object",
+      "required": ["type", "selector_cascade"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "click" },
+        "beschreibung": { "$ref": "#/$defs/gemeinsameFelder/properties/beschreibung" },
+        "screenshot": { "$ref": "#/$defs/gemeinsameFelder/properties/screenshot" },
+        "selector_cascade": { "$ref": "#/$defs/kaskade" }
+      }
+    },
+    "schrittDblclick": {
+      "type": "object",
+      "required": ["type", "selector_cascade"],
+      "additionalProperties": false,
+      "$comment": "Steht in SCHRITT_TYPEN, wird aber von keinem Ereignisweg des Rekorders erzeugt, und BEFEHLE kennt keinen Doppelklick. Der Ausführer lehnt diesen Typ beim Abspielen benannt mit workflow_step_failed ab. Siehe docs/OFFEN-v3.5.md.",
+      "properties": {
+        "type": { "const": "dblclick" },
+        "beschreibung": { "$ref": "#/$defs/gemeinsameFelder/properties/beschreibung" },
+        "screenshot": { "$ref": "#/$defs/gemeinsameFelder/properties/screenshot" },
+        "selector_cascade": { "$ref": "#/$defs/kaskade" }
+      }
+    },
+    "schrittInput": {
+      "type": "object",
+      "required": ["type", "selector_cascade", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "input" },
+        "beschreibung": { "$ref": "#/$defs/gemeinsameFelder/properties/beschreibung" },
+        "screenshot": { "$ref": "#/$defs/gemeinsameFelder/properties/screenshot" },
+        "selector_cascade": { "$ref": "#/$defs/kaskade" },
+        "value": {
+          "type": "string",
+          "maxLength": 2000,
+          "description": "Der einzutippende Text, auch der leere Text ist einer. Darf Platzhalter {{name}} tragen. In ein Geheimfeld zeichnet der Rekorder gar nichts auf, dort entsteht stattdessen ein Schritt user_input_required."
+        },
+        "clear": {
+          "type": "boolean",
+          "default": true,
+          "description": "Feld vorher leeren."
+        },
+        "submit": {
+          "type": "boolean",
+          "default": false,
+          "description": "Nach der Eingabe Enter. Löst die Aktionsklasse formular aus."
+        }
+      }
+    },
+    "schrittSelect": {
+      "type": "object",
+      "required": ["type", "selector_cascade"],
+      "additionalProperties": false,
+      "description": "Genau ein Weg zur Option: value, label oder index. Zwei Angaben können auf zwei verschiedene Optionen zeigen, und eine davon zu bevorzugen wäre eine Wahl, die niemand getroffen hat.",
+      "oneOf": [
+        { "required": ["value"], "not": { "anyOf": [{ "required": ["label"] }, { "required": ["index"] }] } },
+        { "required": ["label"], "not": { "anyOf": [{ "required": ["value"] }, { "required": ["index"] }] } },
+        { "required": ["index"], "not": { "anyOf": [{ "required": ["value"] }, { "required": ["label"] }] } }
+      ],
+      "properties": {
+        "type": { "const": "select" },
+        "beschreibung": { "$ref": "#/$defs/gemeinsameFelder/properties/beschreibung" },
+        "screenshot": { "$ref": "#/$defs/gemeinsameFelder/properties/screenshot" },
+        "selector_cascade": { "$ref": "#/$defs/kaskade" },
+        "value": { "type": "string", "minLength": 1 },
+        "label": { "type": "string", "minLength": 1 },
+        "index": { "type": "integer", "minimum": 0, "maximum": 999 }
+      }
+    },
+    "schrittScroll": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "description": "Entweder zu einem Element rollen (selector_cascade) oder in eine Richtung (direction). Eine fehlende Richtung wird nicht stillschweigend nach unten: Ein Ablauf, der in die falsche Richtung rollt und Erfolg meldet, ist schlimmer als einer, der abbricht.",
+      "anyOf": [
+        { "required": ["selector_cascade"] },
+        { "required": ["direction"] }
+      ],
+      "properties": {
+        "type": { "const": "scroll" },
+        "beschreibung": { "$ref": "#/$defs/gemeinsameFelder/properties/beschreibung" },
+        "screenshot": { "$ref": "#/$defs/gemeinsameFelder/properties/screenshot" },
+        "selector_cascade": { "$ref": "#/$defs/kaskade" },
+        "direction": { "enum": ["down", "up", "top", "bottom"] },
+        "amount": {
+          "oneOf": [
+            { "type": "integer", "minimum": 1, "maximum": 3000 },
+            { "enum": ["page", "half"] }
+          ],
+          "description": "Pixelzahl bis GRENZEN.scrollPixel oder page beziehungsweise half."
+        }
+      }
+    },
+    "schrittKey": {
+      "type": "object",
+      "required": ["type", "key"],
+      "additionalProperties": false,
+      "$comment": "BEFEHLE kennt keinen Befehl für eine einzelne Taste. Der Ausführer lehnt diesen Typ beim Abspielen benannt ab, siehe docs/OFFEN-v3.5.md.",
+      "properties": {
+        "type": { "const": "key" },
+        "beschreibung": { "$ref": "#/$defs/gemeinsameFelder/properties/beschreibung" },
+        "screenshot": { "$ref": "#/$defs/gemeinsameFelder/properties/screenshot" },
+        "key": {
+          "enum": ["Enter", "Tab"],
+          "description": "Nur diese zwei. Jede weitere Taste wäre eine Eingabe, die der Mensch in der Rückfrage nicht lesen kann."
+        }
+      }
+    },
+    "schrittWait": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "anyOf": [
+        { "required": ["ms"] },
+        { "required": ["until"] }
+      ],
+      "properties": {
+        "type": { "const": "wait" },
+        "beschreibung": { "$ref": "#/$defs/gemeinsameFelder/properties/beschreibung" },
+        "screenshot": { "$ref": "#/$defs/gemeinsameFelder/properties/screenshot" },
+        "ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60000,
+          "description": "Wartezeit in Millisekunden, höchstens GRENZEN.schrittFristMs."
+        },
+        "until": { "$ref": "#/$defs/warteArt" }
+      }
+    },
+    "schrittUserInput": {
+      "type": "object",
+      "required": ["type", "reason"],
+      "additionalProperties": false,
+      "description": "Der Halt für den Menschen. Hier hat der Rekorder ein Geheimfeld gesehen und absichtlich nichts aufgezeichnet. Anmelden bleibt Sache des Menschen.",
+      "properties": {
+        "type": { "const": "user_input_required" },
+        "beschreibung": { "$ref": "#/$defs/gemeinsameFelder/properties/beschreibung" },
+        "screenshot": { "$ref": "#/$defs/gemeinsameFelder/properties/screenshot" },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 400,
+          "description": "Pflicht. Sie ist das Einzige, was der Mensch beim Anhalten zu sehen bekommt, er muss wissen, warum der Ablauf stehen bleibt.",
+          "examples": ["Login/2FA"]
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "id": "wf_ebay_relist",
+      "name": "eBay: Artikel neu einstellen",
+      "beschreibung": "",
+      "version": 1,
+      "created": "2026-08-14T10:00:00.000Z",
+      "params": ["artikelnummer"],
+      "steps": [
+        { "type": "navigate", "url": "https://www.ebay.de/sh/lst/ended", "wait": "networkidle" },
+        { "type": "user_input_required", "reason": "Login/2FA" },
+        { "type": "click", "selector_cascade": ["[data-testid='relist']", "text=Erneut einstellen"], "beschreibung": "Knopf Erneut einstellen", "screenshot": "s1.jpg" },
+        { "type": "input", "selector_cascade": ["#itemnr"], "value": "{{artikelnummer}}", "clear": true },
+        { "type": "wait", "until": "networkidle" }
+      ]
+    }
+  ]
+}

@@ -3,7 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SMarTrChrome, Niemand</title>
+  <!-- Die Sprachmarke oben steht auf "de" und wird beim Laden auf die Sprache
+       gesetzt, die WIRKLICH ankommt (panel.js, spracheAnwenden). Ein fest
+       deutsches lang-Merkmal liess einen Bildschirmleser englische Saetze mit
+       deutscher Aussprache vorlesen. -->
+  <title data-i18n="kopf_titel">SMarTrChrome, Niemand</title>
   <link rel="stylesheet" href="panel.css">
 </head>
 <body>
@@ -12,13 +16,16 @@
     <header class="kopf">
       <div class="marke">
         <span class="hase" aria-hidden="true">🐇</span>
-        <span class="name">Niemand</span>
+        <span class="name" data-i18n="kopf_name">Niemand</span>
         <button id="zustand-chip" class="chip" type="button" aria-expanded="false" aria-controls="zustand-erklaerung">
-          <span id="zustand-text">Nicht verbunden</span>
+          <span id="zustand-text" data-i18n="kopf_nicht_verbunden">Nicht verbunden</span>
           <span class="pfeil" aria-hidden="true">⌄</span>
         </button>
       </div>
       <div class="kopf-knoepfe">
+        <!-- aria-label und title setzt panel.js über den Katalog
+             (merkmaleUebersetzen). Sie stehen hier trotzdem auf Deutsch: Bleibt
+             der Katalog stumm, ist der Knopf beschriftet und nicht namenlos. -->
         <button id="neu" class="symbol" type="button" aria-label="Neues Gespräch" title="Neues Gespräch">＋</button>
         <button id="menue-knopf" class="symbol" type="button" aria-haspopup="menu" aria-expanded="false"
                 aria-label="Menü" title="Menü">⋮</button>
@@ -38,55 +45,134 @@
          Er ist keine Verbindung und wird überall so benannt.
          KEIN aria-live: Die Störungszeile darüber ist bereits role="alert",
          eine zweite sprechende Zone würde sie übertönen. -->
-    <button id="vorfuehrung" class="chip vorschlag kopfchip" type="button" hidden>Nur vorführen, ohne Server, ohne Agent</button>
+    <button id="vorfuehrung" class="chip vorschlag kopfchip" type="button" hidden
+            data-i18n="kopf_vorfuehrung">Nur vorführen, ohne Server, ohne Agent</button>
 
     <!-- Menü. Hier liegt alles, was man selten braucht — und das Vorlesen. -->
     <div id="menue" class="menue" role="menu" aria-label="Menü" hidden>
-      <p class="menue-titel" id="menue-vorlesen-titel">Vorlesen</p>
+      <p class="menue-titel" id="menue-vorlesen-titel" data-i18n="kopf_menue_vorlesen">Vorlesen</p>
       <button class="menue-punkt" type="button" role="menuitemradio" data-vorlesen="aus" aria-checked="false">
-        <span class="haken" aria-hidden="true">✓</span> Aus
+        <span class="haken" aria-hidden="true">✓</span> <span data-i18n="kopf_menue_vorlesen_aus">Aus</span>
       </button>
       <button class="menue-punkt" type="button" role="menuitemradio" data-vorlesen="sicher" aria-checked="true">
-        <span class="haken" aria-hidden="true">✓</span> Nur wichtige Ansagen
+        <span class="haken" aria-hidden="true">✓</span> <span data-i18n="kopf_menue_vorlesen_sicher">Nur wichtige Ansagen</span>
       </button>
       <button class="menue-punkt" type="button" role="menuitemradio" data-vorlesen="alles" aria-checked="false">
-        <span class="haken" aria-hidden="true">✓</span> Alles vorlesen
+        <span class="haken" aria-hidden="true">✓</span> <span data-i18n="kopf_menue_vorlesen_alles">Alles vorlesen</span>
       </button>
 
       <hr class="menue-linie">
       <button id="menue-sicht" class="menue-punkt" type="button" role="menuitemcheckbox" aria-checked="true">
-        <span class="haken" aria-hidden="true">✓</span> Große Sichtbarkeit
+        <span class="haken" aria-hidden="true">✓</span> <span data-i18n="kopf_menue_sicht">Große Sichtbarkeit</span>
+      </button>
+      <!-- Die beiden Ansichten aus Vertrag §4 und §8.3. Sie stehen im Menü,
+           weil sie selten gebraucht werden; erreichbar sind sie damit trotzdem
+           in zwei Klicks, und der Weg dorthin verschwindet nie hinter einer
+           laufenden Sitzung. -->
+      <button id="menue-werkbank" class="menue-punkt" type="button" role="menuitem" data-i18n="werkbank_oeffnen">
+        <span class="haken" aria-hidden="true"></span> Regeln und Abläufe …
+      </button>
+      <button id="menue-buch" class="menue-punkt" type="button" role="menuitem" data-i18n="buch_oeffnen">
+        <span class="haken" aria-hidden="true"></span> Protokollbuch …
       </button>
       <button id="menue-verbinden" class="menue-punkt" type="button" role="menuitem">
-        <span class="haken" aria-hidden="true"></span> Verbindung aufbauen …
+        <span class="haken" aria-hidden="true"></span> <span data-i18n="kopf_menue_verbinden">Verbindung aufbauen …</span>
       </button>
       <button id="menue-beenden" class="menue-punkt" type="button" role="menuitem" hidden>
-        <span class="haken" aria-hidden="true"></span> Verbindung beenden
+        <span class="haken" aria-hidden="true"></span> <span data-i18n="kopf_menue_beenden">Verbindung beenden</span>
       </button>
 
-      <p class="menue-fuss">SMarTrChrome 0.5.2</p>
+      <p class="menue-fuss">SMarTrChrome 0.5.3</p>
     </div>
 
-    <!-- Läuft KEINE Sitzung, steht der Weg dorthin hier: sichtbar und
-         unabhängig vom Gesprächsverlauf. Der frühere Knopf wohnte in #leer und
-         verschwand mit der ersten Sprechblase; danach war der Weg nur noch im
-         Dreipunktmenü zu finden, was ihn praktisch unauffindbar machte. -->
+    <!-- Läuft eine Cloud-Sitzung, steht das hier, und zwar durchgehend
+         (Vertrag §8.4, Punkt 1). Kein aria-live: Der Start der Sitzung wird
+         einmal angesagt, danach ist diese Zeile eine Auskunft, die dasteht.
+         Eine zweite Vorlesezone neben #ansage würde denselben Satz doppelt
+         sprechen — derselbe Fund wie bei den Sprechblasen (F7). -->
+    <p id="cloud-zeile" class="cloud-zeile" hidden>
+      <span class="cloud-punkt" aria-hidden="true"></span>
+      <span data-i18n="kopf_cloud_sitzung">Cloud-Sitzung aktiv:</span>
+      <strong id="cloud-agent" class="cloud-agent"></strong>
+    </p>
+
+    <!--
+      Der Weg zur Verbindung, ganz oben und in EINEM Klick.
+
+      Befund Inhaber 14.08.2026: Bis 0.5.2 stand hier ein Knopf, der in einen
+      Dialog mit Stufen- und Dauerwahl führte; bis zur aktiven Verbindung waren
+      es drei bis vier Klicks. Für jemanden, der sich die Seitenleiste vorlesen
+      lässt, ist jeder dieser Klicks ein eigener vorgelesener Bildschirm.
+
+      Jetzt gilt: #verbinden-tab verbindet sofort mit dem Tab, der gerade offen
+      ist, und zwar mit der Stufe, die zuletzt gewählt wurde. Der Dialog
+      verschwindet nicht, er ist nur nicht mehr der Regelweg — er steht als
+      „Dauer und Geltung ändern" daneben.
+    -->
     <div id="verbindungsleiste" class="verbindungsleiste" hidden>
-      <button id="verbinden-start" class="haupt" type="button" aria-describedby="verbinden-hinweis">
-        Verbindung aufbauen
-      </button>
-      <span id="verbinden-hinweis" class="verbinden-hinweis">für diesen einen Tab</span>
+      <button id="verbinden-tab" class="verbinden-tab" type="button" aria-describedby="verbinden-hinweis" data-i18n="kopf_verbinden_tab">Mit diesem Tab verbinden</button>
+      <span id="verbinden-hinweis" class="verbinden-hinweis" data-i18n="kopf_verbinden_hinweis">für den Tab, den du gerade offen hast</span>
+      <button id="verbinden-start" class="einstellungen-aendern" type="button"
+              data-i18n="kopf_einstellungen_oeffnen">Dauer und Geltung ändern</button>
     </div>
 
-    <!-- Läuft eine Sitzung, steht das hier. Stopp wandert nie in ein Menü. -->
+    <!-- Läuft eine Sitzung, sagt diese Karte, WELCHER Tab gemeint ist: Favicon,
+         Titel, grüner Punkt. Der Trennen-Knopf steht daneben, nicht in einem
+         Menü. KEIN role="status": Der Verbindungsaufbau wird bereits von
+         sitzungAnzeigen() angesagt, eine zweite Vorlesezone spräche denselben
+         Vorgang ein zweites Mal (F7). -->
+    <div id="tabkarte" class="tabkarte" hidden>
+      <span class="punkt" aria-hidden="true"></span>
+      <img id="tabkarte-bild" class="tabkarte-bild" alt="" hidden>
+      <span id="tabkarte-glyph" class="tabkarte-glyph" aria-hidden="true">🌐</span>
+      <span class="tabkarte-worte">
+        <strong id="tabkarte-titel" class="tabkarte-titel"></strong>
+        <span id="tabkarte-adresse" class="tabkarte-adresse"></span>
+      </span>
+      <button id="trennen" class="neben trennen" type="button" data-i18n="kopf_trennen">Trennen</button>
+    </div>
+
+    <!-- Läuft eine Sitzung, steht das hier. Stopp wandert nie in ein Menü und
+         nie hinter einen Aufklapper: Diese Leiste steht, solange eine Sitzung
+         läuft, in JEDEM Zustand der Seitenleiste (panel.js, setzeZustand). -->
     <div id="sitzungsleiste" class="sitzungsleiste" role="status" hidden>
       <span class="punkt" aria-hidden="true"></span>
-      <span class="aktiv-wort">Aktiv</span>
-      <span id="stufe-anzeige" class="etikett">Nur zusehen</span>
+      <span class="aktiv-wort" data-i18n="kopf_aktiv">Aktiv</span>
+      <span id="stufe-anzeige" class="etikett" data-i18n="kopf_stufe_read">Nur zusehen</span>
       <span id="sitzungscode" class="etikett" hidden></span>
       <span id="rest">--:--</span>
-      <button id="stopp" class="stopp" type="button">Stopp</button>
+      <button id="stopp" class="stopp" type="button" data-i18n="kopf_stopp">Stopp</button>
     </div>
+
+    <!--
+      Der Betriebsmodus des Tabs (Vertrag §2). Drei Stufen, ein Umschalter,
+      keine Klapptür: Was der Agent selbständig darf, ist die wichtigste
+      Einstellung dieser Erweiterung und gehört deshalb sichtbar hierher.
+
+      Der Riegel darunter steht bei der Wahl selbst und nicht in einer Fußnote:
+      Wer sich vorlesen lässt, hört ihn im selben Atemzug mit den drei Knöpfen.
+      Dieselbe Entscheidung ist beim Etikett „Vollzugriff" schon getroffen
+      worden (Prüfsatz S4).
+
+      #modus-auskunft trägt den Schlüssel der VOREINSTELLUNG (assist,
+      MODUS_STANDARD), nicht einen eigenen: Was hier vor dem ersten Umschalten
+      steht, ist genau die Auskunft zum Modus, der ohnehin gilt. Ein eigener
+      Schlüssel wäre ein zweiter Satz mit demselben Inhalt und liefe beim ersten
+      Redigieren auseinander.
+    -->
+    <section id="modus-bereich" class="modus-bereich">
+      <h2 id="modus-titel" class="modus-titel" data-i18n="modus_titel">Wie selbständig soll ich arbeiten?</h2>
+      <div id="modus-wahl" class="segmentwahl" role="radiogroup" aria-labelledby="modus-titel">
+        <button id="modus-manual" class="segment" type="button" role="radio" aria-checked="false"
+                tabindex="-1" data-i18n="modus_manual">Jeder Schritt einzeln</button>
+        <button id="modus-assist" class="segment" type="button" role="radio" aria-checked="true"
+                tabindex="0" data-i18n="modus_assist">Mitdenken</button>
+        <button id="modus-auto" class="segment" type="button" role="radio" aria-checked="false"
+                tabindex="-1" data-i18n="modus_auto">Selbständig</button>
+      </div>
+      <p id="modus-auskunft" class="modus-auskunft" data-i18n="modus_assist_auskunft"></p>
+      <p id="modus-riegel" class="modus-riegel" data-i18n="modus_riegel"></p>
+    </section>
 
     <!-- Der Beispielauftrag gehört zur laufenden Sitzung, nicht zum
          Leerzustand. Bis 0.4.0 stand er in #leer und war deshalb nie zu
@@ -94,7 +180,8 @@
          danach auf `aktiv`, wo #leer verschwindet. Hier steht er neben der
          Sitzungsleiste, wo die Sitzung auch sonst zu Hause ist.
          Sichtbarkeit setzt setzeZustand, damit er mit der Sitzung geht. -->
-    <button id="vorschlag" class="chip vorschlag kopfchip" type="button" hidden>Zeig mir, was hier anklickbar ist</button>
+    <button id="vorschlag" class="chip vorschlag kopfchip" type="button" hidden
+            data-i18n="kopf_vorschlag">Zeig mir, was hier anklickbar ist</button>
 
     <!-- Die Freigabe steht dauerhaft im Dokument; nur ihr Inhalt wechselt. -->
     <section id="freigabe" class="freigabe" aria-live="assertive" hidden>
@@ -112,8 +199,8 @@
         <span id="freigabe-balken" class="freigabe-balken" aria-hidden="true"><span id="freigabe-balken-fuellung"></span></span>
       </p>
       <div class="knopfreihe">
-        <button id="freigabe-nein" class="neben" type="button">Ablehnen</button>
-        <button id="freigabe-ja" class="haupt" type="button">Freigeben</button>
+        <button id="freigabe-nein" class="neben" type="button" data-i18n="freigabe_nein">Ablehnen</button>
+        <button id="freigabe-ja" class="haupt" type="button" data-i18n="freigabe_ja">Freigeben</button>
       </div>
     </section>
 
@@ -127,13 +214,23 @@
            ein Knopf, der mit der ersten Sprechblase verschwindet, ist kein
            Bedienweg. -->
       <div id="leer" class="leer">
-        <p class="rede">Hallo. Ich bin Niemand. Sag mir, was du brauchst.</p>
-        <p class="hinweis"><strong>Anmelden übernimmst du selbst</strong>, alles danach mache ich.</p>
+        <p class="rede" data-i18n="kopf_leer_rede">Hallo. Ich bin Niemand. Sag mir, was du brauchst.</p>
+        <p class="hinweis"><strong data-i18n="kopf_leer_stark">Anmelden übernimmst du selbst</strong><span data-i18n="kopf_leer_rest">, alles danach mache ich.</span></p>
       </div>
+
+      <!-- Der Anker für die Tab-Liste. Sie ist der Weg zu einem ANDEREN
+           Fenster; gezeichnet wird sie von src/panel/startseite.js
+           (Vertrag §1, A-WERKBANK), gerufen von panel.js. Der Freigabe-Ursprung
+           steht dort nie zur Auswahl — die Sperre liegt in net/rechte.js und
+           wird hier benutzt, nicht wiederholt. -->
+      <section id="startseite" class="startseite" aria-labelledby="startseite-titel">
+        <h2 id="startseite-titel" class="startseite-titel" data-i18n="kopf_tabliste_titel">Ein anderer Tab</h2>
+        <div id="startseite-liste" class="startseite-liste"></div>
+      </section>
 
       <!-- Verbindungsdialog -->
       <section id="dialog" class="karte" hidden>
-        <h2>Verbindung über SMarTrLink</h2>
+        <h2 data-i18n="dialog_titel">Verbindung über SMarTrLink</h2>
 
         <!-- Kompakt zuerst: Was passiert, steht in einem Satz (#zusammenfassung),
              die gemerkte Wahl ist schon vorbelegt. Wer Dauer oder Stufe ändern
@@ -148,20 +245,21 @@
              wollte, fand den Weg nicht. Für jemanden, der sich alles vorlesen
              lässt, war er praktisch nicht begehbar. -->
         <fieldset class="stufe-vorn">
-          <legend>Was darf der Agent?</legend>
-          <div class="auswahl" role="radiogroup" aria-label="Was der Agent darf">
-            <label><input type="radio" name="stufe" value="read" checked> Nur zusehen, lesen, blättern, zeigen</label>
-            <label><input type="radio" name="stufe" value="write"> Bedienen, zusätzlich klicken und tippen</label>
-            <label><input type="radio" name="stufe" value="voll"> Vollzugriff, bedienen und selbständig weiterarbeiten</label>
+          <legend data-i18n="dialog_stufe_legende">Was darf der Agent?</legend>
+          <div id="stufe-wahl" class="auswahl" role="radiogroup" aria-label="Was der Agent darf">
+            <label><input type="radio" name="stufe" value="read" checked> <span data-i18n="dialog_stufe_read">Nur zusehen, lesen, blättern, zeigen</span></label>
+            <label><input type="radio" name="stufe" value="write"> <span data-i18n="dialog_stufe_write">Bedienen, zusätzlich klicken und tippen</span></label>
+            <label><input type="radio" name="stufe" value="voll"> <span data-i18n="dialog_stufe_voll">Vollzugriff, bedienen und selbständig weiterarbeiten</span></label>
           </div>
-          <p id="stufe-auskunft-vorn" class="stufe-auskunft">
+          <p id="stufe-auskunft-vorn" class="stufe-auskunft" data-i18n="dialog_stufe_auskunft">
             Jeden Schritt bestätigst du einzeln. Passwörter tippt der Agent nie. Anmelden machst du selbst.
             Deine Wahl wird gemerkt und beim nächsten Mal vorbelegt.
           </p>
         </fieldset>
 
         <button id="einstellungen-aendern" class="einstellungen-aendern" type="button"
-                aria-expanded="false" aria-controls="dialog-mehr">Dauer und Geltung ändern</button>
+                aria-expanded="false" aria-controls="dialog-mehr"
+                data-i18n="dialog_einstellungen_aendern">Dauer und Geltung ändern</button>
 
         <div id="dialog-mehr" hidden>
         <!-- ① Die Auswahl ist ein Wunsch, keine Zusage. Der Server entscheidet
@@ -174,12 +272,12 @@
              „Unbegrenzt" heißt: Die Erweiterung erneuert die Freigabe selbst,
              solange die Sitzung läuft, bis der Mensch sie beendet. -->
         <fieldset>
-          <legend>Wie lange?</legend>
-          <div class="auswahl" role="radiogroup" aria-label="Dauer der Verbindung">
-            <label><input type="radio" name="dauer" value="600" checked> 10 Minuten</label>
-            <label><input type="radio" name="dauer" value="1800"> 30 Minuten</label>
-            <label><input type="radio" name="dauer" value="3600"> 60 Minuten</label>
-            <label><input type="radio" name="dauer" value="unbegrenzt"> Unbegrenzt, bis du beendest</label>
+          <legend data-i18n="dialog_dauer_legende">Wie lange?</legend>
+          <div id="dauer-wahl" class="auswahl" role="radiogroup" aria-label="Dauer der Verbindung">
+            <label><input type="radio" name="dauer" value="600" checked> <span data-i18n="dialog_dauer_600">10 Minuten</span></label>
+            <label><input type="radio" name="dauer" value="1800"> <span data-i18n="dialog_dauer_1800">30 Minuten</span></label>
+            <label><input type="radio" name="dauer" value="3600"> <span data-i18n="dialog_dauer_3600">60 Minuten</span></label>
+            <label><input type="radio" name="dauer" value="unbegrenzt"> <span data-i18n="dialog_dauer_unbegrenzt">Unbegrenzt, bis du beendest</span></label>
           </div>
         </fieldset>
 
@@ -188,24 +286,29 @@
              Website" wäre serverseitig dieselbe Sitzung mit engerem
              Bereich — die Wahl hätte also keine Wirkung. -->
         <fieldset>
-          <legend>Wo gilt das?</legend>
-          <p class="stufe-auskunft">
+          <legend data-i18n="dialog_geltung_legende">Wo gilt das?</legend>
+          <!-- Der fett gesetzte Halbsatz trägt bewusst KEIN data-i18n: Prüfsatz
+               „Stufe und Dauer sind echte Auswahlen" (A-PANEL) misst hier
+               `<strong>Nur dieser eine Tab</strong>` ohne jedes Merkmal. Seinen
+               Katalogschlüssel `dialog_geltung_stark` setzt deshalb panel.js
+               (zusatztexteUebersetzen) über die Klasse `geltung`. -->
+          <p class="stufe-auskunft geltung">
             <strong>Nur dieser eine Tab</strong> (<span id="ursprung"></span>).<br>
-            Andere Tabs und andere Seiten sieht der Agent nicht.
+            <span data-i18n="dialog_geltung_rest">Andere Tabs und andere Seiten sieht der Agent nicht.</span>
           </p>
         </fieldset>
         </div><!-- /#dialog-mehr -->
 
         <div class="knopfreihe">
-          <button id="dialog-abbrechen" class="neben" type="button">Abbrechen</button>
-          <button id="verbinden" class="haupt" type="button">Verbindung herstellen</button>
+          <button id="dialog-abbrechen" class="neben" type="button" data-i18n="dialog_abbrechen">Abbrechen</button>
+          <button id="verbinden" class="haupt" type="button" data-i18n="dialog_verbinden">Verbindung herstellen</button>
         </div>
         <!-- Auf der Lesestufe bewilligt der Server sofort (DRAHTFORMAT E15) —
              der Umweg über die Freigabeseite entfällt. Ihn hier trotzdem
              anzukündigen hieße, den Nutzer auf einen Tab warten zu lassen,
              der nicht kommt. Die Rückfrage bleibt als Möglichkeit stehen,
              weil der Server sie jederzeit verlangen darf. -->
-        <p class="fussnote">
+        <p class="fussnote" data-i18n="dialog_fussnote">
           Beim Herstellen fragt Chrome nach der Freigabe für diese Seite. Mehr brauchst du
           meist nicht zu tun. Verlangt unser Dienst eine Rückfrage, öffnet sich dafür ein
           eigener Tab. Beim Beenden gibt SMarTrChrome alles zurück.
@@ -217,56 +320,93 @@
            Wenn die Erweiterung auf der SMarTrAgents-Seite nicht arbeitet, ist
            nichts kaputt — und ein Alarm für eine Absicht wäre eine Lüge.
            Der Text wird über die Ansage (#ansage) vorgelesen; eine zweite
-           Live-Region hier würde ihn doppelt sprechen. -->
+           Live-Region hier würde ihn doppelt sprechen.
+           Titel, Text und Hauptknopf kommen aus erklaerungen.js und tragen
+           deshalb keinen eigenen Schlüssel; nur „Zurück" steht fest. -->
       <section id="erklaerkarte" class="karte" hidden aria-labelledby="erklaer-titel">
         <h2 id="erklaer-titel"></h2>
         <p id="erklaer-text" class="erklaertext"></p>
         <div class="knopfreihe">
-          <button id="erklaer-zurueck" class="neben" type="button">Zurück</button>
+          <button id="erklaer-zurueck" class="neben" type="button" data-i18n="dialog_erklaer_zurueck">Zurück</button>
           <button id="erklaer-tun" class="haupt" type="button" hidden></button>
         </div>
       </section>
 
-      <!-- Anmeldung. Hier gibt es bewusst kein Passwortfeld — und es kommt auch keines. -->
+      <!-- Anmeldung. Hier gibt es bewusst kein Passwortfeld — und es kommt auch keines.
+           Befund 09.08.2026: Genau diese Karte war fest deutsch, und sie ist die
+           erste, die ein Käufer über SEOClerks zu sehen bekommt. -->
       <section id="anmeldung" class="karte" hidden>
-        <h2>Zuerst anmelden</h2>
-        <p id="anmelde-text">
+        <h2 data-i18n="dialog_anmeldung_titel">Zuerst anmelden</h2>
+        <p id="anmelde-text" data-i18n="dialog_anmeldung_text">
           Für eine Verbindung muss ich wissen, wer du bist. Melde dich bitte in der Cloud an,
           in einem eigenen Tab, mit echter Adresszeile.
         </p>
-        <p class="hinweis">
+        <p class="hinweis" data-i18n="dialog_anmeldung_hinweis">
           Dein Passwort tippst du nie hier in die Erweiterung. Das ist Absicht und bleibt so.
         </p>
         <div class="knopfreihe">
-          <button id="anmeldung-abbrechen" class="neben" type="button">Abbrechen</button>
-          <button id="zur-anmeldung" class="haupt" type="button">Anmeldeseite öffnen</button>
+          <button id="anmeldung-abbrechen" class="neben" type="button" data-i18n="dialog_anmeldung_abbrechen">Abbrechen</button>
+          <button id="zur-anmeldung" class="haupt" type="button" data-i18n="dialog_anmeldung_oeffnen">Anmeldeseite öffnen</button>
         </div>
-        <button id="anmeldung-nochmal" class="chip vorschlag" type="button">
+        <button id="anmeldung-nochmal" class="chip vorschlag" type="button" data-i18n="dialog_anmeldung_nochmal">
           Ich bin jetzt angemeldet, noch einmal versuchen
         </button>
       </section>
 
       <!-- Kennwort und Warten auf die Freigabe im Web-Tab. -->
       <section id="kennwort" class="karte" hidden>
-        <h2>Kennwort für die Freigabe</h2>
+        <h2 data-i18n="dialog_kennwort_titel">Kennwort für die Freigabe</h2>
         <p id="kennwort-wert" class="kennwort" aria-live="assertive"></p>
         <p id="kennwort-funk" class="kennwort-funk"></p>
-        <p class="hinweis">
+        <p class="hinweis" data-i18n="dialog_kennwort_hinweis">
           Im neuen Tab steht dasselbe Kennwort. Stimmt es dort nicht überein, gib nichts frei.
         </p>
         <p id="kennwort-lage" class="zusammenfassung" role="status"></p>
         <div class="knopfreihe">
-          <button id="kennwort-abbrechen" class="neben" type="button">Abbrechen</button>
-          <button id="kennwort-erneut" class="haupt" type="button">Freigabeseite erneut öffnen</button>
+          <button id="kennwort-abbrechen" class="neben" type="button" data-i18n="dialog_kennwort_abbrechen">Abbrechen</button>
+          <button id="kennwort-erneut" class="haupt" type="button" data-i18n="dialog_kennwort_erneut">Freigabeseite erneut öffnen</button>
+        </div>
+      </section>
+
+      <!-- Der Anker für die Regeln je Domain (Vertrag §4) und die Abläufe
+           (§7.3). Gezeichnet wird die Ansicht von src/panel/werkbank.js;
+           panel.js holt die Daten und ruft sie. -->
+      <section id="werkbank" class="karte" hidden aria-labelledby="werkbank-titel">
+        <h2 id="werkbank-titel" data-i18n="werkbank_titel">Regeln und Abläufe</h2>
+        <div id="werkbank-inhalt" class="werkbank-inhalt"></div>
+        <div id="matrix-inhalt" class="werkbank-inhalt"></div>
+        <div class="knopfreihe">
+          <button id="werkbank-zurueck" class="neben" type="button" data-i18n="werkbank_zurueck">Zurück</button>
+        </div>
+      </section>
+
+      <!-- Der Anker für das Protokollbuch (Vertrag §8.3) samt Ausgabe. Der
+           Ausgabe-Knopf schreibt keine Datei selbst: Er füllt einen Verweis mit
+           einer data-Adresse, damit dafür keine neue Pflichtberechtigung nötig
+           ist. Der Verweis bleibt sichtbar stehen, falls der Browser den
+           Klick von sich aus nicht ausführt. -->
+      <section id="buch" class="karte" hidden aria-labelledby="buch-titel">
+        <h2 id="buch-titel" data-i18n="buch_titel">Protokollbuch</h2>
+        <div id="buch-inhalt" class="buch-inhalt"></div>
+        <a id="buch-datei" class="buch-datei" href="#" hidden data-i18n="buch_datei">Protokollbuch als Datei sichern</a>
+        <div class="knopfreihe">
+          <button id="buch-zurueck" class="neben" type="button" data-i18n="buch_zurueck">Zurück</button>
+          <button id="buch-ausgeben" class="haupt" type="button" data-i18n="buch_ausgeben">Ausgeben</button>
         </div>
       </section>
 
       <div id="verlauf" class="verlauf" role="log" aria-live="polite" aria-relevant="additions"
            aria-label="Gespräch mit Niemand"></div>
 
+      <!-- Das Live-Protokoll. role="log" sagt, was es ist; aria-live="off" ist
+           trotzdem Pflicht und kein Widerspruch: Hier landet im Sekundentakt
+           ein Schritt des Agenten, und eine sprechende Zone in diesem Takt
+           übertönte genau die Freigabefrage, um die es geht. Dieselbe
+           Entscheidung ist an der Antwortuhr (#freigabe-rest) und an der
+           Restzeit (#rest) schon getroffen worden (Prüfsätze F7 und F8). -->
       <details id="protokoll-box" open hidden>
-        <summary>Was der Agent tut</summary>
-        <ol id="protokoll" class="protokoll"></ol>
+        <summary data-i18n="kopf_protokoll_titel">Was der Agent tut</summary>
+        <ol id="protokoll" class="protokoll" role="log" aria-live="off"></ol>
       </details>
 
     </main>
@@ -275,17 +415,21 @@
       <div class="guthabenzeile">
         <!-- Kein Strich als Anfangswert: Solange keine Zahl da ist, steht hier,
              WORAN es liegt (panel.js, guthabenAnzeigen). -->
-        <span id="guthaben" class="guthaben">Guthaben: wird geholt …</span>
+        <span id="guthaben" class="guthaben" data-i18n="kopf_guthaben_laedt">Guthaben: wird geholt …</span>
         <span id="kostenhinweis" class="kosten"></span>
       </div>
-      <label for="eingabe" class="sr">Nachricht an Niemand</label>
+      <label for="eingabe" class="sr" data-i18n="kopf_eingabe_marke">Nachricht an Niemand</label>
       <textarea id="eingabe" rows="1" placeholder="Schreib Niemand, was du brauchst …"></textarea>
       <div class="werkzeugzeile">
-        <span class="modus-chip" id="modus-chip">Jeder Schritt einzeln</span>
+        <!-- Ohne Schlüssel: panel.js setzt diesen Chip aus MODUS_TEXT, also aus
+             derselben Quelle wie die drei Knöpfe darüber. Ein zweiter Schlüssel
+             mit demselben Wort wäre ein zweiter Ort zum Redigieren. -->
+        <span class="modus-chip" id="modus-chip">Mitdenken</span>
         <!-- Antwortmodus des Gesprächs. Zwei Modi, beide Produktnamen der
              Cloud — hier steht nie ein Modellname, und es gibt nichts
-             Ausgegrautes. #modus-chip daneben ist der SCHRITTmodus der
-             Sitzung, ein anderes Thema. -->
+             Ausgegrautes. Produktnamen werden nicht übersetzt und tragen
+             deshalb keinen Schlüssel. #modus-chip daneben ist der SCHRITTmodus
+             der Sitzung, ein anderes Thema. -->
         <div id="chat-modus" class="chat-modus" role="group" aria-label="Antwortmodus">
           <button id="modus-normal" class="moduswahl" type="button" aria-pressed="true">Normal Mode</button>
           <button id="modus-smartr" class="moduswahl" type="button" aria-pressed="false" aria-label="SMarTrMode"><span aria-hidden="true">⚡ </span>SMarTrMode</button>
@@ -296,7 +440,7 @@
       </div>
     </form>
 
-    <p class="fusszeile">Esc zweimal = sofort Stopp. Auch Alt+Umschalt+S.</p>
+    <p class="fusszeile" data-i18n="kopf_fusszeile">Esc zweimal = sofort Stopp. Auch Alt+Umschalt+S.</p>
   </div>
 
   <!-- Zustandsansage für Screenreader; immer vorhanden, nie versteckt -->

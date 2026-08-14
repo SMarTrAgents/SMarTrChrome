@@ -139,7 +139,18 @@ function seiteBedient(n) {
   }
 }
 
-/* Die vollständigen Parametersätze aller dreizehn Befehle. */
+/* Der gespeicherte Ablauf für `run_workflow`. Genau ein `navigate`, weil das
+   der einzige Schritttyp ohne Ankerauflösung ist — die Wache soll hier
+   gemessen werden, nicht das Inhaltsskript. */
+const ABLAUF = {
+  id: "wf_probe",
+  name: "Probe: zur Kasse",
+  version: 1,
+  params: [],
+  steps: [{ type: "navigate", url: "https://geizhals.de/kasse", beschreibung: "zur Kasse gehen" }],
+};
+
+/* Die vollständigen Parametersätze aller vierzehn Befehle. */
 const VOLLSTAENDIG = {
   readPage: {},
   snapshot: {},
@@ -154,6 +165,9 @@ const VOLLSTAENDIG = {
   screenshot: { screenshotReason: "canvas" },
   navigate: { url: "https://geizhals.de/kasse" },
   back: {},
+  /* `workflowId` und nicht `id`: Die Kennung des Auftrags liegt im selben
+     flachen Rahmen und darf nicht überschrieben werden. */
+  run_workflow: { workflowId: "wf_probe" },
 };
 
 /* Woran man sieht, dass dieser Befehl WIRKLICH stattgefunden hat. Das ist der
@@ -173,6 +187,11 @@ const TAT = {
   screenshot: "tabs.captureVisibleTab",
   navigate: "tabs.update",
   back: "tabs.goBack",
+  /* Die Tat eines Ablaufs ist die Tat seines ersten Schrittes. Das ist keine
+     Ausflucht, sondern die Zusage aus §7.3: Ein Ablauf hat keinen eigenen Weg
+     zur Seite, er schickt seine Schritte durch dieselbe Schleife. Bricht die
+     Wache ihn ab, darf auch dieser erste Schritt nicht stattgefunden haben. */
+  run_workflow: "tabs.update",
 };
 
 /**
@@ -210,7 +229,15 @@ async function laufen(rahmen, {
     return seite(n);
   };
 
-  const angaben = { tab: derTab, seiteAntwortet: seiteMitHaken, panelAntwortet: panel };
+  const angaben = {
+    tab: derTab,
+    seiteAntwortet: seiteMitHaken,
+    panelAntwortet: panel,
+    /* Je Lauf eine frische Ablage: Modus, Schrittzähler und Protokollbuch
+       sollen nicht aus dem vorigen Prüfsatz stehen bleiben. */
+    ablageLocal: { sa_workflows: [ABLAUF] },
+    ablageSession: {},
+  };
   if (beiBild) angaben.bildDatenUrl = (a) => beiBild(a, derTab);
 
   const { spur } = attrappeSetzen(angaben);
@@ -490,4 +517,56 @@ test("Wache — auch nach scroll, type und select bleibt die Wahrnehmung der fre
     assert.ok(!anDieSeite(spur).includes("overlay:baum"), fall.cmd);
     nichtsVerraten(ergebnis, spur, fall.cmd);
   }
+});
+
+/* ------------------------------------------------------------------ *
+ * 4. Der gespeicherte Ablauf geht durch dieselbe Wache
+ *
+ * §7.3: „Die Wiedergabe geht durch dieselbe Befehlsschleife wie ein
+ * Agentenbefehl. Sie umgeht weder Modus noch Guardrails noch Bereichsprüfung
+ * noch Verdeckungswache."
+ *
+ * Der Prüfsatz oben („JEDER Befehl bricht ab") misst das am ÄUSSEREN Befehl.
+ * Der hier misst es an dem Ort, an dem ein zweiter Ausführungspfad wirklich
+ * wehtäte: Der Ablauf ist längst freigegeben, die Wache war zufrieden, und
+ * erst beim EINZELNEN Schritt wandert der Tab ab.
+ * ------------------------------------------------------------------ */
+
+test("Wache — wandert der Tab zwischen zwei Schritten eines Ablaufs ab, bricht der Schritt ab", async () => {
+  const derTab = { ...TAB };
+  let fragen = 0;
+  const panel = (n) => {
+    if (n.typ !== "link:schritt-freigabe") return { ok: true };
+    fragen += 1;
+    /* Die erste Frage gilt dem Ablauf, die zweite seinem Schritt. Erst danach
+       wandert der Tab — die Wache der äusseren Schleife ist zu diesem
+       Zeitpunkt längst durch. */
+    if (fragen >= 2) derTab.url = FREMD;
+    return { ja: true };
+  };
+
+  const { spur } = attrappeSetzen({
+    tab: derTab,
+    seiteAntwortet: seiteBedient,
+    panelAntwortet: panel,
+    ablageLocal: { sa_workflows: [ABLAUF] },
+    ablageSession: {},
+  });
+  zaehlerNeu();
+  const ergebnis = await befehlAusfuehren(
+    { id: "wf-1", cmd: "run_workflow", reason: "Ich spiele den Ablauf ab.", workflowId: "wf_probe" },
+    { ...SITZUNG, stufe: "write" }
+  );
+
+  istErgebnisrahmen(ergebnis, "wf-1", "run_workflow");
+  assert.ok(fragen >= 2, `der Schritt des Ablaufs wurde gar nicht gefragt (${fragen} Fragen)`);
+  assert.equal(ergebnis.success, false);
+  assert.equal(ergebnis.error.code, "workflow_step_failed");
+  assert.equal(ergebnis.data.stepError.code, "scope_violation_local",
+    "der Schritt ist an derselben Wache gescheitert wie ein Agentenbefehl");
+  assert.ok(!anDenBrowser(spur).includes("tabs.update"),
+    "der Ablauf hat den abgewanderten Tab trotzdem bewegt");
+  /* Die Absage verrät die neue Adresse nirgends — auch nicht über den Umweg
+     eines Ablaufs, der sie in seinen Textbaum schriebe. */
+  nichtsVerraten(ergebnis, spur, "run_workflow");
 });

@@ -524,6 +524,15 @@ function knoten(tag = "div", id = "") {
       el.fokusse += 1;
       fokusStand.aktiv = el;
     },
+    /* Ein programmatischer Klick. Der Browser kann das an jedem Element, die
+       Nachbildung brauchte es fuer den Ausgabe-Knopf des Protokollbuchs: Er
+       loest den Verweis mit der data-Adresse aus, und ohne diesen Weg waere
+       nicht zu messen, dass die Datei wirklich angeboten wird. */
+    click() {
+      el.klicks += 1;
+      return el.ausloesen("click");
+    },
+    klicks: 0,
     scrollIntoView() {},
     addEventListener(art, f) {
       if (!el.zuhoerer.has(art)) el.zuhoerer.set(art, []);
@@ -575,6 +584,11 @@ const ANHANG = `
   zustand, sitzungAnzeigen, agentenBindung, beenden, schrittZeigen, antwortfristMs,
   chatWartenZeigen, PLATZHALTER_TAB, PLATZHALTER_GESPRAECH, setzeZustand,
   kennwortZeigen,
+  protokollieren, zeitStempel,
+  tabsAuffrischen, waehlbareTabs, tabVerbindenMit, tabVerbinden,
+  modusSetzen, modusHolen, modusSpiegeln, modusTabId,
+  cloudSitzungZeigen, notAus,
+  werkbankOeffnen, buchOeffnen, buchAusgeben,
 };
 `;
 
@@ -608,6 +622,17 @@ async function panelStarten({
   /* Der Inhalt von chrome.storage.local beim Start — so sieht die
      Seitenleiste aus, die eben wieder geöffnet wurde. */
   speicher = {},
+  /* Alle offenen Tabs. `null` heisst: nur der eine oben. Ohne diese Angabe
+     liesse sich die Tab-Liste nicht pruefen — sie ist der einzige Weg zu einem
+     ANDEREN Fenster, und ein Weg ohne Pruefsatz verschwindet beim naechsten
+     Umbau still. */
+  alleTabs = null,
+  /* Was src/panel/startseite.js und src/panel/werkbank.js beisteuern. Beide
+     Dateien gehoeren A-WERKBANK (Vertrag §1); hier steht, WAS die
+     Seitenleiste von ihnen ruft. Leer heisst: die Seitenleiste zeichnet
+     selbst, und genau das muss sie koennen. */
+  startseiteModul = {},
+  werkbankModul = {},
 } = {}) {
   const spur = []; // an den Hintergrunddienst
   const anTabSpur = []; // an das Seitenskript
@@ -630,6 +655,22 @@ async function panelStarten({
   const hoerer = [];
   const elemente = new Map();
   let heutigerAusweis = ausweis;
+  /* Die Reihenfolge der Aufrufe, auf die es beim einen Klick ankommt.
+     `chrome.permissions.request` verlangt eine Nutzergeste, und die ist nach
+     dem ersten await verbraucht: Steht vor ihr eine Tab-Abfrage, ist der Klick
+     im echten Chrome wirkungslos. Das laesst sich nur an der REIHENFOLGE
+     messen, nicht am Ergebnis — die Attrappe sagt zu allem ja. */
+  const aufrufe = [];
+  /* Was an den Tabs haengt. Der Browser meldet Wechsel, die Seitenleiste muss
+     ihren Bestand danach nachziehen; ohne diese Anschluesse waere das nicht zu
+     fahren. */
+  const tabHoerer = new Map([
+    ["onActivated", []],
+    ["onUpdated", []],
+    ["onRemoved", []],
+  ]);
+  const tabAnschluss = (art) => ({ addListener: (f) => tabHoerer.get(art).push(f) });
+  let klickZahl = 0;
 
   const vorleseKnoepfe = [...html.matchAll(/data-vorlesen="([^"]+)"/g)].map((t) => {
     const k = knoten("button");
@@ -679,6 +720,7 @@ async function panelStarten({
       assert.ok(IDS_IM_HTML.has(id), `panel.html kennt kein Element mit der Kennung „${id}"`);
       if (!elemente.has(id)) {
         const neu = knoten(TAG_IM_HTML.get(id) || "div", id);
+        neu.ownerDocument = doc;
         /* Der Ausgangszustand kommt aus panel.html, nicht aus der Attrappe. */
         neu.hidden = VERSTECKT_IM_HTML.has(id);
         /* Erst ablegen, dann fuellen: Die Kinder holen sich ihre Geschwister
@@ -705,7 +747,16 @@ async function panelStarten({
       }
       return elemente.get(id);
     },
-    createElement: (tag) => knoten(tag),
+    createElement: (tag) => {
+      const neu = knoten(tag);
+      /* Wie im Browser: Jedes Element kennt sein Dokument. Fremde Ansichten
+         (src/panel/startseite.js, src/panel/werkbank.js) holen sich darueber
+         ihren `createElement` — ohne diese Zeile faenden sie keines und
+         fielen still auf die Ersatzfassung zurueck, und der Pruefsatz maesse
+         dann die Ersatzfassung statt der Uebergabe. */
+      neu.ownerDocument = doc;
+      return neu;
+    },
     querySelectorAll: (wahl) => (wahl === "[data-vorlesen]" ? vorleseKnoepfe : []),
     querySelector: (wahl) => {
       /* Jeder Selektor wird mitgeschrieben. Nur so lässt sich prüfen, was
@@ -780,10 +831,21 @@ async function panelStarten({
         },
       },
       tabs: {
+        onActivated: tabAnschluss("onActivated"),
+        onUpdated: tabAnschluss("onUpdated"),
+        onRemoved: tabAnschluss("onRemoved"),
         async query(angaben) {
+          aufrufe.push("tabs.query");
           /* Die Suche nach dem Cloud-Tab trägt eine Adresse; die nach dem
              aktiven Tab nicht. Ein Cloud-Tab ist hier nie offen. */
-          return angaben && angaben.url ? [] : [tab];
+          const a = angaben || {};
+          if (a.url) return [];
+          const liste = Array.isArray(alleTabs) ? alleTabs : [tab];
+          if (a.active) {
+            const aktive = liste.filter((t) => t && t.active);
+            return aktive.length ? aktive : [tab];
+          }
+          return liste;
         },
         async sendMessage(tabId, nachricht) {
           anTabSpur.push(nachricht);
@@ -857,6 +919,13 @@ async function panelStarten({
        nachbilden. */
     "../net/rechte.js": {
       ...rechte,
+      /* Nur mitschreiben, sonst unveraendert: Die Chrome-Abfrage ist die
+         Stelle, an der die Nutzergeste verbraucht wird. Ihr Platz in der
+         Reihenfolge IST die Zusage (Prüfsatz E2). */
+      async rechtHolen(muster) {
+        aufrufe.push("permissions.request");
+        return rechte.rechtHolen(muster);
+      },
       async rechtZurueckgeben(muster) {
         rechteZurueck.push(muster ?? null);
         return rechte.rechtZurueckgeben(muster);
@@ -883,6 +952,11 @@ async function panelStarten({
       },
     },
     "./erklaerungen.js": erklaerungen,
+    /* Beide Dateien gehoeren A-WERKBANK und entstehen in derselben Stufe.
+       Leer ist hier der HAERTERE Fall: Er misst, dass die Seitenleiste auch
+       dann eine Liste hinstellt, wenn dort noch nichts steht. */
+    "./startseite.js": startseiteModul,
+    "./werkbank.js": werkbankModul,
     /* Die Befehlstabelle steht bereit, obwohl die Seitenleiste sie seit dem
        Fix an der Restzeit nicht mehr einführt: Holt jemand die geratene Zahl
        zurück, soll die Prüfung an der Zahl scheitern (V6) und nicht schon am
@@ -953,8 +1027,38 @@ async function panelStarten({
     melden(nachricht) {
       for (const h of hoerer) h(nachricht, {}, () => {});
     },
+    /* Jeder Klick wird gezaehlt. Der Zaehler ist der einzige ehrliche Weg, die
+       Zusage „hoechstens EIN Klick bis zur aktiven Verbindung" zu messen: Ob
+       ein Weg kurz ist, sieht man nicht am Quelltext, sondern daran, wie oft
+       ein Mensch druecken muss. */
     async klick(id) {
+      klickZahl += 1;
       await Promise.all(el(id).ausloesen("click"));
+    },
+    klicks: () => klickZahl,
+    klicksZuruecksetzen: () => {
+      klickZahl = 0;
+    },
+    /* Ein Klick auf ein Element, das die Seitenleiste selbst gebaut hat — die
+       Zeilen der Tab-Liste zum Beispiel. Zaehlt genauso mit. */
+    async klickAuf(element) {
+      klickZahl += 1;
+      await Promise.all(element.ausloesen("click"));
+    },
+    /* Die Reihenfolge der Aufrufe seit dem letzten Leeren. */
+    aufrufe: () => [...aufrufe],
+    aufrufeLeeren: () => {
+      aufrufe.length = 0;
+    },
+    /* Ein Ereignis an den Tabs ausloesen, wie der Browser es meldet. */
+    async tabEreignis(art, ...angaben) {
+      const liste = tabHoerer.get(art) || [];
+      assert.ok(liste.length, `auf „${art}" hoert in der Seitenleiste niemand`);
+      await Promise.all(liste.map((f) => f(...angaben)));
+      /* tabsAuffrischen laeuft asynchron weiter; ein Durchlauf der
+         Warteschlange genuegt, damit die Liste danach steht. */
+      await new Promise((f) => setTimeout(f, 0));
+      await new Promise((f) => setTimeout(f, 0));
     },
     /* Eine laufende Sitzung, so wie der Server sie erteilt. Der Tab steht
        vorher fest — beim echten Weg setzt ihn der Verbindungsdialog, und ohne
@@ -974,6 +1078,29 @@ async function panelStarten({
       });
     },
     protokoll: () => el("protokoll").kinder.map((k) => k.textContent),
+    /*
+     * Der SATZ einer Protokollzeile, ohne den Zeitstempel.
+     *
+     * Seit dem 14.08.2026 traegt jede Zeile ein <time> (Vertrag §6). Der
+     * Zeitstempel hat seinen eigenen Pruefsatz (P2); wo es um den Wortlaut der
+     * Meldung geht, wird der Wortlaut gemessen und nicht die Uhrzeit davor.
+     * `protokoll()` bleibt daneben stehen und liefert die ganze Zeile — nichts
+     * wird versteckt, es wird nur getrennt gemessen.
+     */
+    protokollSatz: () =>
+      el("protokoll").kinder.map((li) =>
+        li.kinder
+          .filter((k) => typeof k === "string" || String(k.tagName).toUpperCase() !== "TIME")
+          .map((k) => (typeof k === "string" ? k : k.textContent))
+          .join("")
+          .trim()
+      ),
+    /* Die <time>-Elemente je Zeile — Anzahl, sichtbarer Text und das
+       maschinenlesbare `datetime`. */
+    protokollZeiten: () =>
+      el("protokoll").kinder.map((li) =>
+        li.kinder.filter((k) => typeof k !== "string" && String(k.tagName).toUpperCase() === "TIME")
+      ),
     verlauf: () => el("verlauf").kinder.map((k) => k.textContent),
     anWorker: () => spur.map((n) => n.typ),
     /* Dieselbe Spur mit allen Feldern — für Zusagen über das, was MITREIST
@@ -1109,7 +1236,9 @@ test("V1 — Ablehnen beendet den Schritt, nicht die Sitzung", async (t) => {
 
   /* Und der Mensch erfährt, was sein Nein bewirkt hat — sichtbar und hörbar. */
   assert.ok(
-    p.protokoll().some((z) => z.startsWith("Abgelehnt")),
+    /* Der Satz, nicht die Zeile: Seit dem 14.08.2026 steht die Uhrzeit davor
+       (Vertrag §6), gemessen wird hier weiterhin der Wortlaut. */
+    p.protokollSatz().some((z) => z.startsWith("Abgelehnt")),
     "die Ablehnung steht im Protokoll"
   );
   assert.ok(
@@ -1202,7 +1331,10 @@ test("V4 — Was der Agent tut, steht entschärft im Protokoll", async (t) => {
     werkzeug: "click",
     text: `Ich klicke${String.fromCharCode(7)} jetzt${String.fromCharCode(0x200b)} auf ${"A".repeat(400)}`,
   });
-  const zeile = p.protokoll().at(-1);
+  /* Der Satz, nicht die Zeile: Seit dem 14.08.2026 steht die Uhrzeit davor
+     (Vertrag §6). Sie hat ihren eigenen Prüfsatz (P2), gemessen wird hier
+     unverändert der Wortlaut der Meldung. */
+  const zeile = p.protokollSatz().at(-1);
   assert.ok(zeile.startsWith("Werkzeug click: "), `unerwarteter Kopf: ${zeile}`);
   assert.ok(
     !steuerzeichenDrin(zeile),
@@ -1221,7 +1353,7 @@ test("V4 — Was der Agent tut, steht entschärft im Protokoll", async (t) => {
   /* Eine Art, die es nicht gibt, bleibt eine Zeile — und wird nie zum
      Eintrag des Object-Prototyps. */
   p.f.schrittZeigen({ art: "constructor", text: "etwas" });
-  assert.equal(p.protokoll().at(-1), "Arbeitet: etwas");
+  assert.equal(p.protokollSatz().at(-1), "Arbeitet: etwas");
 });
 
 test("V5 — Eine Schrittmeldung übertönt die offene Freigabefrage nicht", async (t) => {
@@ -2061,7 +2193,12 @@ test("M2g — Knopfname und vorgelesene Aufforderung sind dasselbe Wort", () => 
      der richtige Weg (siehe Kopf dieser Datei). Geprüft wird nicht, DASS ein
      bestimmter Text dasteht, sondern dass alle Stellen denselben Namen nennen
      — der Prüfsatz überlebt also eine Umbenennung des Knopfes. */
-  const knopf = /<button id="verbinden-start"[^>]*>\s*([^<]+?)\s*<\/button>/.exec(html);
+  /* Gemessen wird der Knopf, der WIRKLICH verbindet. Seit dem 14.08.2026 ist
+     das #verbinden-tab: #verbinden-start führt nur noch in den Dialog für
+     Dauer und Geltung. Wer sich die Sperr-Erklärung vorlesen lässt und dann
+     „Dauer und Geltung ändern" drückte, käme nicht ans Ziel — die Aufforderung
+     muss den Regelweg nennen, nicht die Ausnahme. */
+  const knopf = /<button id="verbinden-tab"[^>]*>\s*([^<]+?)\s*<\/button>/.exec(html);
   assert.ok(knopf, "der Knopf zum Verbinden muss in panel.html stehen");
   const name = knopf[1];
 
@@ -2466,8 +2603,11 @@ test("F1 — Der Kartenwechsel setzt den Fokus auf die Ueberschrift, nicht auf b
   assert.equal(p.el("app").dataset.state, "bereit", "Vorbedingung: der Ruhezustand steht");
   assert.notEqual(p.fokus(), p.koerper);
   assert.equal(
+    /* Seit dem 14.08.2026 ist der naechste Schritt der eine Klick selbst und
+       nicht mehr der Weg in den Dialog: #verbinden-tab verbindet, ohne dass
+       noch etwas dazwischensteht. */
     p.fokus(),
-    p.el("verbinden-start"),
+    p.el("verbinden-tab"),
     "im Ruhezustand steht er auf dem Weg zur Verbindung, dem naechsten Schritt"
   );
 });
@@ -2498,7 +2638,7 @@ test("F2 — Auch Anmeldung und Erklaerung sagen, wo der Mensch gelandet ist", a
   );
 
   await gesperrt.klick("erklaer-zurueck");
-  assert.equal(gesperrt.fokus(), gesperrt.el("verbinden-start"), "der Zurueck-Knopf nimmt den Fokus mit");
+  assert.equal(gesperrt.fokus(), gesperrt.el("verbinden-tab"), "der Zurueck-Knopf nimmt den Fokus mit");
 });
 
 test("F3 — Die Kennwortkarte holt den Fokus zu sich", async (t) => {
@@ -2628,7 +2768,7 @@ test("F6 — Sitzungsstart und Sitzungsende lassen den Fokus nicht auf body", as
   await p.klick("stopp");
   await warteAufZustand(p, "bereit");
   assert.notEqual(p.fokus(), p.koerper, "mit der Sitzungsleiste verschwindet der Stopp-Knopf samt Fokus");
-  assert.equal(p.fokus(), p.el("verbinden-start"));
+  assert.equal(p.fokus(), p.el("verbinden-tab"));
 });
 
 test("F7 — Eine Stoerung steht in genau EINER Vorlesezone", async (t) => {
@@ -2713,4 +2853,1050 @@ test("F9 — Der Beispielauftrag holt den Fokus zurueck, den er selbst verloren 
   assert.equal(p.el("vorschlag").disabled, false, "Vorbedingung: der Auftrag ist zu Ende");
   assert.notEqual(p.fokus(), p.koerper, "sonst bleibt der Fokus auf body liegen und der Vorleser schweigt");
   assert.equal(p.fokus(), p.el("vorschlag"), "er steht wieder auf dem Knopf, den der Mensch gedrueckt hat");
+});
+
+/* ================================================================== *
+ * v3.5 — Startseite, Betriebsmodus, Not-Aus, Live-Protokoll
+ * (Auftrag A-PANEL, 14.08.2026)
+ *
+ * Alle Saetze hier werden GEFAHREN. Der teuerste Befund dieses Projektes ist
+ * der vom 11.08.2026: 18 gruene Pruefsaetze ueber einer Verdeckungswache, die
+ * im ausgelieferten Klickweg nirgends gerufen wurde. Deshalb misst jeder Satz
+ * unten den Weg, den ein Mensch wirklich geht — Knopf druecken, Ereignis
+ * eintreffen lassen —, und keiner ruft eine Funktion, die sonst niemand ruft.
+ * ================================================================== */
+
+/* Ein Tabbestand, wie ihn ein echter Browser hat: der aktive Tab, ein zweites
+   Fenster, der eigene Freigabe-Ursprung und eine Browserseite. Die letzten
+   beiden sind der Punkt — sie duerfen in der Liste nicht auftauchen. */
+const TABS_GEMISCHT = () => [
+  { id: 7, url: "https://geizhals.de/warenkorb", title: "Warenkorb", active: true, favIconUrl: "https://geizhals.de/favicon.ico" },
+  { id: 8, url: "https://www.ebay.de/sh/lst/active", title: "eBay, aktive Angebote" },
+  { id: 9, url: "https://cloud.smartragents.ai/dashboard", title: "SMarTrAgents" },
+  { id: 10, url: "chrome://extensions", title: "Erweiterungen" },
+];
+
+/* ------------------------------------------------------------------ *
+ * E — der eine Klick
+ * ------------------------------------------------------------------ */
+
+test("E1 — Vom Oeffnen bis zur aktiven Verbindung ist es genau EIN Klick", async (t) => {
+  const p = await panelStarten({ workerAntworten: { "link:verbinden": sitzungAntwort() } });
+  t.after(p.aufraeumen);
+
+  assert.equal(p.el("app").dataset.state, "bereit", "Vorbedingung: die Leiste ist eben aufgegangen");
+  assert.equal(p.el("verbindungsleiste").hidden, false, "Vorbedingung: der Weg steht above the fold");
+  assert.equal(p.el("verbinden-tab").hidden, false, "Vorbedingung: der Knopf ist sichtbar");
+  p.klicksZuruecksetzen();
+
+  await p.klick("verbinden-tab");
+
+  assert.equal(p.el("app").dataset.state, "aktiv", "nach dem einen Klick steht die Verbindung");
+  assert.ok(p.zustand.sitzung, "und zwar wirklich, nicht nur auf dem Bildschirm");
+  assert.equal(p.klicks(), 1, `gezaehlt wurden ${p.klicks()} Klicks, erlaubt ist genau einer`);
+
+  /* Gegenprobe, damit die Zahl oben etwas misst: Der alte Weg ueber den Dialog
+     braucht weiterhin mehr als einen Klick. Waere der Zaehler blind, kaeme
+     hier dieselbe Eins heraus. */
+  const q = await panelStarten({ workerAntworten: { "link:verbinden": sitzungAntwort() } });
+  t.after(q.aufraeumen);
+  q.klicksZuruecksetzen();
+  await q.klick("verbinden-start");
+  assert.equal(q.el("app").dataset.state, "dialog", "der Dialog ist der Weg fuer Dauer und Geltung");
+  await q.klick("verbinden");
+  assert.equal(q.el("app").dataset.state, "aktiv");
+  assert.ok(q.klicks() > 1, "der Dialogweg kostet mehr als einen Klick — sonst zaehlt der Zaehler nicht");
+});
+
+test("E2 — Der eine Klick fragt Chrome, bevor er irgendetwas abwartet", async (t) => {
+  /* `chrome.permissions.request` verlangt eine Nutzergeste, und die ist nach
+     dem ersten await verbraucht (Bestand, seitenrechteHolen). Ein Klick, der
+     den Tab erst nachschlaegt, verliert sie, bevor er fragt — im echten Chrome
+     waere er dann wirkungslos, in jeder Attrappe sieht er richtig aus. Messbar
+     ist das ausschliesslich an der REIHENFOLGE der Aufrufe. */
+  const p = await panelStarten({ workerAntworten: { "link:verbinden": sitzungAntwort() } });
+  t.after(p.aufraeumen);
+  p.aufrufeLeeren();
+
+  await p.klick("verbinden-tab");
+
+  const reihe = p.aufrufe();
+  assert.ok(reihe.includes("permissions.request"), "Vorbedingung: Chrome wird ueberhaupt gefragt");
+  assert.equal(
+    reihe[0],
+    "permissions.request",
+    `vor der Chrome-Abfrage steht ein Abwarten: ${reihe.join(" → ")}`
+  );
+});
+
+test("E3 — Der eine Klick verbindet mit dem Tab, der wirklich offen ist", async (t) => {
+  const p = await panelStarten({
+    alleTabs: TABS_GEMISCHT(),
+    workerAntworten: { "link:verbinden": sitzungAntwort() },
+  });
+  t.after(p.aufraeumen);
+
+  await p.klick("verbinden-tab");
+
+  assert.equal(p.zustand.tabId, 7, "der aktive Tab, nicht irgendeiner aus der Liste");
+  assert.equal(p.zustand.ursprung, "https://geizhals.de");
+  const antrag = p.antraege().at(-1).gewuenscht;
+  assert.equal(antrag.tab_host, "geizhals.de");
+  assert.deepEqual([...antrag.allow], ["geizhals.de"], "der Bereich ist genau dieser eine Host");
+
+  /* Und der Antrag ist DERSELBE wie ueber den Dialog. Zwei Wege mit zwei
+     Vorbelegungen waeren zwei Wahrheiten: Der Mensch bekaeme je nach Knopf
+     eine andere Sitzung, ohne dass ihm jemand den Unterschied sagt. */
+  const ueberDialog = await antragMitStufe(t, null);
+  assert.equal(antrag.access, ueberDialog.access, "dieselbe Stufe");
+  assert.equal(antrag.step_mode, ueberDialog.step_mode, "derselbe Schrittmodus");
+  assert.equal(antrag.duration, ueberDialog.duration, "dieselbe Dauer");
+});
+
+test("E4 — Auf einem gesperrten Ursprung entsteht kein Antrag, sondern eine Erklaerung", async (t) => {
+  for (const [url, lage] of [
+    ["https://cloud.smartragents.ai/dashboard", "cloud"],
+    ["chrome://extensions", "browser"],
+  ]) {
+    const p = await panelStarten({
+      tab: { id: 7, url, title: "gesperrt", active: true },
+      workerAntworten: { "link:verbinden": sitzungAntwort() },
+    });
+    t.after(p.aufraeumen);
+    p.alleSpurenLeeren();
+
+    await p.klick("verbinden-tab");
+
+    assert.equal(p.el("app").dataset.state, "erklaerung", `${url}: die Regel wird erklaert`);
+    assert.equal(
+      p.el("erklaer-titel").textContent,
+      erklaerungen.SPERRE[lage].titel,
+      `${url}: und zwar mit dem Satz GENAU dieser Lage`
+    );
+    assert.equal(p.antraege().length, 0, `${url}: es geht kein Antrag auf den Weg`);
+    assert.equal(p.zustand.sitzung, null, "und es entsteht keine Sitzung");
+    assert.equal(p.el("stoerung").hidden, true, "eine Regel ist kein Fehler und steht nicht in Rot");
+  }
+});
+
+test("E5 — Laeuft eine Sitzung, baut der eine Klick keine zweite auf", async (t) => {
+  const p = await panelStarten({ workerAntworten: { "link:verbinden": sitzungAntwort() } });
+  t.after(p.aufraeumen);
+  await p.sitzungHerstellen();
+  p.alleSpurenLeeren();
+
+  await p.f.tabVerbinden();
+
+  assert.equal(p.antraege().length, 0, "kein zweiter Antrag, solange der erste laeuft");
+  assert.equal(p.rechteRueckgaben(), 0, "und dem laufenden Agenten wird kein Seitenrecht weggenommen");
+  assert.equal(p.el("app").dataset.state, "aktiv", "der Stopp-Knopf bleibt, wo er war");
+  assert.match(p.el("ansage").textContent, /Beende sie mit Stopp/, "und der Mensch hoert, warum");
+});
+
+test("E6 — Auch durch die echte Startseite bleibt es ein Klick mit heiler Nutzergeste", async (t) => {
+  /*
+   * Der Weg, den ein Mensch im ausgelieferten Stand wirklich geht: Die Zeilen
+   * baut src/panel/startseite.js, gedrueckt wird ihr Knopf. Genau hier lag der
+   * Befund vom 11.08.2026 — eine Wache, die gemessen war und im Klickweg
+   * nirgends gerufen wurde. Deshalb wird hier durch das ECHTE Modul geklickt
+   * und nicht durch eine Attrappe.
+   */
+  const echt = await import("../panel/startseite.js");
+  echt._zuruecksetzen();
+  const p = await panelStarten({
+    alleTabs: TABS_GEMISCHT(),
+    startseiteModul: echt,
+    workerAntworten: { "link:verbinden": sitzungAntwort() },
+  });
+  t.after(p.aufraeumen);
+  t.after(() => echt._zuruecksetzen());
+  await new Promise((f) => setTimeout(f, 0));
+
+  const knopf = p.el("startseite").querySelector(".sa-tab-verbinden");
+  assert.ok(knopf, "Vorbedingung: die echte Startseite hat eine Zeile mit Knopf");
+  p.klicksZuruecksetzen();
+  p.aufrufeLeeren();
+
+  await p.klickAuf(knopf);
+  await new Promise((f) => setTimeout(f, 0));
+
+  assert.equal(p.klicks(), 1, "ein Klick, eine Verbindung");
+  assert.equal(p.el("app").dataset.state, "aktiv");
+  assert.ok(p.zustand.sitzung, "und sie ist wirklich entstanden");
+  assert.equal(
+    p.aufrufe()[0],
+    "permissions.request",
+    `die Nutzergeste ist unterwegs verbraucht worden: ${p.aufrufe().join(" → ")}`
+  );
+});
+
+/* ------------------------------------------------------------------ *
+ * T — die Tab-Liste und die Statuskarte
+ * ------------------------------------------------------------------ */
+
+/* Die Zeilen, die in der Liste wirklich stehen — samt ihrem sichtbaren Text. */
+const listenZeilen = (p) => p.el("startseite-liste").kinder.filter((k) => typeof k !== "string");
+
+test("T1 — Die Liste zeigt die offenen Tabs und den gesperrten Ursprung NICHT", async (t) => {
+  const p = await panelStarten({ alleTabs: TABS_GEMISCHT() });
+  t.after(p.aufraeumen);
+
+  const zeilen = listenZeilen(p);
+  const texte = zeilen.map((z) => z.textContent);
+  assert.equal(zeilen.length, 2, `erwartet zwei waehlbare Tabs, gefunden: ${texte.join(" | ")}`);
+  assert.ok(texte.some((s) => s.includes("geizhals.de")), "der aktive Tab steht drin");
+  assert.ok(texte.some((s) => s.includes("ebay.de")), "das andere Fenster auch — dafuer gibt es die Liste");
+
+  /* Der Punkt der ganzen Liste: Was net/rechte.js sperrt, erscheint hier gar
+     nicht erst. Ein Ziel anzubieten, das garantiert scheitert, ist keine
+     Auswahl, sondern eine Falle (Befund 28.07.2026). */
+  assert.ok(
+    !texte.some((s) => s.includes("smartragents.ai")),
+    "der Freigabe-Ursprung steht nie zur Auswahl (DRAHTFORMAT §7.3)"
+  );
+  assert.ok(!texte.some((s) => s.includes("Erweiterungen")), "und eine Browserseite auch nicht");
+
+  /* Gegenprobe gegen eine Liste, die schlicht alles verschluckt: Die Sperre
+     wird BENUTZT, nicht nachgebaut — dieselbe Auskunft entscheidet hier und im
+     Verbindungsweg. */
+  assert.equal(rechte.sperrgrund("https://cloud.smartragents.ai/x"), "cloud");
+  assert.equal(rechte.sperrgrund("https://www.ebay.de/sh/lst/active"), null);
+});
+
+test("T2 — Ein Klick in der Liste verbindet mit GENAU diesem Tab", async (t) => {
+  const p = await panelStarten({
+    alleTabs: TABS_GEMISCHT(),
+    workerAntworten: { "link:verbinden": sitzungAntwort() },
+  });
+  t.after(p.aufraeumen);
+
+  const ebay = listenZeilen(p).find((z) => z.textContent.includes("ebay.de"));
+  assert.ok(ebay, "Vorbedingung: das andere Fenster steht in der Liste");
+  p.klicksZuruecksetzen();
+  p.aufrufeLeeren();
+
+  await p.klickAuf(ebay);
+
+  assert.equal(p.klicks(), 1, "auch der Weg ins andere Fenster kostet genau einen Klick");
+  assert.equal(p.zustand.tabId, 8, "verbunden wird der angeklickte Tab, nicht der aktive");
+  assert.equal(p.zustand.ursprung, "https://www.ebay.de");
+  assert.equal(p.antraege().at(-1).gewuenscht.tab_host, "www.ebay.de");
+  assert.equal(
+    p.aufrufe()[0],
+    "permissions.request",
+    "auch hier wird Chrome gefragt, bevor irgendetwas abgewartet wird"
+  );
+});
+
+test("T3 — startseite.js wird im Produktivweg gerufen; fehlt sie, zeichnet die Leiste selbst", async (t) => {
+  /*
+   * Der Anker gehoert A-PANEL, die Liste zeichnet A-WERKBANK (Vertrag §1).
+   * Gemessen wird gegen das ECHTE Modul, nicht gegen eine Erfindung: Ein
+   * Pruefsatz gegen eine ausgedachte Schnittstelle waere genau der Befund vom
+   * 11.08.2026 in neuer Gestalt — gruen, und im ausgelieferten Weg ruft
+   * niemand irgendetwas.
+   */
+  const echt = await import("../panel/startseite.js");
+  echt._zuruecksetzen();
+  const gerufen = [];
+  const p = await panelStarten({
+    alleTabs: TABS_GEMISCHT(),
+    startseiteModul: {
+      ...echt,
+      aufbauen(wurzel, dienste) {
+        gerufen.push({ wurzel, dienste });
+        return echt.aufbauen(wurzel, dienste);
+      },
+    },
+  });
+  t.after(p.aufraeumen);
+  t.after(() => echt._zuruecksetzen());
+  await new Promise((f) => setTimeout(f, 0));
+
+  assert.equal(gerufen.length, 1, "startseite.js wird genau einmal in den Anker gebaut");
+  assert.equal(gerufen[0].wurzel, p.el("startseite"), "und zwar in den Anker #startseite aus panel.html");
+  for (const dienst of ["tabsHolen", "verbinden", "trennen"]) {
+    assert.equal(typeof gerufen[0].dienste[dienst], "function", `der Dienst ${dienst} fehlt`);
+  }
+  /* Die Liste, die das Modul bekommt, ist die BEREINIGTE: Der gesperrte
+     Ursprung steht auch dann nicht darin, wenn das Modul selbst nicht
+     filterte. */
+  const uebergeben = await gerufen[0].dienste.tabsHolen();
+  assert.deepEqual(uebergeben.map((x) => x.id), [7, 8]);
+  assert.ok(p.el("startseite").childElementCount > 0, "und der Anker ist danach wirklich gefuellt");
+
+  /* Ohne Modul bleibt der Anker trotzdem beantwortet — das misst T1 fuer den
+     Regelfall, hier der leere: ein Satz mit dem naechsten Schritt statt einer
+     Leerstelle. */
+  const leer = await panelStarten({
+    alleTabs: [{ id: 9, url: "https://cloud.smartragents.ai/x", title: "SMarTrAgents", active: true }],
+  });
+  t.after(leer.aufraeumen);
+  const zeilen = listenZeilen(leer);
+  assert.equal(zeilen.length, 1, "eine Zeile, und die erklaert die Lage");
+  assert.equal(zeilen[0].textContent, erklaerungen.TAB_LISTE.leer.text);
+});
+
+test("T4 — Die Statuskarte nennt Titel, Adresse und Favicon des verbundenen Tabs", async (t) => {
+  const p = await panelStarten({ alleTabs: TABS_GEMISCHT() });
+  t.after(p.aufraeumen);
+  assert.equal(p.el("tabkarte").hidden, true, "Vorbedingung: ohne Sitzung keine Karte");
+
+  await p.sitzungHerstellen();
+
+  assert.equal(p.el("tabkarte").hidden, false, "mit der Sitzung steht die Karte da");
+  assert.equal(p.el("tabkarte-titel").textContent, "Warenkorb");
+  assert.equal(p.el("tabkarte-adresse").textContent, "geizhals.de");
+  assert.equal(p.el("tabkarte-bild").getAttribute("src"), "https://geizhals.de/favicon.ico");
+  assert.equal(p.el("tabkarte-bild").hidden, false);
+  assert.equal(p.el("tabkarte-glyph").hidden, true, "das Ersatzzeichen weicht dem echten Symbol");
+
+  /* Und der Weg zurueck steht daneben, nicht in einem Menue. */
+  await p.klick("trennen");
+  await warteAufZustand(p, "bereit");
+  assert.equal(p.zustand.sitzung, null, "Trennen beendet die Sitzung");
+  assert.equal(p.el("tabkarte").hidden, true, "und raeumt die Karte weg");
+});
+
+test("T4b — Ohne Favicon steht das Ersatzzeichen da, keine Luecke", async (t) => {
+  const p = await panelStarten({
+    alleTabs: [{ id: 7, url: "https://geizhals.de/warenkorb", title: "Warenkorb", active: true }],
+  });
+  t.after(p.aufraeumen);
+  await p.sitzungHerstellen();
+
+  assert.equal(p.el("tabkarte-bild").hidden, true);
+  assert.equal(p.el("tabkarte-bild").getAttribute("src"), null, "kein leeres src, das der Browser laedt");
+  assert.equal(p.el("tabkarte-glyph").hidden, false);
+  assert.equal(p.el("tabkarte-titel").textContent, "Warenkorb", "der Titel steht trotzdem da");
+});
+
+test("T5 — Ein Tabwechsel zieht Liste, Hinweis und Modus nach", async (t) => {
+  const tabs = TABS_GEMISCHT();
+  const p = await panelStarten({ alleTabs: tabs });
+  t.after(p.aufraeumen);
+  assert.equal(p.zustand.aktuellerTab.id, 7, "Vorbedingung: der Warenkorb ist aktiv");
+  assert.match(p.el("verbinden-hinweis").textContent, /Warenkorb/, "der Hinweis nennt den Tab beim Namen");
+
+  /* Der Mensch wechselt das Fenster. Ohne diesen Nachzug verbaende der eine
+     Klick danach mit dem Tab von vorhin — mit dem, den der Mensch gerade NICHT
+     ansieht. */
+  tabs[0].active = false;
+  tabs[1].active = true;
+  p.spurLeeren();
+  await p.tabEreignis("onActivated", { tabId: 8, windowId: 3 });
+
+  assert.equal(p.zustand.aktuellerTab.id, 8, "der Bestand folgt dem Wechsel");
+  assert.match(p.el("verbinden-hinweis").textContent, /eBay/, "und der Hinweis sagt es");
+  assert.ok(
+    p.anWorkerVoll().some((n) => n.typ === "modus:stand?" && n.tabId === 8),
+    "der Modus gilt je Tab, also wird er fuer den neuen Tab nachgefragt"
+  );
+});
+
+/* ------------------------------------------------------------------ *
+ * MO — der Betriebsmodus (Vertrag §2)
+ * ------------------------------------------------------------------ */
+
+test("MO1 — Drei Stufen, drei Etiketten, und vorbelegt ist das Mitdenken", async (t) => {
+  const p = await panelStarten();
+  t.after(p.aufraeumen);
+
+  /* Die Stufen kommen aus dem Vertrag, nicht aus der Oberflaeche. Kaeme eine
+     dazu, ohne dass sie einen Knopf bekommt, wird dieser Satz rot — und nicht
+     erst der Mensch, der sie vermisst. */
+  assert.deepEqual([...befehle.MODI], ["manual", "assist", "auto"]);
+  for (const m of befehle.MODI) {
+    assert.ok(IDS_IM_HTML.has(`modus-${m}`), `die Stufe ${m} braucht einen Knopf in panel.html`);
+  }
+  const etiketten = befehle.MODI.map((m) => erklaerungen.MODUS_TEXT[m].etikett);
+  assert.deepEqual(etiketten, ["Jeder Schritt einzeln", "Mitdenken", "Selbständig"]);
+  for (const m of befehle.MODI) {
+    const inHtml = new RegExp(`<button id="modus-${m}"[^>]*>\\s*([^<]+?)\\s*</button>`).exec(html);
+    assert.ok(inHtml, `der Knopf fuer ${m} muss in panel.html stehen`);
+    assert.equal(
+      inHtml[1],
+      erklaerungen.MODUS_TEXT[m].etikett,
+      "Knopf und Text sagen dasselbe Wort — sonst sucht der Vorleser einen Knopf, den es nicht gibt"
+    );
+  }
+
+  assert.equal(p.zustand.modus, befehle.MODUS_STANDARD, "Voreinstellung nach dem Update");
+  assert.equal(p.zustand.modus, "assist");
+  assert.equal(p.el("modus-assist").getAttribute("aria-checked"), "true");
+  assert.equal(p.el("modus-manual").getAttribute("aria-checked"), "false");
+  assert.equal(p.el("modus-auto").getAttribute("aria-checked"), "false");
+  assert.equal(p.el("modus-chip").textContent, "Mitdenken", "der Chip spiegelt denselben Modus");
+});
+
+test("MO2 — Die Wahl geht je Tab an den Dienst und spiegelt sich ueberall", async (t) => {
+  const p = await panelStarten();
+  t.after(p.aufraeumen);
+  p.spurLeeren();
+
+  await p.klick("modus-auto");
+
+  const gesetzt = p.anWorkerVoll().filter((n) => n.typ === "modus:setzen");
+  assert.equal(gesetzt.length, 1, "genau eine Meldung an den Dienst");
+  assert.equal(gesetzt[0].modus, "auto");
+  assert.equal(gesetzt[0].tabId, 7, "und zwar fuer DIESEN Tab — der Modus gilt je Tab (Vertrag §2)");
+  assert.equal(p.zustand.modus, "auto");
+  assert.equal(p.el("modus-auto").getAttribute("aria-checked"), "true");
+  assert.equal(p.el("modus-assist").getAttribute("aria-checked"), "false", "genau ein Haken, nicht zwei");
+  assert.equal(p.el("modus-chip").textContent, "Selbständig");
+  assert.equal(
+    p.el("modus-auskunft").textContent,
+    erklaerungen.MODUS_TEXT.auto.auskunft,
+    "und die Auskunft daneben wechselt mit"
+  );
+
+  /* Der Umschalter ist EIN Halt in der Tabulatorreihe, nicht drei. */
+  assert.equal(p.el("modus-auto").getAttribute("tabindex"), "0");
+  assert.equal(p.el("modus-assist").getAttribute("tabindex"), "-1");
+});
+
+test("MO3 — Ein Modus, den es nicht gibt, aendert nichts", async (t) => {
+  const p = await panelStarten();
+  t.after(p.aufraeumen);
+  await p.klick("modus-auto");
+  p.spurLeeren();
+
+  for (const unfug of ["full", "AUTO", "", null, {}, "constructor"]) {
+    const gesetzt = await p.f.modusSetzen(unfug);
+    assert.equal(gesetzt, false, `„${String(unfug)}" darf nicht durchkommen`);
+  }
+  assert.equal(p.zustand.modus, "auto", "der zuletzt gewaehlte Modus steht unveraendert");
+  assert.equal(
+    p.anWorkerVoll().filter((n) => n.typ === "modus:setzen").length,
+    0,
+    "und es geht keine Meldung an den Dienst, die niemand gewaehlt hat"
+  );
+});
+
+test("MO4 — Beim Oeffnen gilt der Stand des Dienstes, sonst die Voreinstellung", async (t) => {
+  /* Die Wahrheit ueber den Modus liegt im Hintergrunddienst (storage.session,
+     sa_modus). Die Leiste zeigt sie an, sie erfindet sie nicht. */
+  const echt = await panelStarten({ workerAntworten: { "modus:stand?": { modus: "manual", schritte: 50 } } });
+  t.after(echt.aufraeumen);
+  assert.equal(echt.zustand.modus, "manual", "der Dienst sagt manual, also steht manual da");
+  assert.equal(echt.el("modus-manual").getAttribute("aria-checked"), "true");
+
+  /* Und ein Wert, den niemand lesen kann, faellt auf die Voreinstellung
+     zurueck — nicht auf die staerkste Stufe und nicht auf die zuletzt
+     angezeigte. */
+  for (const unfug of [{ modus: "vollgas" }, { modus: 7 }, {}, null]) {
+    const p = await panelStarten({ workerAntworten: { "modus:stand?": unfug } });
+    t.after(p.aufraeumen);
+    assert.equal(p.zustand.modus, befehle.MODUS_STANDARD, `bei ${JSON.stringify(unfug)}`);
+  }
+});
+
+test("MO5 — Das Etikett „Selbständig“ verspricht nichts, was nicht gilt", async (t) => {
+  /*
+   * Derselbe Satz wie S4 für „Vollzugriff", nur für den Modus `auto`.
+   *
+   * Er misst nicht Beispiele, sondern die Eigenschaft: JEDE harte Klasse aus
+   * net/befehle.js wird auch in der Automatik gefragt (Vertrag §3.2), und
+   * JEDE kommt im Riegel neben dem Umschalter vor. Kommt eine harte Klasse
+   * dazu, ohne dass der Text sie nennt, wird dieser Satz rot — und nicht erst
+   * der Mensch, der glaubte, sie sei abgeschaltet.
+   */
+  const regelnOffen = { gesperrt: false, frei: [...befehle.WEICH] };
+  for (const klasse of befehle.HART) {
+    const e = befehle.freigabeNoetig("auto", { klassen: [klasse], hart: klasse, weich: [] }, regelnOffen);
+    assert.equal(e.fragen, true, `im Modus auto wird ${klasse} trotzdem gefragt`);
+  }
+  /* Gegenprobe, damit oben nicht schlicht „auto fragt immer" gemessen wird:
+     Eine freigeschaltete weiche Klasse laeuft dort wirklich durch — genau das
+     ist der ganze Unterschied zwischen assist und auto. */
+  const weich = befehle.freigabeNoetig("auto", { klassen: ["senden"], hart: null, weich: ["senden"] }, regelnOffen);
+  assert.equal(weich.fragen, false, "sonst haette der Modus keine Wirkung und das Etikett keinen Sinn");
+
+  const RIEGEL_WORT = {
+    zahlung: /zahlung/i,
+    geheim: /passw(o|ö)r/i,
+    unwiderruflich: /l(ö|oe)sch/i,
+    datei: /datei/i,
+    berechtigung: /berechtigung/i,
+    captcha: /captcha/i,
+  };
+  for (const klasse of befehle.HART) {
+    assert.ok(RIEGEL_WORT[klasse], `fuer die harte Klasse ${klasse} fehlt hier das Wort`);
+    assert.match(
+      erklaerungen.MODUS_RIEGEL,
+      RIEGEL_WORT[klasse],
+      `der Riegel neben dem Umschalter verschweigt ${klasse}`
+    );
+  }
+
+  /* Was der Mensch nach der Wahl WIRKLICH liest — gefahren, nicht abgeschrieben. */
+  const p = await panelStarten();
+  t.after(p.aufraeumen);
+  await p.klick("modus-auto");
+  const auskunft = p.el("modus-auskunft").textContent;
+  const riegel = p.el("modus-riegel").textContent;
+  assert.equal(riegel, erklaerungen.MODUS_RIEGEL, "der Riegel steht sichtbar da, in jedem Modus");
+  assert.match(auskunft, /freigeschaltet/, "Gegenprobe: es ist wirklich die Auskunft zu `auto`");
+
+  const ZU_VIEL_VERSPROCHEN = [
+    [/passwor|passwör|kennwort/i, "Passwörter"],
+    [/\bmeldet? (sich|dich) an\b/i, "sich anmelden"],
+    [/\balles\b[^.]{0,20}\bohne\b/i, "alles ohne Rückfrage"],
+    [/\bfragt? (nie|nichts)\b/i, "nie zu fragen"],
+  ];
+  for (const text of [erklaerungen.MODUS_TEXT.auto.etikett, auskunft]) {
+    for (const [muster, was] of ZU_VIEL_VERSPROCHEN) {
+      assert.ok(!muster.test(text), `„Selbständig“ verspricht „${was}“: ${text}`);
+    }
+  }
+
+  /* Und wer sich vorlesen laesst, hoert die Grenze im selben Atemzug mit der
+     Wahl — nicht erst, wenn er die Seite mit der Tabulatortaste abgeht. */
+  assert.ok(
+    p.gesprochen.some((s) => s.includes(erklaerungen.MODUS_RIEGEL)),
+    `der Riegel wurde bei der Wahl nicht gesprochen: ${p.gesprochen.join(" | ")}`
+  );
+});
+
+test("MO6 — Der Riegel steht BEI der Wahl, nicht in einer Fussnote", () => {
+  /* Gemessen wird die Stelle im Text, nicht das blosse Vorkommen: „steht
+     irgendwo in panel.html" war schon wahr, als er in der Fusszeile stand.
+     Dieselbe Messung wie bei S3. */
+  const bereichAb = html.indexOf('<section id="modus-bereich"');
+  const bereichBis = html.indexOf("</section>", bereichAb);
+  assert.ok(bereichAb >= 0 && bereichBis > bereichAb, "der Umschalter braucht seinen eigenen Bereich");
+
+  const wahl = html.indexOf('id="modus-wahl"', bereichAb);
+  const riegel = html.indexOf('id="modus-riegel"', bereichAb);
+  assert.ok(wahl > bereichAb && wahl < bereichBis, "der Umschalter steht darin");
+  assert.ok(riegel > wahl && riegel < bereichBis, "und der Riegel unmittelbar danach, im selben Bereich");
+
+  /* Der Riegel ist nie versteckt: Er gilt in jedem Modus, also darf ihn kein
+     Modus zudecken. */
+  assert.ok(!VERSTECKT_IM_HTML.has("modus-riegel"), "der Riegel startet sichtbar");
+  assert.ok(!VERSTECKT_IM_HTML.has("modus-bereich"), "und der ganze Bereich auch");
+  /* Und er liegt oberhalb des Gespraechs, nicht darunter — above the fold. */
+  assert.ok(bereichAb < html.indexOf('<main id="flaeche"'), "der Umschalter steht vor der Gespraechsflaeche");
+});
+
+/* ------------------------------------------------------------------ *
+ * N — der Not-Aus (Vertrag §5)
+ * ------------------------------------------------------------------ */
+
+test("N1 — Solange eine Sitzung laeuft, verschwindet der Stopp-Knopf in KEINEM Zustand", async (t) => {
+  /*
+   * Bis 0.5.2 hing die Sitzungsleiste allein am Zustand `aktiv`. Jede Karte,
+   * die waehrend einer laufenden Sitzung erscheinen kann — die Kennwortkarte
+   * bei der Selbsterneuerung, die Erklaerkarte, die Anmeldung —, nahm dem
+   * Menschen damit die Notbremse weg, waehrend der Agent seine Rechte auf dem
+   * Tab behielt. Gefahren wird deshalb JEDER Zustand, nicht nur der eine, der
+   * damals aufgefallen ist.
+   */
+  const p = await panelStarten();
+  t.after(p.aufraeumen);
+  await p.sitzungHerstellen();
+  assert.ok(p.zustand.sitzung, "Vorbedingung: es laeuft wirklich etwas");
+
+  for (const name of ["bereit", "dialog", "anmeldung", "kennwort", "erklaerung", "werkbank", "buch", "aktiv"]) {
+    p.f.setzeZustand(name);
+    assert.equal(
+      p.el("sitzungsleiste").hidden,
+      false,
+      `im Zustand „${name}" ist die Notbremse verschwunden`
+    );
+    assert.equal(p.el("stopp").hidden, false, `im Zustand „${name}" ist der Stopp-Knopf verborgen`);
+  }
+
+  /* Gegenprobe, damit oben nicht schlicht „immer sichtbar" gemessen wird:
+     Ohne Sitzung gibt es nichts zu stoppen, und dann steht die Leiste auch
+     nicht da. */
+  await p.f.beenden("nutzer");
+  await warteAufZustand(p, "bereit");
+  assert.equal(p.el("sitzungsleiste").hidden, true, "ohne Sitzung keine Leiste");
+});
+
+test("N2 — Der Not-Aus meldet zuerst und wartet auf nichts", async (t) => {
+  /* Vertrag §5: Zwischen dem Ereignis und „nichts laeuft mehr" liegt weniger
+     als eine Sekunde, und zwar ohne auf eine Antwort des Relays zu warten.
+     Erst kappen, dann melden. */
+  const p = await panelStarten();
+  t.after(p.aufraeumen);
+  await p.sitzungHerstellen();
+  p.alleSpurenLeeren();
+
+  await p.klick("stopp");
+
+  const reihe = p.anWorker();
+  assert.ok(reihe.includes("link:notaus"), "der Not-Aus meldet sich beim Dienst (Vertrag §6)");
+  assert.ok(
+    reihe.indexOf("link:notaus") < reihe.indexOf("link:trennen"),
+    `erst kappen, dann melden — gemessen: ${reihe.join(" → ")}`
+  );
+  const meldung = p.anWorkerVoll().find((n) => n.typ === "link:notaus");
+  assert.equal(meldung.grund, "notbremse");
+  assert.equal(p.zustand.sitzung, null, "und die Sitzung ist hier sofort zu Ende");
+  assert.ok(p.anTab().includes("overlay:gestoppt"), "im Tab steht „gestoppt“ und nicht „aus“");
+  assert.ok(p.rechteRueckgaben() > 0, "das Seitenrecht geht zurueck");
+});
+
+test("N3 — Zweimal Escape in der Seitenleiste bricht ab, einmal nicht", async (t) => {
+  const p = await panelStarten();
+  t.after(p.aufraeumen);
+  await p.sitzungHerstellen();
+  p.alleSpurenLeeren();
+
+  await p.fensterEreignis("keydown", { key: "Escape" });
+  assert.ok(p.zustand.sitzung, "ein einzelnes Escape beendet nichts — sonst waere jede Karte ein Risiko");
+  assert.ok(!p.anWorker().includes("link:notaus"));
+
+  await p.fensterEreignis("keydown", { key: "Escape" });
+  assert.equal(p.zustand.sitzung, null, "zweimal kurz hintereinander beendet sofort");
+  const reihe = p.anWorker();
+  assert.ok(reihe.indexOf("link:notaus") < reihe.indexOf("link:trennen"), "auf demselben Weg wie der Knopf");
+  assert.equal(p.anWorkerVoll().find((n) => n.typ === "link:notaus").grund, "esc");
+
+  /* Und eine Taste, die nicht Escape heisst, tut gar nichts. */
+  const q = await panelStarten();
+  t.after(q.aufraeumen);
+  await q.sitzungHerstellen();
+  await q.fensterEreignis("keydown", { key: "e" });
+  await q.fensterEreignis("keydown", { key: "e" });
+  assert.ok(q.zustand.sitzung, "nur Escape ist die Notbremse");
+});
+
+/* ------------------------------------------------------------------ *
+ * P — das Live-Protokoll (Vertrag §6)
+ * ------------------------------------------------------------------ */
+
+test("P1 — Jede Protokollzeile traegt genau einen Zeitstempel in <time>", async (t) => {
+  const p = await panelStarten();
+  t.after(p.aufraeumen);
+  await p.sitzungHerstellen();
+
+  p.melden({ typ: "link:protokoll", text: "Lese die Seite: Bedienelemente einsammeln" });
+  p.melden({ typ: "link:protokoll", text: "Erledigt: click", cmd: "click", ergebnis: "ok" });
+
+  const zeiten = p.protokollZeiten();
+  assert.equal(zeiten.length, 2, "Vorbedingung: zwei Zeilen");
+  for (const [i, liste] of zeiten.entries()) {
+    assert.equal(liste.length, 1, `Zeile ${i + 1} braucht genau ein <time>`);
+    assert.match(liste[0].textContent, /^\d{2}:\d{2}:\d{2}$/, "sichtbar als Uhrzeit");
+    assert.match(
+      liste[0].getAttribute("datetime"),
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/,
+      "und maschinenlesbar im datetime, sonst liest ein Bildschirmleser Ziffern statt einer Zeit"
+    );
+  }
+});
+
+test("P2 — Der Zeitstempel kommt aus der Meldung, nicht aus der Ankunft", async (t) => {
+  /* `zeit` stammt vom Ausfuehrer, also von der Stelle, die den Schritt wirklich
+     getan hat. Wuerde hier die Ankunftszeit stehen, waere jede Zeile um die
+     Laufzeit der Meldung falsch — und ein Protokoll, das die Reihenfolge
+     verschiebt, ist schlimmer als keines. */
+  const p = await panelStarten();
+  t.after(p.aufraeumen);
+  await p.sitzungHerstellen();
+
+  /* Ein Zeitpunkt, der sicher in der Vergangenheit liegt — sonst misst der
+     Vergleich unten die Uhr des Pruefrechners statt den Fix. */
+  const damals = Date.now() - 3600_000;
+  p.melden({ typ: "link:protokoll", text: "Erledigt: click", cmd: "click", zeit: damals });
+  const uhr = p.protokollZeiten().at(-1)[0];
+  assert.equal(uhr.getAttribute("datetime"), new Date(damals).toISOString());
+
+  /* Ohne Angabe wird nichts geraten, sondern der Augenblick genommen — und der
+     liegt sichtbar nach der alten Meldung. */
+  p.melden({ typ: "link:protokoll", text: "Erledigt: type" });
+  const jetzt = Date.parse(p.protokollZeiten().at(-1)[0].getAttribute("datetime"));
+  assert.ok(jetzt > damals, "eine Zeile ohne Zeitangabe bekommt die eigene, keine erfundene");
+  assert.ok(Math.abs(jetzt - Date.now()) < 5000, "und zwar den Augenblick, nicht irgendeine Zahl");
+
+  /* Eine unbrauchbare Angabe fuehrt nicht zu „Invalid Date" auf dem
+     Bildschirm — fail-closed wie ueberall. */
+  for (const unfug of ["gestern", -1, 0, {}, NaN]) {
+    p.melden({ typ: "link:protokoll", text: "Erledigt: scroll", zeit: unfug });
+    const gesetzt = Date.parse(p.protokollZeiten().at(-1)[0].getAttribute("datetime"));
+    assert.ok(Number.isFinite(gesetzt), `„${String(unfug)}" ergibt keine lesbare Zeit`);
+  }
+});
+
+test("P3 — Befehl und Ergebnis stehen am Element, nicht im vorgelesenen Satz", async (t) => {
+  const p = await panelStarten();
+  t.after(p.aufraeumen);
+  await p.sitzungHerstellen();
+
+  p.melden({
+    typ: "link:protokoll",
+    text: "Erledigt: click",
+    cmd: "click",
+    ergebnis: "ok",
+    zeit: Date.now(),
+  });
+  const li = p.el("protokoll").kinder.at(-1);
+  assert.equal(li.getAttribute("data-cmd"), "click");
+  assert.equal(li.getAttribute("data-ergebnis"), "ok");
+  assert.equal(
+    p.protokollSatz().at(-1),
+    "Erledigt: click",
+    "der Satz bleibt der Satz — „Erledigt: click, ok“ sagt einem Menschen nichts mehr"
+  );
+
+  /* Auch diese beiden Felder kommen von aussen und werden entschaerft. */
+  p.melden({
+    typ: "link:protokoll",
+    text: "Erledigt: type",
+    cmd: `cl${String.fromCharCode(7)}ick${"X".repeat(200)}`,
+    ergebnis: `ok${String.fromCharCode(0x200b)}`,
+  });
+  const zwei = p.el("protokoll").kinder.at(-1);
+  assert.ok(!steuerzeichenDrin(zwei.getAttribute("data-cmd")));
+  assert.ok(!steuerzeichenDrin(zwei.getAttribute("data-ergebnis")));
+  assert.ok(zwei.getAttribute("data-cmd").length <= 41, "gedeckelt wie jeder Fremdtext");
+
+  /* Und eine blanke Zeichenkette bleibt gueltig: Der Bestand ruft diese Stelle
+     an einem Dutzend Orten so auf (Vertrag §6, „text bleibt Pflicht und
+     abwaertskompatibel"). */
+  p.f.protokollieren("Verlängert: die Freigabe läuft weiter");
+  assert.equal(p.protokollSatz().at(-1), "Verlängert: die Freigabe läuft weiter");
+  assert.equal(p.protokollZeiten().at(-1).length, 1, "und bekommt trotzdem ihre Uhrzeit");
+});
+
+test("P4 — Der Sekundentakt des Protokolls uebertoent die Freigabekarte nicht", async (t) => {
+  /* Dieselbe Regel wie F7 und F8: Was im Sekundentakt eintrifft, gehoert in
+     keine Vorlesezone. Die Freigabefrage ist das Dringendste, was diese Leiste
+     zu sagen hat; ein Protokoll, das dazwischenspricht, kostet genau sie. */
+  assert.match(html, /id="protokoll"[^>]*aria-live="off"/, "das Protokoll spricht nicht von selbst");
+  assert.match(html, /id="protokoll"[^>]*role="log"/, "es sagt trotzdem, was es ist");
+
+  const p = await panelStarten();
+  t.after(p.aufraeumen);
+  await p.sitzungHerstellen();
+  p.zustand.vorlesen = "alles";
+  p.spurLeeren();
+
+  const antwort = p.frageStellen({
+    typ: "link:schritt-freigabe",
+    frage: "Für dich klicken?",
+    quelle: "Zur Kasse",
+    cmd: "click",
+    id: "b9",
+  });
+  const frageAnsage = p.el("ansage").textContent;
+  const stimmen = p.gesprochen.length;
+  const abbrueche = p.stimmabbrueche();
+
+  for (let i = 0; i < 5; i += 1) {
+    p.melden({ typ: "link:protokoll", text: `Erledigt: schritt ${i}`, cmd: "click", zeit: Date.now() });
+  }
+
+  assert.equal(p.el("ansage").textContent, frageAnsage, "die Live-Region gehoert der Frage");
+  assert.equal(p.zustand.letzteRede, frageAnsage, "und der 🔊-Knopf liest die Frage");
+  assert.equal(p.gesprochen.length, stimmen, "keine zweite Stimme ueber die laufende Frage");
+  assert.equal(p.stimmabbrueche(), abbrueche, "und kein Abbruch mitten im Satz");
+  assert.equal(p.protokollSatz().length, 5, "verschwiegen wird trotzdem nichts");
+
+  await p.klick("freigabe-ja");
+  await antwort;
+});
+
+/* ------------------------------------------------------------------ *
+ * C — die Cloud-Sitzung (Vertrag §8.4)
+ * ------------------------------------------------------------------ */
+
+test("C1 — Die Dauerzeile steht da, solange die Cloud-Sitzung laeuft", async (t) => {
+  const p = await panelStarten();
+  t.after(p.aufraeumen);
+  assert.equal(p.el("cloud-zeile").hidden, true, "Vorbedingung: ohne Fernsitzung keine Zeile");
+
+  p.melden({ typ: "link:cloud-sitzung", an: true, agent: "SMarTrCEO" });
+
+  assert.equal(p.el("cloud-zeile").hidden, false, "sie erscheint");
+  assert.equal(p.el("cloud-agent").textContent, "SMarTrCEO", "und nennt den Agenten beim Namen");
+  assert.equal(p.zustand.cloudAgent, "SMarTrCEO");
+  assert.match(html, /id="cloud-zeile"/, "Gegenprobe: die Zeile steht wirklich in panel.html");
+  assert.ok(
+    html.indexOf('id="cloud-zeile"') < html.indexOf('<main id="flaeche"'),
+    "und zwar oben, nicht unter dem Gespraech"
+  );
+
+  /* Sie bleibt stehen. Eine Fernsitzung, die man nur beim Start sieht, ist
+     genau die Lage, die §8.4 ausschliesst. */
+  p.f.setzeZustand("dialog");
+  assert.equal(p.el("cloud-zeile").hidden, false, "auch beim Kartenwechsel");
+  p.f.setzeZustand("bereit");
+  assert.equal(p.el("cloud-zeile").hidden, false);
+
+  p.melden({ typ: "link:cloud-sitzung", an: false });
+  assert.equal(p.el("cloud-zeile").hidden, true, "erst die Abmeldung raeumt sie weg");
+  assert.equal(p.zustand.cloudAgent, null);
+});
+
+test("C2 — Der Agentenname wird entschaerft und nie gesprochen", async (t) => {
+  /* Der Name kommt vom Relay und damit von aussen. Er geht deshalb durch
+     dieselbe Entschaerfung wie jeder Fremdtext und wird nie in einen Satz
+     eingebaut, den die Stimme spricht — genau die Regel, die im Bestand fuer
+     die Beschriftungen der besuchten Seite gilt. */
+  const p = await panelStarten();
+  t.after(p.aufraeumen);
+  p.zustand.vorlesen = "alles";
+  p.el("ansage").textContent = "";
+  p.spurLeeren();
+
+  const boese = `SMarTr${String.fromCharCode(7)}CEO${String.fromCharCode(0x200b)}${"X".repeat(200)}`;
+  p.melden({ typ: "link:cloud-sitzung", an: true, agent: boese });
+
+  const gezeigt = p.el("cloud-agent").textContent;
+  assert.ok(!steuerzeichenDrin(gezeigt), "Steuerzeichen und Nullbreiten kommen nie in die Zeile");
+  assert.ok(gezeigt.length <= 41, `der Name wird gedeckelt, gemessen: ${gezeigt.length}`);
+  assert.equal(p.el("ansage").textContent, "", "die Vorlesezone bleibt der Sitzung, nicht dem Namen");
+  assert.equal(p.gesprochen.length, 0, "und gesprochen wird der Fremdname nie");
+});
+
+test("C3 — Das Ende der Tab-Sitzung raeumt die Cloud-Sitzung nicht weg", async (t) => {
+  /* Zwei verschiedene Dinge: Die Steuersitzung gehoert diesem Tab, die
+     Cloud-Sitzung laeuft in der Cloud. Sie hier stillschweigend zu verstecken
+     hiesse, dem Menschen eine laufende Fernsitzung zu verschweigen. */
+  const p = await panelStarten();
+  t.after(p.aufraeumen);
+  await p.sitzungHerstellen();
+  p.melden({ typ: "link:cloud-sitzung", an: true, agent: "SMarTrTrader" });
+
+  await p.f.beenden("nutzer");
+  await warteAufZustand(p, "bereit");
+
+  assert.equal(p.zustand.sitzung, null, "Vorbedingung: die Steuersitzung ist zu Ende");
+  assert.equal(p.el("cloud-zeile").hidden, false, "die Fernsitzung steht weiterhin da");
+  assert.equal(p.el("cloud-agent").textContent, "SMarTrTrader");
+});
+
+/* ------------------------------------------------------------------ *
+ * WB — Regeln, Ablaeufe und Protokollbuch (Vertrag §4 und §8.3)
+ * ------------------------------------------------------------------ */
+
+test("WB1 — Beide Ansichten sind erreichbar und holen ihre Daten beim Dienst", async (t) => {
+  const p = await panelStarten({
+    workerAntworten: {
+      "werkbank:liste": { workflows: [{ id: "wf_ebay_relist", name: "eBay: Artikel neu einstellen" }] },
+      "buch:lesen": { eintraege: [{ zeit: Date.now(), agent: "SMarTrCEO", cmd: "click", url: "https://ebay.de/x" }] },
+    },
+  });
+  t.after(p.aufraeumen);
+
+  await p.klick("menue-knopf");
+  await p.klick("menue-werkbank");
+  assert.equal(p.el("app").dataset.state, "werkbank");
+  assert.equal(p.el("werkbank").hidden, false);
+  assert.ok(p.anWorker().includes("werkbank:liste"), "die Liste kommt vom Dienst, nicht aus der Leiste");
+  assert.match(p.el("werkbank-inhalt").textContent, /eBay/, "und steht wirklich in der Ansicht");
+
+  await p.klick("werkbank-zurueck");
+  assert.equal(p.el("app").dataset.state, "bereit");
+
+  p.spurLeeren();
+  await p.klick("menue-knopf");
+  await p.klick("menue-buch");
+  assert.equal(p.el("app").dataset.state, "buch");
+  const gelesen = p.anWorkerVoll().find((n) => n.typ === "buch:lesen");
+  assert.ok(gelesen, "das Protokollbuch wird gelesen");
+  assert.equal(gelesen.von, 0);
+  assert.ok(Number.isFinite(gelesen.bis), "und der Zeitraum ist eine Zahl, keine Unendlichkeit auf der Leitung");
+  assert.match(p.el("buch-inhalt").textContent, /SMarTrCEO/);
+});
+
+test("WB2 — werkbank.js wird im Produktivweg gerufen; fehlt sie, zeichnet die Leiste selbst", async (t) => {
+  /* Wie T3: gemessen wird gegen das ECHTE Modul und seine echte Schnittstelle,
+     nicht gegen eine ausgedachte. */
+  const echt = await import("../panel/werkbank.js");
+  const gerufen = [];
+  const p = await panelStarten({
+    werkbankModul: {
+      ...echt,
+      aufbauen(wurzel, dienste) {
+        gerufen.push({ was: "werkbank", wurzel, dienste });
+        return echt.aufbauen(wurzel, dienste);
+      },
+      matrixAufbauen(wurzel) {
+        gerufen.push({ was: "matrix", wurzel, dienste: {} });
+        return echt.matrixAufbauen(wurzel);
+      },
+      buchAufbauen(wurzel, dienste) {
+        gerufen.push({ was: "buch", wurzel, dienste });
+        return echt.buchAufbauen(wurzel, dienste);
+      },
+    },
+  });
+  t.after(p.aufraeumen);
+
+  await p.klick("menue-knopf");
+  await p.klick("menue-werkbank");
+
+  const werkbankRuf = gerufen.find((g) => g.was === "werkbank");
+  const matrixRuf = gerufen.find((g) => g.was === "matrix");
+  assert.ok(werkbankRuf, "die Ablaufverwaltung wird gebaut (Vertrag §7.3)");
+  assert.ok(matrixRuf, "und die Regeln je Domain daneben (Vertrag §4)");
+  assert.equal(werkbankRuf.wurzel, p.el("werkbank-inhalt"));
+  assert.equal(matrixRuf.wurzel, p.el("matrix-inhalt"));
+  assert.notEqual(
+    werkbankRuf.wurzel,
+    matrixRuf.wurzel,
+    "zwei Ansichten, zwei Anker — eine gemeinsame Wurzel raeumte die andere weg"
+  );
+  assert.equal(typeof werkbankRuf.dienste.spielen, "function", "ohne `spielen` liefe kein Ablauf");
+  assert.equal(typeof werkbankRuf.dienste.ausgeben, "function", "und ohne `ausgeben` gaebe es keinen Weg heraus");
+
+  /* Der Ablauf laeuft ueber den Dienst, nicht an ihm vorbei (Vertrag §6). */
+  p.spurLeeren();
+  await werkbankRuf.dienste.spielen("wf_ebay_relist", { artikelnummer: "1" });
+  const gespielt = p.anWorkerVoll().find((n) => n.typ === "werkbank:spielen");
+  assert.ok(gespielt, "werkbank:spielen geht wirklich an den Dienst");
+  assert.equal(gespielt.id, "wf_ebay_relist");
+
+  await p.klick("menue-knopf");
+  await p.klick("menue-buch");
+  const buchRuf = gerufen.find((g) => g.was === "buch");
+  assert.ok(buchRuf, "das Protokollbuch wird gebaut (Vertrag §8.3)");
+  assert.equal(buchRuf.wurzel, p.el("buch-inhalt"));
+  assert.equal(typeof buchRuf.dienste.ausgeben, "function");
+
+  /* Und ohne Modul steht trotzdem etwas da. Ein leerer Anker waere ein Weg
+     ohne Antwort. */
+  const q = await panelStarten({ workerAntworten: { "buch:lesen": { eintraege: [] } } });
+  t.after(q.aufraeumen);
+  await q.f.buchOeffnen();
+  assert.ok(q.el("buch-inhalt").textContent.length > 0, "auch die leere Lage bekommt einen Satz");
+  assert.match(q.el("buch-inhalt").textContent, /Protokollbuch/);
+});
+
+test("WB3 — Der Ausgabe-Knopf macht aus dem Buch eine Datei, ohne neue Berechtigung", async (t) => {
+  const inhalt = JSON.stringify([{ zeit: 1, agent: "SMarTrCEO", cmd: "click" }]);
+  const p = await panelStarten({ workerAntworten: { "buch:ausgeben": { json: inhalt } } });
+  t.after(p.aufraeumen);
+  await p.klick("menue-knopf");
+  await p.klick("menue-buch");
+  assert.equal(p.el("buch-datei").hidden, true, "Vorbedingung: noch keine Datei");
+
+  await p.klick("buch-ausgeben");
+
+  const verweis = p.el("buch-datei");
+  assert.equal(verweis.hidden, false, "der Verweis bleibt sichtbar stehen");
+  const adresse = verweis.getAttribute("href");
+  assert.ok(adresse.startsWith("data:application/json;charset=utf-8,"), `unerwartete Adresse: ${adresse}`);
+  assert.equal(
+    decodeURIComponent(adresse.slice("data:application/json;charset=utf-8,".length)),
+    inhalt,
+    "und traegt genau das, was der Dienst ausgegeben hat"
+  );
+  assert.match(verweis.getAttribute("download"), /^smartrchrome-protokollbuch-.*\.json$/);
+  assert.equal(verweis.klicks, 1, "der Knopf loest den Verweis auch wirklich aus");
+
+  /* Der Weg braucht keine neue Pflichtberechtigung: eine data-Adresse, kein
+     chrome.downloads. Eine Berechtigung fuer einen Knopf, der einmal im Monat
+     gedrueckt wird, waere zu teuer. */
+  assert.ok(!/chrome\s*\.\s*downloads\s*\./.test(quelle), "kein Aufruf der Download-Schnittstelle");
+  const manifest = JSON.parse(await readFile(new URL("../../manifest.json", import.meta.url), "utf8"));
+  assert.ok(
+    !manifest.permissions.includes("downloads"),
+    "und keine neue Pflichtberechtigung im Manifest — sie stuende im Installationsdialog"
+  );
+});
+
+test("WB4 — Kommt kein Buch zurueck, gibt es eine Absage statt eines toten Knopfes", async (t) => {
+  for (const antwort of [{ json: "" }, {}, null]) {
+    const p = await panelStarten({ workerAntworten: { "buch:ausgeben": antwort } });
+    t.after(p.aufraeumen);
+    await p.f.buchOeffnen();
+    p.el("stoerung").textContent = "";
+
+    const gelungen = await p.f.buchAusgeben();
+
+    assert.equal(gelungen, false, `bei ${JSON.stringify(antwort)} wird nichts behauptet`);
+    assert.equal(p.el("buch-datei").hidden, true, "und kein Verweis auf eine Datei, die es nicht gibt");
+    assert.ok(
+      !String(p.el("buch-datei").getAttribute("href") || "").startsWith("data:"),
+      "und keine Adresse, hinter der eine Datei stehen soll, die es nicht gibt"
+    );
+    assert.match(p.el("stoerung").textContent, /Protokollbuch/, "der Mensch erfaehrt, dass es nicht ging");
+    assert.equal(p.el("stoerung").hidden, false);
+  }
+});
+
+/* ------------------------------------------------------------------ *
+ * I — Sprache (Vertrag §12)
+ * ------------------------------------------------------------------ */
+
+test("I1 — Jeder neue sichtbare Text ist katalogfaehig ausgezeichnet", () => {
+  /* Den Katalog fuellt A-SPRACHE in Stufe 3. Was hier gemessen wird, ist die
+     Vorarbeit: dass es zu jedem neuen Text einen Schluessel GIBT und dass die
+     Schluessel der Form aus §12 folgen. Ohne diesen Satz faende A-SPRACHE eine
+     Oberflaeche vor, in der ein Dutzend Saetze still auf Deutsch bleiben. */
+  const schluessel = [...html.matchAll(/data-i18n(?:-attr)?="([^"]+)"/g)].map((tr) => tr[1]);
+  assert.ok(schluessel.length >= 20, `erwartet mindestens 20 Auszeichnungen, gefunden: ${schluessel.length}`);
+
+  const BEREICHE = ["kopf", "dialog", "freigabe", "modus", "werkbank", "buch", "fehler"];
+  for (const s of schluessel) {
+    assert.match(s, /^[a-z][a-z0-9_]*$/, `„${s}" folgt nicht der Form aus §12`);
+    assert.ok(
+      BEREICHE.some((b) => s.startsWith(`${b}_`)),
+      `„${s}" traegt kein Bereichspraefix aus §12 (${BEREICHE.join(", ")})`
+    );
+  }
+  assert.equal(new Set(schluessel).size, schluessel.length, "kein Schluessel steht zweimal an zwei Texten");
+
+  /* Und die Stellen, die v3.5 neu bringt, sind wirklich dabei. Eine Liste ohne
+     Gegenprobe waere nur die Aussage „irgendwas ist ausgezeichnet". */
+  const mitSchluessel = new Set(
+    [...html.matchAll(/<[a-zA-Z][^>]*\sid="([^"]+)"[^>]*data-i18n="/g)].map((tr) => tr[1])
+  );
+  for (const id of [
+    "verbinden-tab",
+    "verbinden-hinweis",
+    "verbinden-start",
+    "trennen",
+    "stopp",
+    "menue-werkbank",
+    "menue-buch",
+    "modus-titel",
+    "modus-manual",
+    "modus-assist",
+    "modus-auto",
+    "modus-auskunft",
+    "modus-riegel",
+    "startseite-titel",
+    "werkbank-titel",
+    "buch-titel",
+    "buch-ausgeben",
+  ]) {
+    assert.ok(mitSchluessel.has(id), `#${id} traegt keinen Katalogschluessel`);
+  }
+});
+
+test("T6 — Ein Ereignis waehrend eines laufenden Abgleichs wird nachgeholt, nicht verschluckt", async (t) => {
+  /* Chrome feuert onUpdated je Tab mehrfach. Ein Ereignis, das waehrend eines
+     laufenden Abgleichs eintrifft, darf nicht schlicht verfallen: Sonst bliebe
+     der aktuelle Tab veraltet, und der eine Klick verbaende danach mit dem Tab
+     von vorhin, also mit dem, den der Mensch gerade NICHT ansieht.
+     Gemessen wird die Zahl der Abgleiche, nicht das Ergebnis — das Ergebnis
+     kaeme in dieser Nachbildung auch ohne das Nachholen zufaellig richtig
+     heraus, und ein Pruefsatz, der zufaellig gruen ist, ist keiner. */
+  const tabs = TABS_GEMISCHT();
+  const p = await panelStarten({ alleTabs: tabs });
+  t.after(p.aufraeumen);
+  p.aufrufeLeeren();
+
+  const erstes = p.f.tabsAuffrischen();
+  tabs[0].active = false;
+  tabs[1].active = true;
+  const zweites = p.f.tabsAuffrischen();
+  await erstes;
+  await zweites;
+  await new Promise((f) => setTimeout(f, 0));
+
+  const runden = p.aufrufe().filter((a) => a === "tabs.query").length;
+  assert.ok(
+    runden >= 4,
+    `zwei Ereignisse, aber nur ${runden / 2} Abgleich(e): das zweite ist verfallen`
+  );
+  assert.equal(p.zustand.aktuellerTab.id, 8, "und der Bestand steht danach auf dem neuen Tab");
+  assert.match(p.el("verbinden-hinweis").textContent, /eBay/);
 });

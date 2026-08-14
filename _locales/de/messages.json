@@ -1,0 +1,989 @@
+{
+  "ausweis_keine_knopf": {
+    "message": "Anmeldeseite öffnen"
+  },
+  "ausweis_keine_text": {
+    "message": "Ich habe deine Anmeldung noch nicht, und es ist auch kein SMarTrAgents-Tab offen. Melde dich in der Cloud an. Ich öffne dir auf Wunsch die Anmeldeseite."
+  },
+  "ausweis_keine_titel": {
+    "message": "Zuerst anmelden"
+  },
+  "ausweis_neuladen": {
+    "message": "Ich lade den SMarTrAgents-Tab neu. Sobald er da ist, habe ich deine Anmeldung."
+  },
+  "ausweis_uebergabe_knopf": {
+    "message": "SMarTrAgents-Tab neu laden"
+  },
+  "ausweis_uebergabe_text": {
+    "message": "Ich habe deine Anmeldung noch nicht. Lade den SMarTrAgents-Tab einmal neu (F5), dann bekomme ich sie automatisch."
+  },
+  "ausweis_uebergabe_titel": {
+    "message": "Mir fehlt deine Anmeldung"
+  },
+  "buch_ansage": {
+    "message": "Protokollbuch. Jede Fernaktion steht hier mit Zeit, Agent und Adresse."
+  },
+  "buch_ansicht_ausgeben": {
+    "message": "Buch ausgeben"
+  },
+  "buch_ansicht_titel": {
+    "message": "Was in deinem Namen geschehen ist"
+  },
+  "buch_auffrischen": {
+    "message": "Auffrischen"
+  },
+  "buch_ausgabe_im_feld": {
+    "message": "Der Text steht im Feld, du kannst ihn von dort kopieren."
+  },
+  "buch_ausgeben": {
+    "message": "Ausgeben"
+  },
+  "buch_ausgegeben": {
+    "message": "Fertig, der Text steht im Feld."
+  },
+  "buch_datei": {
+    "message": "Protokollbuch als Datei sichern"
+  },
+  "buch_datei_bereit": {
+    "message": "Das Protokollbuch liegt als Datei bereit."
+  },
+  "buch_ersatz_leer": {
+    "message": "Es steht noch nichts im Protokollbuch. Sobald ein Agent von außen etwas tut, kommt hier eine Zeile dazu."
+  },
+  "buch_frist": {
+    "message": "So viele Tage bleibt ein Eintrag stehen"
+  },
+  "buch_frist_gemerkt": {
+    "message": "Gemerkt, $1 Einträge sind weg."
+  },
+  "buch_frist_nicht_gemerkt": {
+    "message": "Die Dauer ließ sich gerade nicht merken, versuch es noch einmal."
+  },
+  "buch_frist_speichern": {
+    "message": "Dauer merken"
+  },
+  "buch_frist_ungueltig": {
+    "message": "Trag eine Zahl zwischen 0 und $1 ein."
+  },
+  "buch_json_feld": {
+    "message": "JSON des Protokollbuchs"
+  },
+  "buch_leer": {
+    "message": "Hier steht noch nichts. Es war noch kein Agent an deinem Browser."
+  },
+  "buch_nicht_geladen": {
+    "message": "Das Buch war gerade nicht zu lesen, versuch es noch einmal."
+  },
+  "buch_oeffnen": {
+    "message": "Protokollbuch …"
+  },
+  "buch_titel": {
+    "message": "Protokollbuch"
+  },
+  "buch_zurueck": {
+    "message": "Zurück"
+  },
+  "chat_modus_gruppe": {
+    "message": "Antwortmodus"
+  },
+  "chat_modus_normal": {
+    "message": "Normal Modus."
+  },
+  "chat_modus_smartr": {
+    "message": "SMarTr Modus."
+  },
+  "chat_noch_beschaeftigt": {
+    "message": "Ich arbeite noch an deiner vorigen Frage. Warte bitte, bis die Antwort da ist."
+  },
+  "chat_schritt_error": {
+    "message": "Störung beim Agenten"
+  },
+  "chat_schritt_info": {
+    "message": "Arbeitet"
+  },
+  "chat_schritt_response": {
+    "message": "Sagt"
+  },
+  "chat_schritt_thinking": {
+    "message": "Überlegt"
+  },
+  "chat_schritt_tool": {
+    "message": "Werkzeug"
+  },
+  "chat_schritt_werkzeug": {
+    "message": "Werkzeug $1"
+  },
+  "chat_warten": {
+    "message": "Niemand arbeitet …"
+  },
+  "chat_zeile": {
+    "message": "$1: $2"
+  },
+  "demo_abbruch": {
+    "message": "Alles klar, dann lasse ich den Rest. Die Verbindung bleibt bestehen."
+  },
+  "demo_fertig_ansage": {
+    "message": "Auftrag erledigt."
+  },
+  "demo_fertig_blase": {
+    "message": "Das war alles, was ich hier gefunden habe. Sag mir, was ich damit tun soll."
+  },
+  "demo_frage": {
+    "message": "Zeig mir, was hier anklickbar ist."
+  },
+  "demo_gefunden_eins": {
+    "message": "Ich habe 1 Bedienelement gefunden und zeige es dir."
+  },
+  "demo_gefunden_viele": {
+    "message": "Ich habe $1 Bedienelemente gefunden und zeige sie dir eins nach dem anderen."
+  },
+  "demo_nichts_ansage": {
+    "message": "Ich finde hier nichts Anklickbares im sichtbaren Bereich."
+  },
+  "demo_nichts_blase": {
+    "message": "Ich finde auf dieser Seite gerade nichts Anklickbares im sichtbaren Bereich."
+  },
+  "demo_schritt_frage": {
+    "message": "Schritt $1 von $2: ein Bedienelement zeigen."
+  },
+  "demo_schritt_gezeigt": {
+    "message": "Schritt $1 von $2 gezeigt."
+  },
+  "dialog_abbrechen": {
+    "message": "Abbrechen"
+  },
+  "dialog_abgebrochen": {
+    "message": "Abgebrochen. Es wurde keine Verbindung aufgebaut."
+  },
+  "dialog_abgebrochen_kennwort": {
+    "message": "Abgebrochen. Es ist keine Verbindung entstanden."
+  },
+  "dialog_abgebrochen_laufend": {
+    "message": "Abgebrochen. Die laufende Verbindung bleibt bestehen, Stopp ist weiter da."
+  },
+  "dialog_anmeldung_abbrechen": {
+    "message": "Abbrechen"
+  },
+  "dialog_anmeldung_geoeffnet": {
+    "message": "Ich habe die Anmeldeseite geöffnet. Melde dich dort an und komm dann hierher zurück."
+  },
+  "dialog_anmeldung_hinweis": {
+    "message": "Dein Passwort tippst du nie hier in die Erweiterung. Das ist Absicht und bleibt so."
+  },
+  "dialog_anmeldung_nochmal": {
+    "message": "Ich bin jetzt angemeldet, noch einmal versuchen"
+  },
+  "dialog_anmeldung_oeffnen": {
+    "message": "Anmeldeseite öffnen"
+  },
+  "dialog_anmeldung_text": {
+    "message": "Für eine Verbindung muss ich wissen, wer du bist. Melde dich bitte in der Cloud an, in einem eigenen Tab, mit echter Adresszeile."
+  },
+  "dialog_anmeldung_titel": {
+    "message": "Zuerst anmelden"
+  },
+  "dialog_ansage": {
+    "message": "Verbindung mit dieser Website. Zum Verbinden auf Verbindung herstellen. Dauer und Stufe kannst du vorher ändern. Jeden Schritt bestätigst du einzeln."
+  },
+  "dialog_antrag": {
+    "message": "Ich beantrage: Der Agent darf $1 $2 $3. "
+  },
+  "dialog_antrag_ende": {
+    "message": "Danach ist die Verbindung von selbst zu Ende. "
+  },
+  "dialog_antrag_offen": {
+    "message": "Ich verlängere die Freigabe selbst, bis du auf Stopp drückst. "
+  },
+  "dialog_antrag_schritt": {
+    "message": "Jeden Schritt bestätigst du einzeln. "
+  },
+  "dialog_antrag_server": {
+    "message": "Wie lange der Server wirklich bewilligt, sage ich dir beim Verbinden."
+  },
+  "dialog_bereich": {
+    "message": "in diesem einen Tab"
+  },
+  "dialog_dauer_1800": {
+    "message": "30 Minuten"
+  },
+  "dialog_dauer_3600": {
+    "message": "60 Minuten"
+  },
+  "dialog_dauer_600": {
+    "message": "10 Minuten"
+  },
+  "dialog_dauer_gruppe": {
+    "message": "Dauer der Verbindung"
+  },
+  "dialog_dauer_lang": {
+    "message": "$1 lang"
+  },
+  "dialog_dauer_legende": {
+    "message": "Wie lange?"
+  },
+  "dialog_dauer_offen": {
+    "message": "so lange, bis du beendest,"
+  },
+  "dialog_dauer_unbegrenzt": {
+    "message": "Unbegrenzt, bis du beendest"
+  },
+  "dialog_einstellungen_aendern": {
+    "message": "Dauer und Geltung ändern"
+  },
+  "dialog_erklaer_ansage": {
+    "message": "Verstanden. Es wurde nichts verändert."
+  },
+  "dialog_erklaer_zurueck": {
+    "message": "Zurück"
+  },
+  "dialog_fussnote": {
+    "message": "Beim Herstellen fragt Chrome nach der Freigabe für diese Seite. Mehr brauchst du meist nicht zu tun. Verlangt unser Dienst eine Rückfrage, öffnet sich dafür ein eigener Tab. Beim Beenden gibt SMarTrChrome alles zurück."
+  },
+  "dialog_geltung_legende": {
+    "message": "Wo gilt das?"
+  },
+  "dialog_geltung_rest": {
+    "message": "Andere Tabs und andere Seiten sieht der Agent nicht."
+  },
+  "dialog_geltung_stark": {
+    "message": "Nur dieser eine Tab"
+  },
+  "dialog_kennwort_abbrechen": {
+    "message": "Abbrechen"
+  },
+  "dialog_kennwort_anfrage": {
+    "message": "Ich frage die Freigabe an …"
+  },
+  "dialog_kennwort_ansage": {
+    "message": "Kennwort: $1. Vergleiche es im neuen Tab, bevor du freigibst."
+  },
+  "dialog_kennwort_da": {
+    "message": "Freigabe da. Ich stelle die Verbindung her."
+  },
+  "dialog_kennwort_erneut": {
+    "message": "Freigabeseite erneut öffnen"
+  },
+  "dialog_kennwort_hinweis": {
+    "message": "Im neuen Tab steht dasselbe Kennwort. Stimmt es dort nicht überein, gib nichts frei."
+  },
+  "dialog_kennwort_lage": {
+    "message": "Gleich geht ein Tab auf. Vergleiche dort das Kennwort und gib die Verbindung frei."
+  },
+  "dialog_kennwort_marke": {
+    "message": "Kennwort: $1"
+  },
+  "dialog_kennwort_titel": {
+    "message": "Kennwort für die Freigabe"
+  },
+  "dialog_kennwort_warten": {
+    "message": "Ich warte auf deine Freigabe im anderen Tab."
+  },
+  "dialog_kennwort_warten_lang": {
+    "message": "Ich warte weiter. Gib die Verbindung im anderen Tab frei oder brich hier ab."
+  },
+  "dialog_mehr_ansage": {
+    "message": "Dauer und Stufe. Ändere, was du möchtest, dann auf Verbindung herstellen."
+  },
+  "dialog_stufe_auskunft": {
+    "message": "Jeden Schritt bestätigst du einzeln. Passwörter tippt der Agent nie. Anmelden machst du selbst. Deine Wahl wird gemerkt und beim nächsten Mal vorbelegt."
+  },
+  "dialog_stufe_gruppe": {
+    "message": "Was der Agent darf"
+  },
+  "dialog_stufe_legende": {
+    "message": "Was darf der Agent?"
+  },
+  "dialog_stufe_read": {
+    "message": "Nur zusehen, lesen, blättern, zeigen"
+  },
+  "dialog_stufe_read_ansage": {
+    "message": "Er schaut nur zu."
+  },
+  "dialog_stufe_read_tut": {
+    "message": "zusehen und dir Dinge zeigen"
+  },
+  "dialog_stufe_voll": {
+    "message": "Vollzugriff, bedienen und selbständig weiterarbeiten"
+  },
+  "dialog_stufe_voll_ansage": {
+    "message": "Er arbeitet selbständig weiter und fragt nicht bei jedem Schritt. Anmelden machst du selbst."
+  },
+  "dialog_stufe_voll_tut": {
+    "message": "für dich klicken, tippen und selbständig weiterarbeiten"
+  },
+  "dialog_stufe_write": {
+    "message": "Bedienen, zusätzlich klicken und tippen"
+  },
+  "dialog_stufe_write_ansage": {
+    "message": "Er darf für dich klicken und tippen. Anmelden machst du selbst."
+  },
+  "dialog_stufe_write_tut": {
+    "message": "für dich klicken, tippen und ausfüllen"
+  },
+  "dialog_titel": {
+    "message": "Verbindung über SMarTrLink"
+  },
+  "dialog_verbinde": {
+    "message": "Ich stelle die Verbindung her …"
+  },
+  "dialog_verbinden": {
+    "message": "Verbindung herstellen"
+  },
+  "dialog_zweck_ort": {
+    "message": "der geöffneten Seite"
+  },
+  "dialog_zweck_read": {
+    "message": "Auf $1 mitlesen und dir Dinge zeigen"
+  },
+  "dialog_zweck_write": {
+    "message": "Auf $1 für dich klicken und tippen"
+  },
+  "ext_beschreibung": {
+    "message": "SMarTrAgents im Browser. Der Agent liest, zeigt, klickt, tippt und wählt aus, jeden Schritt gibst du frei. Passwörter nie."
+  },
+  "ext_name": {
+    "message": "SMarTrChrome Beta"
+  },
+  "ext_notbremse": {
+    "message": "Notbremse, Agentensitzung sofort beenden"
+  },
+  "ext_symbol_titel": {
+    "message": "SMarTrChrome, Niemand öffnen"
+  },
+  "fehler_abgemeldet": {
+    "message": "Du bist in der Cloud jetzt abgemeldet. Melde dich dort an, dann geht es weiter."
+  },
+  "fehler_anmeldung_abgelaufen": {
+    "message": "Deine Anmeldung gilt nicht mehr. Melde dich bitte in der Cloud neu an, dann reden wir weiter."
+  },
+  "fehler_bindung": {
+    "message": "Die Verbindung steht, aber ich konnte sie dem Agenten nicht übergeben. Der Beispielauftrag unten geht trotzdem. Für Aufträge im Gespräch baue die Verbindung bitte neu auf."
+  },
+  "fehler_bindung_ausweis": {
+    "message": "Die Verbindung steht, aber ich konnte sie dem Agenten nicht übergeben: Mir fehlt gerade deine Anmeldung. Melde dich in der Cloud an oder lade den SMarTrAgents-Tab neu, dann baue die Verbindung bitte neu auf."
+  },
+  "fehler_buch_ausgabe": {
+    "message": "Ich konnte das Protokollbuch gerade nicht ausgeben. Versuche es bitte gleich noch einmal."
+  },
+  "fehler_dienst_stumm": {
+    "message": "Der Hintergrunddienst der Erweiterung hat nicht geantwortet. Das liegt an der Erweiterung, nicht an dir. Starte Chrome neu, dann geht es wieder."
+  },
+  "fehler_intern": {
+    "message": "In der Erweiterung ist etwas schiefgegangen. Deine Frage ist nicht angekommen. Das liegt an uns, nicht an dir."
+  },
+  "fehler_kein_erfolg": {
+    "message": "Das hat nicht geklappt. Es ist keine Verbindung entstanden."
+  },
+  "fehler_neuladen": {
+    "message": "Ich konnte den SMarTrAgents-Tab nicht neu laden. Wechsle bitte selbst dorthin und drücke F5."
+  },
+  "fehler_rahmen": {
+    "message": "Ich konnte den Rahmen auf dieser Seite nicht anzeigen."
+  },
+  "fehler_rahmen_sicherheit": {
+    "message": "Ich konnte den Rahmen auf dieser Seite nicht anzeigen. Aus Sicherheitsgründen baue ich dann keine Sitzung auf."
+  },
+  "fehler_schritt": {
+    "message": "Der Schritt hat nicht geklappt."
+  },
+  "fehler_verlaengern": {
+    "message": "Ich konnte die Verbindung nicht verlängern. Sie endet zur angezeigten Zeit. Du kannst danach neu verbinden."
+  },
+  "freigabe_abgelehnt_ansage": {
+    "message": "Abgelehnt. Dieser Schritt findet nicht statt, die Verbindung bleibt bestehen. Zum Beenden drückst du auf Stopp."
+  },
+  "freigabe_abgelehnt_knopf": {
+    "message": "Noch einmal versuchen"
+  },
+  "freigabe_abgelehnt_text": {
+    "message": "Du hast die Freigabe für diese Seite abgelehnt. Ohne sie kann ich die Seite nicht lesen. Das ist in Ordnung, du kannst es jederzeit neu versuchen."
+  },
+  "freigabe_abgelehnt_titel": {
+    "message": "Freigabe abgelehnt"
+  },
+  "freigabe_frage_ansage": {
+    "message": "$1 Freigeben oder ablehnen?"
+  },
+  "freigabe_ja": {
+    "message": "Freigeben"
+  },
+  "freigabe_nein": {
+    "message": "Ablehnen"
+  },
+  "freigabe_ohne_uhr_ansage": {
+    "message": "Wie lange du Zeit hast, weiß ich nicht, antworte am besten sofort."
+  },
+  "freigabe_ohne_uhr_zeile": {
+    "message": "Wie lange der Agent noch wartet, weiß ich hier nicht."
+  },
+  "freigabe_rest_eine": {
+    "message": "Noch 1 Sekunde für deine Antwort."
+  },
+  "freigabe_rest_gleich": {
+    "message": "Die Zeit für diese Antwort ist gleich um."
+  },
+  "freigabe_rest_viele": {
+    "message": "Noch $1 Sekunden für deine Antwort."
+  },
+  "freigabe_standardfrage": {
+    "message": "Der Agent möchte einen Schritt ausführen."
+  },
+  "freigabe_zurueckgezogen_ansage": {
+    "message": "Der Agent hat nicht länger gewartet. Dieser Schritt ist nicht passiert."
+  },
+  "freigabe_zurueckgezogen_blase": {
+    "message": "Ich habe nicht länger auf deine Antwort gewartet. Dieser Schritt ist nicht passiert. Sag mir, ob ich es noch einmal versuchen soll."
+  },
+  "kopf_aktiv": {
+    "message": "Aktiv"
+  },
+  "kopf_chip_angemeldet": {
+    "message": "Du bist angemeldet; Konto und Guthaben sind verbunden. Eine Steuersitzung läuft gerade nicht. Öffne die Seite, die der Agent bedienen soll, und drücke dort auf Mit diesem Tab verbinden."
+  },
+  "kopf_chip_getrennt": {
+    "message": "Es besteht keine Verbindung. Der Agent kann auf dieser Seite nichts sehen und nichts tun."
+  },
+  "kopf_chip_sitzung": {
+    "message": "Der Agent ist auf diesem Tab: $1. Die Freigabe endet mit der Sitzung und wird zurückgegeben."
+  },
+  "kopf_cloud_sitzung": {
+    "message": "Cloud-Sitzung aktiv:"
+  },
+  "kopf_eingabe_marke": {
+    "message": "Nachricht an Niemand"
+  },
+  "kopf_einstellungen_oeffnen": {
+    "message": "Dauer und Geltung ändern"
+  },
+  "kopf_fusszeile": {
+    "message": "Esc zweimal = sofort Stopp. Auch Alt+Umschalt+S."
+  },
+  "kopf_guthaben": {
+    "message": "Guthaben: $1 GT"
+  },
+  "kopf_guthaben_keine": {
+    "message": "Guthaben: nicht angemeldet"
+  },
+  "kopf_guthaben_knapp": {
+    "message": "Achtung, dein Guthaben wird knapp: noch $1 GT."
+  },
+  "kopf_guthaben_laedt": {
+    "message": "Guthaben: wird geholt …"
+  },
+  "kopf_guthaben_leer": {
+    "message": "Dein Guthaben ist aufgebraucht. In der Cloud kannst du aufladen."
+  },
+  "kopf_guthaben_uebergabe": {
+    "message": "Guthaben: Anmeldung fehlt noch"
+  },
+  "kopf_leer_rede": {
+    "message": "Hallo. Ich bin Niemand. Sag mir, was du brauchst."
+  },
+  "kopf_leer_rest": {
+    "message": ", alles danach mache ich."
+  },
+  "kopf_leer_stark": {
+    "message": "Anmelden übernimmst du selbst"
+  },
+  "kopf_menue": {
+    "message": "Menü"
+  },
+  "kopf_menue_beenden": {
+    "message": "Verbindung beenden"
+  },
+  "kopf_menue_sicht": {
+    "message": "Große Sichtbarkeit"
+  },
+  "kopf_menue_verbinden": {
+    "message": "Verbindung aufbauen …"
+  },
+  "kopf_menue_vorlesen": {
+    "message": "Vorlesen"
+  },
+  "kopf_menue_vorlesen_alles": {
+    "message": "Alles vorlesen"
+  },
+  "kopf_menue_vorlesen_aus": {
+    "message": "Aus"
+  },
+  "kopf_menue_vorlesen_sicher": {
+    "message": "Nur wichtige Ansagen"
+  },
+  "kopf_name": {
+    "message": "Niemand"
+  },
+  "kopf_neues_gespraech": {
+    "message": "Neues Gespräch"
+  },
+  "kopf_neues_gespraech_ansage": {
+    "message": "Neues Gespräch. Die Verbindung bleibt, wie sie ist."
+  },
+  "kopf_nicht_verbunden": {
+    "message": "Nicht verbunden"
+  },
+  "kopf_nichts_vorzulesen": {
+    "message": "Es gibt noch nichts vorzulesen."
+  },
+  "kopf_protokoll_titel": {
+    "message": "Was der Agent tut"
+  },
+  "kopf_schon_verbunden": {
+    "message": "Es läuft schon eine Verbindung. Beende sie mit Stopp, dann kannst du eine neue aufbauen."
+  },
+  "kopf_senden": {
+    "message": "Senden"
+  },
+  "kopf_sicht_an": {
+    "message": "Große Sichtbarkeit an."
+  },
+  "kopf_sicht_aus": {
+    "message": "Große Sichtbarkeit aus."
+  },
+  "kopf_stopp": {
+    "message": "Stopp"
+  },
+  "kopf_stufe_read": {
+    "message": "Nur zusehen"
+  },
+  "kopf_stufe_voll": {
+    "message": "Vollzugriff"
+  },
+  "kopf_stufe_vorfuehrung": {
+    "message": "Vorführung"
+  },
+  "kopf_stufe_write": {
+    "message": "Bedienen"
+  },
+  "kopf_tabliste_titel": {
+    "message": "Ein anderer Tab"
+  },
+  "kopf_titel": {
+    "message": "SMarTrChrome, Niemand"
+  },
+  "kopf_trennen": {
+    "message": "Trennen"
+  },
+  "kopf_verbinden_hinweis": {
+    "message": "für den Tab, den du gerade offen hast"
+  },
+  "kopf_verbinden_tab": {
+    "message": "Mit diesem Tab verbinden"
+  },
+  "kopf_verlauf_marke": {
+    "message": "Gespräch mit Niemand"
+  },
+  "kopf_vorfuehrung": {
+    "message": "Nur vorführen, ohne Server, ohne Agent"
+  },
+  "kopf_vorlesen_alles_ansage": {
+    "message": "Ich lese alles vor."
+  },
+  "kopf_vorlesen_aus_ansage": {
+    "message": "Vorlesen ist aus."
+  },
+  "kopf_vorlesen_knopf": {
+    "message": "Letzte Antwort vorlesen"
+  },
+  "kopf_vorlesen_sicher_ansage": {
+    "message": "Ich lese nur noch wichtige Ansagen vor."
+  },
+  "kopf_vorschlag": {
+    "message": "Zeig mir, was hier anklickbar ist"
+  },
+  "kopf_zustand_aktiv": {
+    "message": "Aktiv · $1"
+  },
+  "kopf_zustand_angemeldet": {
+    "message": "Angemeldet · bereit"
+  },
+  "kopf_zustand_vorfuehrung": {
+    "message": "Vorführung · $1"
+  },
+  "kopf_zustand_warte": {
+    "message": "Warte auf deine Freigabe"
+  },
+  "matrix_agent_adresse": {
+    "message": "Adresse für $1"
+  },
+  "matrix_agent_dazu": {
+    "message": "Adresse aufnehmen"
+  },
+  "matrix_agent_leer": {
+    "message": "Für diesen Agenten ist noch nichts eingetragen."
+  },
+  "matrix_agenten": {
+    "message": "Was ein einzelner Agent wo darf"
+  },
+  "matrix_domain_dazu": {
+    "message": "Adresse aufnehmen"
+  },
+  "matrix_domain_neu": {
+    "message": "Adresse hinzufügen"
+  },
+  "matrix_domain_weg": {
+    "message": "Adresse entfernen"
+  },
+  "matrix_domains": {
+    "message": "Adressen, auf denen mehr ohne Rückfrage laufen darf"
+  },
+  "matrix_domains_leer": {
+    "message": "Noch keine Adresse. Ohne Eintrag fragt die Erweiterung bei allem nach, und das ist die sichere Seite."
+  },
+  "matrix_einleitung": {
+    "message": "Alles hier ist zu Anfang aus. Was du einschaltest, gilt nur für die Adresse, die daneben steht."
+  },
+  "matrix_gespeichert": {
+    "message": "Gespeichert."
+  },
+  "matrix_speichern": {
+    "message": "Einstellung speichern"
+  },
+  "matrix_sperrliste": {
+    "message": "Adressen, die tabu bleiben, eine je Zeile"
+  },
+  "matrix_steht_gesperrt": {
+    "message": "Diese Adresse steht auf deiner Sperrliste."
+  },
+  "matrix_titel": {
+    "message": "Was ohne Rückfrage laufen darf"
+  },
+  "modus_assist": {
+    "message": "Mitdenken"
+  },
+  "modus_assist_auskunft": {
+    "message": "Lesen, Klicken, Tippen und Blättern erledige ich allein, alles Weitere lege ich dir vor."
+  },
+  "modus_auto": {
+    "message": "Selbständig"
+  },
+  "modus_auto_auskunft": {
+    "message": "Zusätzlich erledige ich das, was du für diese Website ausdrücklich freigeschaltet hast, ohne Rückfrage."
+  },
+  "modus_manual": {
+    "message": "Jeder Schritt einzeln"
+  },
+  "modus_manual_auskunft": {
+    "message": "Ich frage dich vor jedem Schritt, auch vor dem Lesen einer Seite."
+  },
+  "modus_riegel": {
+    "message": "Zahlungen, Passwörter, Löschungen, Dateien, Browser-Berechtigungen und CAPTCHAs lege ich dir in jedem Modus vor, auch im selbständigen."
+  },
+  "modus_titel": {
+    "message": "Wie selbständig soll ich arbeiten?"
+  },
+  "notaus_esc": {
+    "message": "Gestoppt mit Escape Escape. Der Agent steuert nicht mehr."
+  },
+  "notaus_schild": {
+    "message": "Gestoppt über den Knopf im Tab. Der Agent steuert nicht mehr."
+  },
+  "notaus_seitenleiste": {
+    "message": "Gestoppt. Der Agent steuert nicht mehr."
+  },
+  "notaus_tastenkuerzel": {
+    "message": "Gestoppt über das Tastenkürzel. Der Agent steuert nicht mehr."
+  },
+  "overlay_angriff": {
+    "message": "Diese Seite entfernt das Sichtzeichen immer wieder, deshalb ist die Sitzung jetzt beendet."
+  },
+  "overlay_gestoppt": {
+    "message": "GESTOPPT, der Agent steuert nicht mehr"
+  },
+  "overlay_kontext_weg": {
+    "message": "Die Verbindung zur Erweiterung ist weg, die Sitzung ist damit ohnehin beendet."
+  },
+  "overlay_modus_assist": {
+    "message": "Begleitet"
+  },
+  "overlay_modus_auto": {
+    "message": "Automatik"
+  },
+  "overlay_modus_manual": {
+    "message": "Handbetrieb"
+  },
+  "overlay_notaus": {
+    "message": "STOPP"
+  },
+  "overlay_notaus_marke": {
+    "message": "Stopp, die Steuerung sofort beenden"
+  },
+  "overlay_schild": {
+    "message": "SMarTrAgent steuert diesen Tab. Esc Esc = Stopp"
+  },
+  "overlay_schild_grund": {
+    "message": "SMarTrAgent steuert diesen Tab, Esc Esc = Stopp"
+  },
+  "overlay_schild_vorfuehrung": {
+    "message": "Vorführung ohne Agent. Esc Esc = Stopp"
+  },
+  "overlay_schild_zeile": {
+    "message": "$1, $2"
+  },
+  "protokoll_abgelaufen": {
+    "message": "Abgelaufen: der Agent hat auf die Antwort nicht mehr gewartet"
+  },
+  "protokoll_abgelehnt": {
+    "message": "Abgelehnt: dieser Schritt findet nicht statt"
+  },
+  "protokoll_demo_fertig": {
+    "message": "Fertig: alle gefundenen Elemente gezeigt"
+  },
+  "protokoll_erledigt": {
+    "message": "Erledigt: $1"
+  },
+  "protokoll_lesen": {
+    "message": "Lese die Seite: sichtbare Bedienelemente einsammeln"
+  },
+  "protokoll_nicht_ausgefuehrt": {
+    "message": "Nicht ausgeführt: $1"
+  },
+  "protokoll_verlaengert": {
+    "message": "Verlängert: die Freigabe läuft weiter"
+  },
+  "protokoll_zeigen": {
+    "message": "Zeigen: „$1“ ($2, $3 von $4)"
+  },
+  "sitzung_code_marke": {
+    "message": "Sitzungscode $1"
+  },
+  "sitzung_dauer_gekuerzt": {
+    "message": "Du hast $1 gewählt, bekommen hast du $2."
+  },
+  "sitzung_eine_minute": {
+    "message": "Noch eine Minute. Danach endet die Verbindung von selbst."
+  },
+  "sitzung_ende_abgelaufen": {
+    "message": "Die Sitzung ist beendet. Die Freigabe habe ich zurückgegeben."
+  },
+  "sitzung_ende_nutzer": {
+    "message": "Beendet. Die Freigabe habe ich zurückgegeben."
+  },
+  "sitzung_ende_verloren": {
+    "message": "Die Verbindung ist abgerissen. Die Freigabe habe ich zurückgegeben."
+  },
+  "sitzung_haende_read": {
+    "message": "Ich sehe diesen Tab jetzt: Frag mich, was auf der Seite steht, oder lass dir Dinge zeigen."
+  },
+  "sitzung_haende_write": {
+    "message": "Ich habe jetzt Hände für diesen Tab: Sag mir, was ich klicken, ausfüllen oder nachsehen soll. Jeden Schritt bestätigst du einzeln."
+  },
+  "sitzung_leerlauf": {
+    "message": "Ohne Auftrag endet die Verbindung nach $1 von selbst."
+  },
+  "sitzung_schritt_auto": {
+    "message": "Ich arbeite selbständig weiter und frage nicht bei jedem Schritt. "
+  },
+  "sitzung_schritt_einzeln": {
+    "message": "Ich frage dich vor jedem Schritt. "
+  },
+  "sitzung_verbunden_ansage": {
+    "message": "Verbunden. $1Der Agent ist jetzt auf diesem Tab. Noch etwa $2 Minuten. $3 Zweimal Escape beendet sofort."
+  },
+  "sitzung_verbunden_blase": {
+    "message": "Verbunden. $1Ich bin noch etwa $2 Minuten für dich da."
+  },
+  "sitzung_zwei_minuten": {
+    "message": "Noch zwei Minuten."
+  },
+  "sperre_browser_knopf": {
+    "message": "Verstanden"
+  },
+  "sperre_browser_text": {
+    "message": "Diese Art von Seite kann ich nicht lesen. Sie gehört dem Browser selbst. Öffne die Seite, die ich für dich lesen soll, in einem normalen Tab und drücke dort auf Mit diesem Tab verbinden."
+  },
+  "sperre_browser_titel": {
+    "message": "Diese Seite gehört dem Browser"
+  },
+  "sperre_cloud_knopf": {
+    "message": "Verstanden"
+  },
+  "sperre_cloud_text": {
+    "message": "Deine Anmeldung bekomme ich von dieser Seite automatisch; Konto und Guthaben sind verbunden, da musst du nichts tun. Nur ARBEITEN darf ich auf der SMarTrAgents-Seite selbst nicht. Das ist Absicht, damit sich niemand über diese Seite selbst eine Freigabe erteilen kann. Öffne die Seite, die ich für dich bedienen oder lesen soll, in einem anderen Tab und drücke dort auf Mit diesem Tab verbinden."
+  },
+  "sperre_cloud_titel": {
+    "message": "Hier arbeite ich nicht, verbunden sind wir trotzdem"
+  },
+  "sprache_code": {
+    "message": "de"
+  },
+  "sprache_sprechcode": {
+    "message": "de-DE"
+  },
+  "start_agent": {
+    "message": "Am Werk:"
+  },
+  "start_aktualisieren": {
+    "message": "Liste auffrischen"
+  },
+  "start_leer": {
+    "message": "Hier ist gerade kein Tab, den ich verbinden kann."
+  },
+  "start_stand_frei": {
+    "message": "Wähle einen Tab, dann geht es los."
+  },
+  "start_stand_verbunden": {
+    "message": "Verbunden mit"
+  },
+  "start_tab_gesperrt": {
+    "message": "Dieser Tab hat sich seit dem Aufbau der Liste geändert, frisch die Liste bitte auf."
+  },
+  "start_tabs_nicht_geladen": {
+    "message": "Die Liste der Tabs war gerade nicht zu bekommen, frisch sie bitte auf."
+  },
+  "start_titel": {
+    "message": "Deine offenen Tabs"
+  },
+  "start_trennen": {
+    "message": "Verbindung beenden"
+  },
+  "start_trennen_ging_nicht": {
+    "message": "Das Beenden kam gerade nicht durch, versuch es noch einmal."
+  },
+  "start_verbinden": {
+    "message": "Verbinden"
+  },
+  "start_verbinden_ging_nicht": {
+    "message": "Das Verbinden kam gerade nicht durch, versuch es noch einmal."
+  },
+  "start_verbinden_mit": {
+    "message": "Verbinden mit $1"
+  },
+  "tabliste_leer_text": {
+    "message": "Gerade ist kein weiterer Tab offen, den ich bedienen könnte. Öffne die Seite, um die es geht, in einem Tab; danach steht sie hier."
+  },
+  "tabliste_leer_titel": {
+    "message": "Andere Fenster"
+  },
+  "vorfuehrung_ansage": {
+    "message": "Vorführung gestartet. Es ist kein Agent verbunden. Zehn Minuten."
+  },
+  "vorfuehrung_blase": {
+    "message": "Das ist eine Vorführung ohne Server. Kein Agent ist verbunden, es wird nichts gesteuert. Du siehst nur, was diese Erweiterung anzeigt."
+  },
+  "werkbank_ablauf_oeffnen": {
+    "message": "Öffnen"
+  },
+  "werkbank_ansage": {
+    "message": "Regeln und Abläufe. Hier stellst du je Website ein, was ohne Rückfrage laufen darf."
+  },
+  "werkbank_aufnahme_aus": {
+    "message": "Es läuft keine Aufnahme."
+  },
+  "werkbank_aufnahme_fertig": {
+    "message": "Aufgezeichnet, $1 Schritte stehen als neuer Ablauf hier."
+  },
+  "werkbank_aufnahme_laeuft": {
+    "message": "Die Aufnahme läuft. Mach jetzt im Tab, was der Ablauf können soll."
+  },
+  "werkbank_aufnahme_leer": {
+    "message": "Die Aufnahme ist beendet, aufgezeichnet wurde nichts."
+  },
+  "werkbank_aufnahme_start": {
+    "message": "Aufnahme starten"
+  },
+  "werkbank_aufnahme_stop": {
+    "message": "Aufnahme beenden"
+  },
+  "werkbank_aufnahme_titel": {
+    "message": "Aufzeichnen"
+  },
+  "werkbank_ausgabe_im_feld": {
+    "message": "Der Text steht im Feld, du kannst ihn von dort kopieren."
+  },
+  "werkbank_ausgeben": {
+    "message": "Alle ausgeben"
+  },
+  "werkbank_ausgegeben": {
+    "message": "Fertig, der Text steht im Feld."
+  },
+  "werkbank_austausch_titel": {
+    "message": "Sichern und zurückholen"
+  },
+  "werkbank_beschreibung": {
+    "message": "Beschreibung"
+  },
+  "werkbank_eingelesen": {
+    "message": "Eingelesen, $1 Abläufe stehen jetzt hier."
+  },
+  "werkbank_einlesen": {
+    "message": "Aus dem Feld einlesen"
+  },
+  "werkbank_einzeln_ausgeben": {
+    "message": "Diesen Ablauf ausgeben"
+  },
+  "werkbank_ersatz_leer": {
+    "message": "Für diese Website ist noch nichts freigeschaltet, und gespeicherte Abläufe gibt es auch noch keine."
+  },
+  "werkbank_geloescht": {
+    "message": "Gelöscht."
+  },
+  "werkbank_gesichert": {
+    "message": "Gespeichert."
+  },
+  "werkbank_hoch": {
+    "message": "Nach oben"
+  },
+  "werkbank_json_feld": {
+    "message": "JSON der Abläufe"
+  },
+  "werkbank_kopieren": {
+    "message": "Verdoppeln"
+  },
+  "werkbank_laeuft": {
+    "message": "Der Ablauf ist unterwegs, jeden Schritt gibst du frei wie sonst auch."
+  },
+  "werkbank_leer": {
+    "message": "Hier ist noch kein Ablauf. Zeichne einen auf, dann steht er hier."
+  },
+  "werkbank_liste_titel": {
+    "message": "Deine Abläufe"
+  },
+  "werkbank_loeschen": {
+    "message": "Löschen"
+  },
+  "werkbank_name": {
+    "message": "Name"
+  },
+  "werkbank_nicht_geladen": {
+    "message": "Die Abläufe waren gerade nicht zu lesen, versuch es noch einmal."
+  },
+  "werkbank_nicht_gestartet": {
+    "message": "Der Ablauf kam gerade nicht durch, versuch es noch einmal."
+  },
+  "werkbank_oeffnen": {
+    "message": "Regeln und Abläufe …"
+  },
+  "werkbank_platzhalter": {
+    "message": "Werte, die der Ablauf braucht, mit Komma getrennt"
+  },
+  "werkbank_runter": {
+    "message": "Nach unten"
+  },
+  "werkbank_schritt_weg": {
+    "message": "Weg damit"
+  },
+  "werkbank_spielen": {
+    "message": "Abspielen"
+  },
+  "werkbank_titel": {
+    "message": "Regeln und Abläufe"
+  },
+  "werkbank_weg": {
+    "message": "Diesen Ablauf gibt es nicht mehr."
+  },
+  "werkbank_werte": {
+    "message": "Werte für diesen Lauf, Name gleich Wert je Zeile"
+  },
+  "werkbank_zurueck": {
+    "message": "Zurück"
+  },
+  "zeit_eine_minute": {
+    "message": "eine Minute"
+  },
+  "zeit_minuten": {
+    "message": "$1 Minuten"
+  },
+  "zeit_sekunden": {
+    "message": "$1 Sekunden"
+  }
+}

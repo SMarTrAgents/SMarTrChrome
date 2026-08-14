@@ -1,0 +1,828 @@
+/*
+ * Prüfung der Selektor-Kaskade — das echte `src/content/selektor.js`,
+ * gefahren gegen einen Seitenbaum, der Selektoren wirklich auflöst.
+ *
+ * Warum die Attrappe hier einen echten kleinen Selektor-Motor hat und nicht
+ * bloss vorbereitete Antworten: Diese Datei baut Anker UND löst sie wieder
+ * auf. Eine Attrappe, die auf `querySelectorAll` immer dasselbe Element
+ * zurückgibt, würde jeden Anker für eindeutig halten — auch den, der auf einer
+ * echten Seite zwei Knöpfe trifft. Gemessen würde dann nur, dass die Funktion
+ * eine Zeichenkette zurückgibt.
+ *
+ * Das Akzeptanzkriterium des Auftrags steht in S7 und S8: Ändert sich die
+ * Seite so, dass Anker 1 bricht, trägt Anker 2 den Schritt weiter.
+ *
+ * Was die Attrappe NICHT kann und was deshalb am Gerät bleibt: echtes Layout,
+ * Schattenbäume, fremde Rahmenseiten. Der Selektor-Motor kennt genau die
+ * Formen, die `selektor.js` selbst erzeugt — trifft er auf etwas anderes,
+ * wirft er, statt still „kein Treffer" zu sagen. Ein neuer Ankertyp fällt so
+ * im Prüfsatz auf und nicht erst beim Kunden.
+ */
+
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import vm from "node:vm";
+
+const QUELLE = new URL("../content/selektor.js", import.meta.url);
+
+/* ------------------------------------------------------------------ *
+ * Ein kleiner, echter Seitenbaum
+ * ------------------------------------------------------------------ */
+
+/** Ein Bauplan für einen Knoten. `inhalt` ist Text oder eine Liste von Kindern. */
+export function k(tag, attrs = {}, inhalt = [], merke = null) {
+  return { tag, attrs, inhalt, merke };
+}
+
+function kompaktParsen(text) {
+  let rest = String(text).trim();
+  const teil = { tag: null, id: null, klassen: [], attrs: [], nth: null };
+  if (rest.startsWith("*")) {
+    teil.tag = "*";
+    rest = rest.slice(1);
+  } else {
+    const tagM = /^[a-zA-Z][\w-]*/.exec(rest);
+    if (tagM) {
+      teil.tag = tagM[0].toUpperCase();
+      rest = rest.slice(tagM[0].length);
+    }
+  }
+  while (rest) {
+    let m;
+    if ((m = /^#([\w-]+)/.exec(rest))) teil.id = m[1];
+    else if ((m = /^\.([\w-]+)/.exec(rest))) teil.klassen.push(m[1]);
+    else if ((m = /^\[([\w-]+)(?:="([^"]*)")?\]/.exec(rest))) teil.attrs.push([m[1].toLowerCase(), m[2]]);
+    else if ((m = /^:nth-of-type\((\d+)\)/.exec(rest))) teil.nth = Number(m[1]);
+    else throw new Error(`Die Attrappe kennt diesen Selektorteil nicht: „${rest}" (aus „${text}")`);
+    rest = rest.slice(m[0].length);
+  }
+  return teil;
+}
+
+function passt(el, teil) {
+  if (teil.tag && teil.tag !== "*" && el.tagName !== teil.tag) return false;
+  if (teil.id && el.getAttribute("id") !== teil.id) return false;
+  for (const kl of teil.klassen) {
+    if (!String(el.getAttribute("class") || "").split(/\s+/).includes(kl)) return false;
+  }
+  for (const [name, wert] of teil.attrs) {
+    const hat = el.getAttribute(name);
+    if (hat === null) return false;
+    if (wert !== undefined && hat !== wert) return false;
+  }
+  if (teil.nth !== null) {
+    const eltern = el.parentElement;
+    if (!eltern) return teil.nth === 1;
+    const gleiche = eltern.children.filter((g) => g.tagName === el.tagName);
+    if (gleiche.indexOf(el) + 1 !== teil.nth) return false;
+  }
+  return true;
+}
+
+/*
+ * Selektoren in Stücke schneiden, ohne in Klammern und Anführungszeichen zu
+ * schneiden.
+ *
+ * Beim ersten Lauf am 14.08.2026 zerlegte die Attrappe hier stumpf an jedem
+ * Leerzeichen. `[aria-label="Erneut einstellen"]` wurde damit zu zwei Gliedern
+ * einer Nachfahrenkette, traf nichts, und `selektor.js` verwarf einen völlig
+ * gesunden Anker als mehrdeutig. Der Fehler lag in der Attrappe, gekostet
+ * hätte er den zweiten Anker der ganzen Kaskade.
+ */
+function zerlegen(text, trenner) {
+  const stuecke = [];
+  let jetzt = "";
+  let klammer = 0;
+  let anfuehrung = null;
+  for (const zeichen of String(text)) {
+    if (anfuehrung) {
+      jetzt += zeichen;
+      if (zeichen === anfuehrung) anfuehrung = null;
+      continue;
+    }
+    if (zeichen === '"' || zeichen === "'") {
+      anfuehrung = zeichen;
+      jetzt += zeichen;
+      continue;
+    }
+    if (zeichen === "[") klammer += 1;
+    if (zeichen === "]") klammer -= 1;
+    if (!klammer && trenner.test(zeichen)) {
+      if (jetzt) stuecke.push(jetzt);
+      jetzt = "";
+      continue;
+    }
+    jetzt += zeichen;
+  }
+  if (jetzt) stuecke.push(jetzt);
+  return stuecke;
+}
+
+function ketteParsen(gruppe) {
+  const teile = zerlegen(gruppe.trim(), /\s/);
+  const kette = [];
+  let komb = " ";
+  for (const stueck of teile) {
+    if (stueck === ">") {
+      komb = ">";
+      continue;
+    }
+    kette.push({ teil: kompaktParsen(stueck), komb });
+    komb = " ";
+  }
+  return kette;
+}
+
+function passtKette(el, kette) {
+  if (!passt(el, kette[kette.length - 1].teil)) return false;
+  let knoten = el;
+  for (let i = kette.length - 2; i >= 0; i--) {
+    const komb = kette[i + 1].komb;
+    if (komb === ">") {
+      knoten = knoten.parentElement;
+      if (!knoten || !passt(knoten, kette[i].teil)) return false;
+    } else {
+      let a = knoten.parentElement;
+      let gefunden = null;
+      while (a) {
+        if (passt(a, kette[i].teil)) {
+          gefunden = a;
+          break;
+        }
+        a = a.parentElement;
+      }
+      if (!gefunden) return false;
+      knoten = gefunden;
+    }
+  }
+  return true;
+}
+
+function nachfahren(el, raus = []) {
+  for (const kind of el.children) {
+    raus.push(kind);
+    nachfahren(kind, raus);
+  }
+  return raus;
+}
+
+function suchen(wurzel, selektor) {
+  const menge =
+    wurzel.nodeType === 9
+      ? [wurzel.documentElement, ...nachfahren(wurzel.documentElement)]
+      : nachfahren(wurzel);
+  const gruppen = zerlegen(selektor, /,/).map((g) => ketteParsen(g)).filter((kette) => kette.length);
+  if (!gruppen.length) throw new Error(`leerer Selektor: „${selektor}"`);
+  return menge.filter((el) => gruppen.some((kette) => passtKette(el, kette)));
+}
+
+let laufendeNr = 0;
+
+function knotenBauen(bauplan, dok, eltern, register) {
+  const attrs = new Map();
+  for (const [n, w] of Object.entries(bauplan.attrs || {})) {
+    if (n.startsWith("__")) continue;
+    attrs.set(n.toLowerCase(), String(w));
+  }
+  const tag = String(bauplan.tag).toUpperCase();
+  const inhalt = [];
+  const el = {
+    nodeType: 1,
+    tagName: tag,
+    ownerDocument: dok,
+    parentElement: eltern,
+    children: [],
+    isConnected: true,
+    __inhalt: inhalt,
+    __nr: ++laufendeNr,
+    __rect: bauplan.attrs && bauplan.attrs.__rect,
+    __wertGelesen: 0,
+    get attributes() {
+      return [...attrs.entries()].map(([name, value]) => ({ name, value }));
+    },
+    getAttribute(n) {
+      const s = String(n).toLowerCase();
+      return attrs.has(s) ? attrs.get(s) : null;
+    },
+    setAttribute(n, w) {
+      attrs.set(String(n).toLowerCase(), String(w));
+    },
+    removeAttribute(n) {
+      attrs.delete(String(n).toLowerCase());
+    },
+    hasAttribute(n) {
+      return attrs.has(String(n).toLowerCase());
+    },
+    get id() {
+      return attrs.get("id") || "";
+    },
+    get name() {
+      return attrs.get("name") || "";
+    },
+    get type() {
+      return attrs.get("type") || (tag === "INPUT" ? "text" : undefined);
+    },
+    get isContentEditable() {
+      const w = attrs.get("contenteditable");
+      return w === "" || w === "true";
+    },
+    get textContent() {
+      return inhalt.map((s) => (typeof s === "string" ? s : s.textContent)).join("");
+    },
+    get innerText() {
+      return el.textContent;
+    },
+    querySelectorAll(sel) {
+      return suchen(el, sel);
+    },
+    querySelector(sel) {
+      return suchen(el, sel)[0] || null;
+    },
+    matches(sel) {
+      return suchen(dok, sel).includes(el);
+    },
+    closest(sel) {
+      let k2 = el;
+      while (k2 && k2.nodeType === 1) {
+        if (passt(k2, kompaktParsen(sel))) return k2;
+        k2 = k2.parentElement;
+      }
+      return null;
+    },
+    getBoundingClientRect() {
+      const r = el.__rect || { left: 10, top: 20, width: 120, height: 30 };
+      return { ...r, x: r.left, y: r.top, right: r.left + r.width, bottom: r.top + r.height };
+    },
+    focus() {},
+    scrollIntoView() {},
+    dispatchEvent() {
+      return true;
+    },
+  };
+
+  /* Der Wert liegt hinter einem Zugriffszähler. Damit ist „der Rekorder liest
+     den Wert eines Geheimfeldes GAR NICHT erst aus" (§7.2) messbar, und zwar
+     als Tatsache über den Zugriff — nicht als Textsuche im Ergebnis, die auch
+     dann grün bliebe, wenn der Wert gelesen und danach verworfen würde. */
+  let wert = bauplan.attrs && bauplan.attrs.value !== undefined ? String(bauplan.attrs.value) : "";
+  Object.defineProperty(el, "value", {
+    get() {
+      el.__wertGelesen += 1;
+      return wert;
+    },
+    set(w) {
+      wert = String(w);
+    },
+    enumerable: true,
+    configurable: true,
+  });
+
+  const roh = bauplan.inhalt;
+  const stuecke = Array.isArray(roh) ? roh : roh === undefined || roh === null ? [] : [roh];
+  for (const stueck of stuecke) {
+    if (typeof stueck === "string") {
+      inhalt.push(stueck);
+      continue;
+    }
+    const kind = knotenBauen(stueck, dok, el, register);
+    el.children.push(kind);
+    inhalt.push(kind);
+  }
+
+  if (tag === "SELECT") {
+    el.options = el.children.filter((c) => c.tagName === "OPTION");
+    el.options.forEach((o) => {
+      Object.defineProperty(o, "text", { get: () => o.textContent, configurable: true });
+    });
+    el.selectedIndex = 0;
+    el.multiple = false;
+  }
+
+  if (bauplan.merke) register.set(bauplan.merke, el);
+  return el;
+}
+
+/* Einen Knoten wirklich aus dem Baum nehmen: aus der Kinderliste UND aus dem
+   Inhalt des Elternknotens. Nur eines von beidem hiesse, dass das Element
+   verschwunden ist und sein Text noch dasteht. */
+export function entfernen(el) {
+  const eltern = el.parentElement;
+  if (!eltern) return el;
+  const i = eltern.children.indexOf(el);
+  if (i >= 0) eltern.children.splice(i, 1);
+  const j = eltern.__inhalt.indexOf(el);
+  if (j >= 0) eltern.__inhalt.splice(j, 1);
+  el.parentElement = null;
+  el.isConnected = false;
+  return el;
+}
+
+/** …und einen anhängen, so wie es ein Umbau der fremden Seite täte. */
+export function anhaengen(eltern, el) {
+  el.parentElement = eltern;
+  eltern.children.push(el);
+  eltern.__inhalt.push(el);
+  return el;
+}
+
+export function seiteBauen(bauplan) {
+  const register = new Map();
+  const dok = {
+    nodeType: 9,
+    ownerDocument: null,
+    title: "Prüfseite",
+    documentElement: null,
+    body: null,
+    querySelectorAll(sel) {
+      return suchen(dok, sel);
+    },
+    querySelector(sel) {
+      return suchen(dok, sel)[0] || null;
+    },
+    getElementById(id) {
+      return suchen(dok, `[id="${id}"]`)[0] || null;
+    },
+    /* Nur FIRST_ORDERED_NODE_TYPE und nur absolute Pfade mit Stellenangabe —
+       genau die Form, die `xpfadBauen` erzeugt. Jede andere Form wirft, damit
+       ein umgebauter XPath hier auffällt und nicht als „kein Treffer" durch
+       die Prüfung rutscht. */
+    evaluate(pfad, kontext, aufloeser, art) {
+      if (art !== 9) throw new Error(`Die Attrappe kennt nur Ergebnisart 9, nicht ${art}`);
+      const teile = String(pfad).split("/").filter(Boolean);
+      if (!teile.length) throw new Error(`Die Attrappe kennt diesen XPath nicht: „${pfad}"`);
+      let knoten = null;
+      for (let i = 0; i < teile.length; i++) {
+        const m = /^([a-zA-Z][\w-]*)\[(\d+)\]$/.exec(teile[i]);
+        if (!m) throw new Error(`Die Attrappe kennt diesen XPath nicht: „${pfad}"`);
+        const tag = m[1].toUpperCase();
+        const nr = Number(m[2]);
+        const kandidaten = i === 0 ? [dok.documentElement] : knoten.children;
+        const gleiche = kandidaten.filter((c) => c && c.tagName === tag);
+        knoten = gleiche[nr - 1] || null;
+        if (!knoten) return { singleNodeValue: null };
+      }
+      return { singleNodeValue: knoten };
+    },
+  };
+  dok.documentElement = knotenBauen(bauplan, dok, null, register);
+  dok.body = suchen(dok, "body")[0] || dok.documentElement;
+  return {
+    dok,
+    finden(name) {
+      const el = register.get(name);
+      assert.ok(el, `im Seitenbaum gibt es kein „${name}"`);
+      return el;
+    },
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * Das Skript laden
+ * ------------------------------------------------------------------ */
+
+let quelleZwischen = null;
+
+export async function selektorLaden(dok) {
+  if (!quelleZwischen) quelleZwischen = await readFile(QUELLE, "utf8");
+  const sandkasten = { console, document: dok, setTimeout, clearTimeout };
+  sandkasten.window = sandkasten;
+  sandkasten.globalThis = sandkasten;
+  vm.createContext(sandkasten);
+  vm.runInContext(quelleZwischen, sandkasten, { filename: "selektor.js" });
+  assert.ok(sandkasten.SMARTR_SELEKTOR, "selektor.js muss globalThis.SMARTR_SELEKTOR setzen");
+  return sandkasten.SMARTR_SELEKTOR;
+}
+
+/* Eine Seite, die den ganzen Fächer trägt: Datenmerkmal, Beschriftung mit
+   Rolle, Kennung, Text — und daneben Elemente, die dieselben Anker mehrdeutig
+   machen könnten. */
+function laden() {
+  return seiteBauen(
+    k("html", {}, [
+      k("body", {}, [
+        k("div", { id: "haupt", class: "seite css-1x2y3z" }, [
+          k("form", { id: "kasse" }, [
+            k(
+              "button",
+              {
+                "data-testid": "relist",
+                "aria-label": "Erneut einstellen",
+                role: "button",
+                id: "relist-knopf",
+                class: "btn btn-primary sc-bdVaJa",
+              },
+              "Erneut einstellen",
+              "knopf"
+            ),
+            k("input", { id: "itemnr", name: "artikelnummer", class: "feld" }, [], "feld"),
+            k("button", { class: "btn" }, "Abbrechen", "abbrechen"),
+          ]),
+          k("ul", { class: "liste" }, [
+            k("li", { class: "zeile" }, [k("span", {}, "Erster", "erster")]),
+            k("li", { class: "zeile" }, [k("span", {}, "Zweiter", "zweiter")]),
+            k("li", { class: "zeile" }, [k("span", {}, "Dritter", "dritter")]),
+          ]),
+        ]),
+      ]),
+    ])
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * S1 bis S6 — was in die Kaskade kommt
+ * ------------------------------------------------------------------ */
+
+test("S1: das Datenmerkmal steht ganz vorn", async () => {
+  const seite = laden();
+  const S = await selektorLaden(seite.dok);
+  const kaskade = S.kaskadeBauen(seite.finden("knopf"));
+  assert.equal(kaskade[0], '[data-testid="relist"]');
+});
+
+test("S2: die Reihenfolge ist die aus §7.1", async () => {
+  const seite = laden();
+  const S = await selektorLaden(seite.dok);
+  const kaskade = S.kaskadeBauen(seite.finden("knopf"));
+
+  const stelle = (muster) => kaskade.findIndex((a) => muster.test(a));
+  const daten = stelle(/^\[data-testid=/);
+  const aria = stelle(/aria-label=/);
+  const pfad = stelle(/^#relist-knopf$/);
+  const text = stelle(/^text=/);
+  const xpfad = stelle(/^\//);
+
+  assert.ok(daten >= 0 && aria >= 0 && pfad >= 0 && text >= 0 && xpfad >= 0,
+    `alle fünf Ankerarten erwartet, bekommen: ${JSON.stringify(kaskade)}`);
+  assert.ok(daten < aria, "Datenmerkmal vor Beschriftung");
+  assert.ok(aria < pfad, "Beschriftung vor CSS-Pfad");
+  assert.ok(pfad < text, "CSS-Pfad vor Textanker");
+  assert.ok(text < xpfad, "Textanker vor XPath");
+  assert.equal(xpfad, kaskade.length - 1, "der XPath ist der letzte Ausweg und steht hinten");
+});
+
+test("S3: für ein Element gibt es immer mindestens einen Anker, und der trifft", async () => {
+  const seite = seiteBauen(
+    k("html", {}, [k("body", {}, [k("div", {}, [k("span", {}, [], "nackt")])])])
+  );
+  const S = await selektorLaden(seite.dok);
+  const ziel = seite.finden("nackt");
+  const kaskade = S.kaskadeBauen(ziel);
+  assert.ok(kaskade.length >= 1, "ein Element ohne jedes Merkmal bekommt trotzdem einen Anker");
+  const erg = S.kaskadeAufloesen(kaskade, seite.dok);
+  assert.equal(erg.ok, true);
+  assert.equal(erg.el, ziel);
+});
+
+test("S4: was kein Element ist, bekommt keinen erfundenen Anker", async () => {
+  const seite = laden();
+  const S = await selektorLaden(seite.dok);
+  for (const nichts of [null, undefined, 42, "button", {}, { nodeType: 3, tagName: "SPAN" }]) {
+    assert.equal(S.kaskadeBauen(nichts).length, 0, `für ${JSON.stringify(nichts)} darf nichts entstehen`);
+  }
+});
+
+test("S5: die Zufallserkennung ist eine benannte Regel, keine Ahnung", async () => {
+  const seite = laden();
+  const S = await selektorLaden(seite.dok);
+
+  /* Was fliegen MUSS, mit der Regel, die es fangen soll. */
+  const raus = [
+    ["css-1x2y3z", "praefix_hash"],
+    ["sc-bdVaJa", "praefix_hash"],
+    ["jss142", "praefix_hash"],
+    ["emotion-9f2a1b", "praefix_hash"],
+    ["header-a1b2c3", "ziffernmix"],
+    ["x1n2onr6", "ziffernmix"],
+    ["a3f9c2b1", "ziffernmix"],
+    ["deadbeef", "hexkette"],
+    ["XyAbCd", "kurzsilben"],
+    ["hshtgkr", "vokallos"],
+    ["a".repeat(25), "zu_lang"],
+  ];
+  for (const [name, regel] of raus) {
+    const befund = S.klasseZufaellig(name);
+    assert.equal(befund.zufall, true, `„${name}" muss als Zufall gelten`);
+    assert.equal(befund.regel, regel, `„${name}" soll an der Regel ${regel} scheitern`);
+  }
+
+  /* Und was bleiben MUSS. Eine Regel, die alles fängt, ist keine Regel,
+     sondern eine Abschaltung des CSS-Pfades. */
+  const bleibt = [
+    "btn", "btn-primary", "col-md-6", "main-content", "container", "dropdown-menu",
+    "seite", "zeile", "liste", "feld", "h1", "col6", "item12", "nav__item", "Button", "AppBar",
+  ];
+  for (const name of bleibt) {
+    assert.equal(S.klasseZufaellig(name).zufall, false, `„${name}" ist keine Zufallsklasse`);
+  }
+});
+
+test("S6: eine Zufallsklasse kommt in keinen Anker", async () => {
+  const seite = laden();
+  const S = await selektorLaden(seite.dok);
+  const kaskade = S.kaskadeBauen(seite.finden("knopf"));
+  const alles = kaskade.join(" ");
+  assert.ok(!alles.includes("sc-bdVaJa"), `Zufallsklasse im Anker: ${alles}`);
+  assert.ok(!alles.includes("css-1x2y3z"), `Zufallsklasse eines Vorfahren im Anker: ${alles}`);
+
+  /* Gegenprobe: Die stabile Klasse steht sehr wohl zur Verfügung. */
+  const zeile = seite.finden("zweiter");
+  const pfad = S.kaskadeBauen(zeile).find((a) => a.includes("li"));
+  assert.ok(pfad && pfad.includes(".zeile"), `stabile Klasse erwartet, bekommen: ${pfad}`);
+});
+
+/* ------------------------------------------------------------------ *
+ * S7 bis S10 — das Akzeptanzkriterium: die Kaskade trägt weiter
+ * ------------------------------------------------------------------ */
+
+test("S7: bricht Anker 1, trägt Anker 2 den Schritt weiter", async () => {
+  const seite = laden();
+  const S = await selektorLaden(seite.dok);
+  const ziel = seite.finden("knopf");
+  const kaskade = S.kaskadeBauen(ziel);
+
+  const vorher = S.kaskadeAufloesen(kaskade, seite.dok);
+  assert.equal(vorher.ok, true);
+  assert.equal(vorher.stelle, 0, "vor dem Umbau trägt der stärkste Anker");
+  assert.equal(vorher.anker, '[data-testid="relist"]');
+
+  /* Der Umbau der fremden Seite: Das Testmerkmal heisst nach dem nächsten
+     Build anders. Genau dafür gibt es die Kaskade. */
+  ziel.removeAttribute("data-testid");
+
+  const nachher = S.kaskadeAufloesen(kaskade, seite.dok);
+  assert.equal(nachher.ok, true, "der Schritt darf daran nicht scheitern");
+  assert.equal(nachher.el, ziel, "und er muss auf demselben Element landen");
+  assert.equal(nachher.stelle, 1, "getragen hat jetzt Anker 2");
+  assert.ok(nachher.anker.includes("aria-label"), `gemeldet wurde: ${nachher.anker}`);
+});
+
+test("S8: brechen Anker 1 und 2, trägt der CSS-Pfad", async () => {
+  const seite = laden();
+  const S = await selektorLaden(seite.dok);
+  const ziel = seite.finden("knopf");
+  const kaskade = S.kaskadeBauen(ziel);
+
+  ziel.removeAttribute("data-testid");
+  ziel.removeAttribute("aria-label");
+
+  const erg = S.kaskadeAufloesen(kaskade, seite.dok);
+  assert.equal(erg.ok, true);
+  assert.equal(erg.el, ziel);
+  assert.equal(erg.anker, "#relist-knopf");
+
+  /* Und noch eine Ebene tiefer: auch die Kennung fällt weg, dann trägt der
+     Text. Das ist der Anker, den ein Mensch beim Aufnehmen gesehen hat. */
+  ziel.removeAttribute("id");
+  const weiter = S.kaskadeAufloesen(kaskade, seite.dok);
+  assert.equal(weiter.ok, true);
+  assert.equal(weiter.el, ziel);
+  assert.equal(weiter.anker, "text=Erneut einstellen");
+});
+
+test("S9: bricht alles, heisst das kaskade_gebrochen und nichts anderes", async () => {
+  const seite = laden();
+  const S = await selektorLaden(seite.dok);
+  const ziel = seite.finden("knopf");
+  const kaskade = S.kaskadeBauen(ziel);
+
+  /* Die Seite baut den Bereich komplett um: Der Knopf ist weg, und mit ihm
+     das Formular, in dem er stand.
+
+     Warum das ganze Formular und nicht nur der Knopf: Der XPath zählt
+     Stellen. Nimmt man nur den Knopf heraus, rückt der Nachbar auf seine
+     Stelle, und der XPath fände IHN. Genau deshalb steht der XPath ganz
+     unten in der Kaskade und nie oben — er trifft immer etwas, notfalls das
+     Falsche. */
+  ziel.removeAttribute("data-testid");
+  ziel.removeAttribute("aria-label");
+  ziel.removeAttribute("id");
+  ziel.removeAttribute("class");
+  entfernen(seite.dok.getElementById("kasse"));
+
+  const erg = S.kaskadeAufloesen(kaskade, seite.dok);
+  assert.equal(erg.ok, false);
+  assert.equal(erg.fehler, "kaskade_gebrochen", "§7.4 nennt genau diesen Namen");
+  assert.ok(erg.versucht >= 1, "es wurde wirklich probiert");
+});
+
+test("S10: kaputte Anker werden beantwortet, nicht geworfen", async () => {
+  const seite = laden();
+  const S = await selektorLaden(seite.dok);
+
+  /* Ein von Hand veränderter Ablauf kann alles Mögliche enthalten. Keine
+     dieser Formen darf eine Ausnahme werden: Der Ausführer wartet auf eine
+     Aussage, und eine Ausnahme ist keine. */
+  const muell = [
+    [],
+    null,
+    undefined,
+    "kein Feld",
+    ["[[[", "text=", 42, null, {}, "/html[1]/nichts"],
+    ["))nichtCSS(("],
+    ["/kaputt/xpath"],
+  ];
+  for (const eingabe of muell) {
+    const erg = S.kaskadeAufloesen(eingabe, seite.dok);
+    assert.equal(typeof erg, "object");
+    assert.equal(erg.ok, false, `für ${JSON.stringify(eingabe)} war eine Absage erwartet`);
+    assert.ok(["anker_fehlt", "kaskade_gebrochen"].includes(erg.fehler), `unbekannte Absage: ${erg.fehler}`);
+  }
+});
+
+/* ------------------------------------------------------------------ *
+ * S11 bis S16 — die einzelnen Regeln
+ * ------------------------------------------------------------------ */
+
+test("S11: der Textanker trägt genauen Text und höchstens 80 Zeichen", async () => {
+  const lang = "Sehr langer Knopftext, ".repeat(6);
+  const seite = seiteBauen(
+    k("html", {}, [
+      k("body", {}, [
+        k("button", { class: "a" }, "  Erneut   einstellen  ", "kurz"),
+        k("button", { class: "b" }, lang, "lang"),
+      ]),
+    ])
+  );
+  const S = await selektorLaden(seite.dok);
+
+  const kurz = S.kaskadeBauen(seite.finden("kurz")).find((a) => a.startsWith("text="));
+  assert.equal(kurz, "text=Erneut einstellen", "der Text wird normalisiert, nicht gekürzt");
+
+  const langer = S.kaskadeBauen(seite.finden("lang")).find((a) => a.startsWith("text="));
+  assert.equal(langer, undefined, `${lang.length} Zeichen sind kein Anker mehr`);
+});
+
+test("S12: aus dem Inhalt eines Feldes wird nie ein Anker gebaut", async () => {
+  const seite = seiteBauen(
+    k("html", {}, [
+      k("body", {}, [
+        k("input", { type: "password", name: "passwort", value: "Hunter2Geheim" }, [], "pw"),
+        k("div", { contenteditable: "true" }, "Getippter Inhalt", "bereich"),
+        k("select", { name: "land" }, [k("option", {}, "Deutschland"), k("option", {}, "Österreich")], "liste"),
+      ]),
+    ])
+  );
+  const S = await selektorLaden(seite.dok);
+
+  for (const name of ["pw", "bereich", "liste"]) {
+    const el = seite.finden(name);
+    const kaskade = S.kaskadeBauen(el);
+    assert.ok(!kaskade.some((a) => a.startsWith("text=")), `${name} darf keinen Textanker bekommen: ${kaskade}`);
+    assert.equal(el.__wertGelesen, 0, `${name}: der Wert wurde gelesen, und das darf hier niemand`);
+    assert.ok(!JSON.stringify(kaskade).includes("Hunter2Geheim"), "kein Geheimnis im Anker");
+    assert.ok(!JSON.stringify(kaskade).includes("Getippter"), "kein getippter Inhalt im Anker");
+  }
+});
+
+test("S13: der Pfad bleibt kurz und nimmt die Stelle nur, wenn er sie braucht", async () => {
+  const seite = laden();
+  const S = await selektorLaden(seite.dok);
+
+  const zweiter = seite.finden("zweiter");
+  const kaskade = S.kaskadeBauen(zweiter);
+  const pfad = kaskade.find((a) => !a.startsWith("text=") && !a.startsWith("/"));
+  assert.ok(pfad, `ein CSS-Pfad war erwartet, bekommen: ${JSON.stringify(kaskade)}`);
+  assert.ok(pfad.includes(":nth-of-type(2)"), `die Stelle wird gebraucht: ${pfad}`);
+  assert.ok(pfad.split(">").length <= S.PFAD_EBENEN, `höchstens ${S.PFAD_EBENEN} Ebenen: ${pfad}`);
+  assert.equal(S.kaskadeAufloesen([pfad], seite.dok).el, zweiter);
+
+  /* Gegenprobe: Wo die Kennung reicht, steht keine Stelle im Anker. */
+  const knopfPfad = S.kaskadeBauen(seite.finden("knopf")).find((a) => a.startsWith("#"));
+  assert.equal(knopfPfad, "#relist-knopf");
+});
+
+test("S14: ein mehrdeutiges Merkmal wird nicht zum Anker", async () => {
+  const seite = seiteBauen(
+    k("html", {}, [
+      k("body", {}, [
+        k("ul", {}, [
+          k("li", {}, [k("button", { "data-testid": "kaufen" }, "Kaufen", "eins")]),
+          k("li", {}, [k("button", { "data-testid": "kaufen" }, "Kaufen", "zwei")]),
+        ]),
+      ]),
+    ])
+  );
+  const S = await selektorLaden(seite.dok);
+  const zwei = seite.finden("zwei");
+  const kaskade = S.kaskadeBauen(zwei);
+
+  assert.ok(!kaskade.includes('[data-testid="kaufen"]'),
+    "ein Merkmal, das zwei Knöpfe trifft, ist kein Anker");
+  assert.ok(!kaskade.includes("text=Kaufen"), "ein doppelter Text ist kein Anker");
+
+  const erg = S.kaskadeAufloesen(kaskade, seite.dok);
+  assert.equal(erg.ok, true);
+  assert.equal(erg.el, zwei, "und aufgelöst wird der zweite, nicht der erste");
+});
+
+test("S15: auch beim Auflösen zählt Eindeutigkeit", async () => {
+  const seite = seiteBauen(
+    k("html", {}, [k("body", {}, [k("div", { id: "kopf" }, [k("button", { class: "kaufen" }, "Kaufen", "eins")])])])
+  );
+  const S = await selektorLaden(seite.dok);
+  const eins = seite.finden("eins");
+  const kaskade = S.kaskadeBauen(eins);
+  assert.equal(S.kaskadeAufloesen(kaskade, seite.dok).el, eins);
+
+  /* Die Seite bekommt einen zweiten Knopf derselben Art. Ein Anker, der jetzt
+     zwei trifft, hat seine Aussage verloren — den ersten zu nehmen wäre
+     geraten, und geraten wird hier nicht. */
+  const kopf = seite.dok.getElementById("kopf");
+  const zweiter = seiteBauen(k("html", {}, [k("body", {}, [k("button", { class: "kaufen" }, "Kaufen", "x")])])).finden("x");
+  anhaengen(kopf, zweiter);
+
+  const erg = S.kaskadeAufloesen(["button.kaufen"], seite.dok);
+  assert.equal(erg.ok, false);
+  assert.equal(erg.fehler, "kaskade_gebrochen");
+});
+
+test("S16: die Kaskade bleibt unter dem Deckel der Werkstatt", async () => {
+  const seite = seiteBauen(
+    k("html", {}, [
+      k("body", {}, [
+        k(
+          "button",
+          {
+            "data-testid": "a", "data-test": "b", "data-cy": "c", "data-rolle": "d",
+            "data-bereich": "e", "data-schritt": "f", "aria-label": "Speichern",
+            role: "button", id: "speichern", class: "btn",
+          },
+          "Speichern",
+          "voll"
+        ),
+      ]),
+    ])
+  );
+  const S = await selektorLaden(seite.dok);
+  const kaskade = S.kaskadeBauen(seite.finden("voll"));
+  assert.ok(kaskade.length <= S.KASKADE_HOECHSTENS, `höchstens ${S.KASKADE_HOECHSTENS}, bekommen ${kaskade.length}`);
+  /* `werkstatt.js` lässt 8 Anker je Schritt durch (WERKSTATT_GRENZEN.
+     ankerJeSchritt). Die Lücke ist die Luft für einen selbstgeheilten Anker
+     aus §7.4. */
+  assert.ok(kaskade.length < 8, "unter dem Deckel der Werkstatt bleibt Platz zum Heilen");
+  assert.ok(kaskade[kaskade.length - 1].startsWith("/"), "der XPath fällt dabei nicht hinten herunter");
+});
+
+test("S17: Merkmale des Rahmenwerks sind keine Anker", async () => {
+  const seite = seiteBauen(
+    k("html", {}, [
+      k("body", {}, [
+        k("button", { "data-reactid": "17", "data-v-4f2ab9": "", "data-index": "3", "data-aktion": "senden" }, "Senden", "s"),
+      ]),
+    ])
+  );
+  const S = await selektorLaden(seite.dok);
+  const kaskade = S.kaskadeBauen(seite.finden("s"));
+  const daten = Array.from(kaskade).filter((a) => a.includes("data-"));
+  assert.deepEqual(daten, ['[data-aktion="senden"]'],
+    `nur das gepflegte Merkmal darf durch, bekommen: ${JSON.stringify(daten)}`);
+});
+
+test("S18: die Beschriftung wird mit der Rolle verankert", async () => {
+  const seite = seiteBauen(
+    k("html", {}, [
+      k("body", {}, [
+        k("div", { role: "button", "aria-label": "Menü öffnen" }, [], "div"),
+        k("button", { "aria-label": "Schliessen" }, [], "knopf"),
+      ]),
+    ])
+  );
+  const S = await selektorLaden(seite.dok);
+  assert.ok(
+    S.kaskadeBauen(seite.finden("div")).includes('[role="button"][aria-label="Menü öffnen"]'),
+    "ausdrückliche Rolle gehört in den Anker"
+  );
+  assert.ok(
+    S.kaskadeBauen(seite.finden("knopf")).includes('button[aria-label="Schliessen"]'),
+    "sonst steht der Elementname für die stillschweigende Rolle"
+  );
+});
+
+test("S19: der gemeldete Anker ist der, der wirklich getroffen hat", async () => {
+  const seite = laden();
+  const S = await selektorLaden(seite.dok);
+  const ziel = seite.finden("knopf");
+  const kaskade = S.kaskadeBauen(ziel);
+  for (let i = 0; i < kaskade.length; i++) {
+    const erg = S.kaskadeAufloesen(kaskade.slice(i), seite.dok);
+    if (!erg.ok) continue;
+    assert.equal(erg.anker, kaskade[i + erg.stelle], "Stelle und Anker müssen zusammenpassen");
+    assert.equal(S.kaskadeAufloesen([erg.anker], seite.dok).el, erg.el,
+      `der gemeldete Anker „${erg.anker}" muss für sich allein dasselbe Element finden`);
+  }
+});
+
+test("S20: eine Kennung mit Zufallsanteil wird nicht verankert", async () => {
+  const seite = seiteBauen(
+    k("html", {}, [
+      k("body", {}, [
+        k("div", { id: "ember1234", class: "hülle" }, [k("button", { id: "kaufen" }, "Kaufen", "gut")], "schlecht"),
+      ]),
+    ])
+  );
+  const S = await selektorLaden(seite.dok);
+  const schlecht = S.kaskadeBauen(seite.finden("schlecht"));
+  assert.ok(!schlecht.some((a) => a.includes("ember1234")), `gewürfelte Kennung im Anker: ${schlecht}`);
+  assert.ok(S.kaskadeBauen(seite.finden("gut")).includes("#kaufen"), "eine gepflegte Kennung dagegen schon");
+});

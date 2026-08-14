@@ -134,6 +134,22 @@ export const BEFEHLE = {
   click: { stufe: "write", frist: 20000, freigabe: "schritt", tut: "für dich klicken" },
   type: { stufe: "write", frist: 25000, freigabe: "schritt", tut: "für dich in ein Feld tippen" },
   select: { stufe: "write", frist: 15000, freigabe: "schritt", tut: "für dich eine Auswahl treffen" },
+
+  /* Einen gespeicherten Ablauf abspielen (Vertrag v3.5 §8.2).
+     Die längste Frist der Tabelle, weil hier nicht ein Schritt geschieht,
+     sondern eine Reihe davon.
+
+     Was dieser Eintrag ausdrücklich NICHT ist: eine zweite Tür. Die Wiedergabe
+     geht Schritt für Schritt durch dieselbe Befehlsschleife wie ein
+     Agentenbefehl, also durch Modus, Klassifizierer, Bereichsprüfung und
+     Verdeckungswache. Ein Ablauf ist eine Reihe von Befehlen, kein
+     Freifahrschein — und deshalb bleibt auch hier `freigabe: "schritt"`. */
+  run_workflow: {
+    stufe: "write",
+    frist: 120000,
+    freigabe: "schritt",
+    tut: "einen gespeicherten Ablauf abspielen",
+  },
 };
 
 /* Der Sicherheitsabstand zur Uhr des Relays. Unsere Antwort muss vor seinem
@@ -256,6 +272,37 @@ export const GRENZEN = {
      nicht passt, wird abgesagt. */
   bildZeichen: 110 * 1024,
   bildQualitaeten: [40, 22, 10],
+
+  /* Der Auftrag als Ganzes (Vertrag v3.5 §5).
+
+     Bis v3.4 gab es nur Deckel je Sitzung und je Zeitfenster. Beide zählen
+     Befehle, keiner zählt einen AUFTRAG: Ein Agent, der sich verrannt hat,
+     durfte 300 Schritte lang danebengreifen, solange er langsam genug war.
+     Ein Auftrag, der sich im Kreis dreht, wird nicht besser, wenn man ihn
+     laufen lässt — er wird nur teurer und richtet länger etwas an.
+
+     `schritteJeAuftrag` ist in der Seitenleiste einstellbar, `schritteDeckel`
+     ist die Grenze, über die auch der Mensch nicht hinauskommt: Wer 5.000
+     Schritte einstellen darf, hat den Deckel abgeschafft, ohne es zu merken. */
+  schritteJeAuftrag: 50,
+  schritteDeckel: 500,
+
+  /* Wie oft dieselbe Marke hintereinander stehen darf, bevor angehalten und
+     gefragt wird (`schrittMarke`, Fehlercode `loop_detected`). Drei, weil zwei
+     auch ein legitimer Wiederholversuch nach einem Nachladen sein kann. */
+  schleifeGleich: 3,
+
+  /* Zeitablauf je Schritt INNERHALB eines Auftrags. Er liegt über der Frist
+     der meisten Einzelbefehle und unter der des Relays: Ein Schritt, der
+     hängt, hält den ganzen Auftrag auf, und das soll er auch, aber nicht
+     endlos. */
+  schrittFristMs: 60000,
+
+  /* Die Werte, die ein `run_workflow` einsetzen darf (§8.2). 20 Einträge und
+     200 Zeichen sind reichlich für Artikelnummern und Suchbegriffe und zu
+     wenig, um einen ganzen Seitentext durch einen Platzhalter zu schleusen. */
+  workflowParams: 20,
+  workflowParamZeichen: 200,
 };
 
 /*
@@ -1133,6 +1180,36 @@ export function parameterPruefen(cmd, rahmen = {}, lage = {}) {
     }
 
     /* ------------------------------------------------------------- */
+    case "run_workflow": {
+      /* Die Kennung ist eng gefasst, weil sie zum Schlüssel in der Ablage
+         wird: Was hier durchkommt, landet in `sa_workflows` und wird später
+         zum Abspielen wieder herausgesucht. Ein Name mit Punkten, Schrägstrich
+         oder Leerzeichen wäre ein Schlüssel, den zwei Stellen verschieden
+         lesen — und der Ablauf, der dann läuft, wäre nicht der, den der Mensch
+         gemeint hat. */
+      const id = typeof r.id === "string" ? r.id.trim() : "";
+      if (!WORKFLOW_ID_MUSTER.test(id)) {
+        return absage(
+          fehltDas(r.id)
+            ? "Zum Abspielen fehlt die Kennung des Ablaufs."
+            : "Diese Kennung hat nicht die Form, die eine Ablaufkennung hat.",
+          "`id` mitsenden, zum Beispiel `wf_ebay_relist`: `wf_`, dann Kleinbuchstaben, Ziffern oder Unterstriche."
+        );
+      }
+      const werte = paramsPruefen(r.params);
+      if (!werte.ok) return absage(werte.satz, werte.hinweis);
+      /* Ob es diesen Ablauf überhaupt gibt und ob seine Platzhalter zu den
+         Werten passen, entscheidet `werkstatt.js` — dort liegt die Ablage.
+         Hier wird nur der Rahmen geprüft, und zwar VOR der Frage an den
+         Menschen, damit er nichts bestätigt, das danach an einem Tippfehler
+         in der Kennung scheitert. */
+      return {
+        ok: true,
+        plan: { id, params: werte.params, anzahl: Object.keys(werte.params).length },
+      };
+    }
+
+    /* ------------------------------------------------------------- */
     default:
       /* Unbekannte Befehle kommen hier gar nicht an — die Positivliste steht
          vorher. Diese Zeile ist die Zusicherung, dass ein neuer Eintrag in
@@ -1181,7 +1258,633 @@ export function frageZusatz(cmd, plan) {
     const satz = WARTE_FRAGE[plan.bedingung];
     return satz ? ` Er wartet darauf, ${satz(plan.wert)}.` : "";
   }
+  if (cmd === "run_workflow") {
+    /* WELCHER Ablauf gleich läuft, gehört in die Frage. „Einen gespeicherten
+       Ablauf abspielen?" allein ist keine Frage, sondern eine Ankündigung:
+       Der Mensch hat womöglich zwölf Abläufe, und einer davon stellt eBay-
+       Artikel neu ein, während ein anderer ein Konto schließt.
+
+       Der Name kommt aus der Werkbank des Menschen, nicht von der besuchten
+       Seite. Steht er nicht im Plan, weil die Ablage noch nicht befragt wurde,
+       nennt die Frage die Kennung, denn eine Kennung ist mehr als nichts. */
+    const wie = plan.name
+      ? `„${saeubern(plan.name, 80)}"`
+      : `mit der Kennung ${saeubern(plan.id, 60)}`;
+    let s = ` Er will den gespeicherten Ablauf ${wie} abspielen`;
+    if (plan.schritte) s += `, ${plan.schritte} Schritte`;
+    if (plan.anzahl) s += `, und dafür ${plan.anzahl} ${plan.anzahl === 1 ? "Wert" : "Werte"} einsetzen`;
+    return `${s}.`;
+  }
   return "";
+}
+
+/* --------------------------------------------------------------------- *
+ * Betriebsmodi, Aktionsklassen und die Entscheidung „fragen oder nicht"
+ * (Vertrag v3.5 §2, §3)
+ *
+ * Warum das hier steht und nicht im Ausführer: Es ist die Stelle, an der
+ * entschieden wird, ob ein Mensch gefragt wird. Genau diese Stelle muss ohne
+ * Browser prüfbar sein — dasselbe Argument wie im Kopf der Datei, nur mit
+ * höherem Einsatz.
+ *
+ * Und die Regel, die über dem ganzen Abschnitt steht:
+ *
+ *   **Der Klassifizierer liest Text von der besuchten Seite. Ein Treffer darf
+ *   ausschliesslich MEHR Rückfrage auslösen, niemals weniger.**
+ *
+ * Das ist keine Stilfrage, sondern der Grund, warum man Seitentext überhaupt
+ * lesen darf. Ein Fehlalarm kostet eine Rückfrage. Ein übersehener Treffer
+ * fällt auf das zurück, was der Modus ohnehin getan hätte. Würde ein Treffer
+ * dagegen eine Klasse ENTFERNEN, dann hätte die besuchte Seite einen Weg,
+ * sich selbst freizuschalten: Es genügte, das richtige Wort irgendwo
+ * hinzuschreiben. Deshalb ist `klassenBestimmen` rein additiv gebaut, und
+ * deshalb misst ein Prüfsatz genau das und nicht nur einzelne Beispiele.
+ * --------------------------------------------------------------------- */
+
+export const MODI = Object.freeze(["manual", "assist", "auto"]);
+export const MODUS_STANDARD = "assist";
+
+/* Der Modus gilt je Tab und liegt in `chrome.storage.session` (§2). Der
+   Schlüssel steht hier, damit ihn nicht drei Dateien getrennt eintippen; die
+   Ablage selbst rührt diese Datei nicht an, sie sieht keinen Browser. */
+export const MODUS_ABLAGE = "sa_modus";
+
+export const KLASSEN = Object.freeze([
+  "lesen", "bedienen", "navigieren",
+  "senden", "formular", "tab_neu",
+  "datei", "geheim", "zahlung", "unwiderruflich", "berechtigung", "captcha",
+]);
+
+/** Nie abschaltbar. Auch im Modus `auto` wird hier gefragt. */
+export const HART = Object.freeze(new Set(
+  ["datei", "geheim", "zahlung", "unwiderruflich", "berechtigung", "captcha"]));
+
+/** Je Domain freischaltbar. Voreinstellung: aus. */
+export const WEICH = Object.freeze(new Set(["senden", "formular", "tab_neu"]));
+
+/* Wie eine Klasse in einem Satz heisst, der einem Menschen vorgelesen wird. */
+const KLASSE_TEXT = Object.freeze({
+  lesen: "Lesen",
+  bedienen: "Bedienen",
+  navigieren: "Ein Ortswechsel",
+  senden: "Etwas absenden",
+  formular: "Ein Formular abschicken",
+  tab_neu: "Ein neuer Tab",
+  datei: "Eine Datei",
+  geheim: "Ein Geheimnis",
+  zahlung: "Eine Zahlung",
+  unwiderruflich: "Etwas Unwiderrufliches",
+  berechtigung: "Eine Browser-Berechtigung",
+  captcha: "Ein Menschentest",
+});
+
+/*
+ * Die Wortlisten.
+ *
+ * Sie stehen als benannte Konstanten da, damit ein Prüfsatz sie wortweise
+ * messen kann. Eine Liste, die mitten in einer Funktion steht, ändert sich
+ * beiläufig, und ein Schutz, der sich beiläufig ändert, hört beiläufig auf,
+ * geprüft zu sein.
+ *
+ * Geschrieben sind sie in der Ersatzschreibweise (ae, oe, ue, ss) und
+ * kleingeschrieben. Der Grund ist die Gegenseite: `flachmachen` bringt den
+ * Seitentext in genau dieselbe Form, bevor verglichen wird. „Löschen",
+ * „LÖSCHEN" und „Loeschen" sind für einen Menschen dasselbe Wort, und für
+ * einen Angreifer wäre der Unterschied sonst der billigste Weg vorbei.
+ *
+ * Deutsch UND englisch, weil die halbe Netzoberfläche englisch beschriftet
+ * ist, auch auf deutschen Seiten („Checkout", „Submit", „Delete account").
+ */
+
+/* Wie lang ein Wort sein muss, damit es auch MITTEN in einem Wort zählt.
+
+   Befund M2 der Gegenlesung vom 29.07.2026, hier in seiner allgemeinen Form:
+   „pin" steckt in „shipping", „tan" in „Standort", „code" in „Postleitzahl-
+   code". Kurze Wörter als Wortstück zu suchen, macht aus einer Erkennung eine
+   Dauerwarnung, und eine Dauerwarnung wird weggeklickt. Lange Wörter dagegen
+   MÜSSEN als Wortstück zählen, weil Deutsch zusammensetzt: „Kontolöschung",
+   „Sofortüberweisung", „Dateiauswahl". */
+const WORT_IM_WORT_AB = 5;
+
+export const WORTE_ZAHLUNG = Object.freeze([
+  "kasse", "checkout", "bezahlen", "zahlung", "zahlungsart", "kaufen",
+  "bestellen", "bestellung", "ueberweisen", "ueberweisung", "lastschrift",
+  "abbuchen", "kreditkarte", "creditcard", "rechnung",
+  "pay", "payment", "billing", "order", "purchase", "buy", "iban",
+]);
+
+export const WORTE_UNWIDERRUFLICH = Object.freeze([
+  "loeschen", "loeschung", "entfernen", "kuendigen", "kuendigung",
+  "schliessen", "deaktivieren", "widerrufen", "verwerfen", "unwiderruflich",
+  "endgueltig", "zuruecksetzen",
+  "delete", "remove", "cancel", "deactivate", "terminate", "revoke", "wipe",
+]);
+
+export const WORTE_GEHEIM = Object.freeze([
+  "passwort", "kennwort", "passphrase", "password", "passcode",
+  "pin", "otp", "2fa", "mfa", "tan", "itan", "mtan", "puk",
+  "einmalcode", "einmalkennwort", "bestaetigungscode", "verifizierungscode",
+  "sicherheitscode", "sicherheitsnummer", "pruefziffer",
+  "cvv", "cvc", "csc", "code", "secret", "geheim", "credential", "authenticator",
+]);
+
+export const WORTE_DATEI = Object.freeze([
+  "datei", "dateien", "dateiauswahl", "datei waehlen", "datei auswaehlen",
+  "hochladen", "herunterladen", "anhang", "anlage", "speichern unter",
+  "upload", "download", "file", "attachment",
+]);
+
+export const WORTE_BERECHTIGUNG = Object.freeze([
+  "kamera", "mikrofon", "standort", "benachrichtigung", "benachrichtigungen",
+  "zwischenablage", "bewegungssensor",
+  "camera", "microphone", "location", "notification", "notifications",
+  "clipboard", "geolocation",
+]);
+
+/* Der zweite Halbsatz, ohne den eine Berechtigung keine ist. „Kamera" allein
+   steht auf jeder Produktseite eines Elektronikhändlers; erst „Kamera
+   zulassen" ist die Frage des Browsers. Getrennte Liste, weil beide Hälften
+   getroffen sein müssen und ein Prüfsatz das messen soll. */
+export const WORTE_ZULASSEN = Object.freeze([
+  "zulassen", "erlauben", "gestatten", "zustimmen", "allow", "grant", "enable",
+]);
+
+export const WORTE_CAPTCHA = Object.freeze([
+  "captcha", "recaptcha", "hcaptcha", "turnstile",
+  "ich bin kein roboter", "i am not a robot", "verify you are human",
+]);
+
+export const WORTE_SENDEN = Object.freeze([
+  "senden", "absenden", "abschicken", "veroeffentlichen", "posten",
+  "kommentieren", "antworten", "bewerben", "abgeben",
+  "send", "submit", "post", "publish", "reply", "tweet",
+]);
+
+/* Die Muster der Prompt-Einschleusung (§9), DE und EN.
+
+   Sie sind bewusst kurz gehalten: Ein Muster, das eine ganze Anweisung
+   wörtlich verlangt, findet nur die Einschleusung, die aus demselben Lehrbuch
+   stammt. Ein Treffer beendet nichts, er hält den Modus `auto` an — eine
+   Seite, auf der dieser Text steht, kann auch schlicht ein Blogartikel über
+   Einschleusung sein. */
+export const WORTE_EINSCHLEUSUNG = Object.freeze([
+  "ignore previous instructions", "ignore all previous", "disregard all",
+  "disregard previous", "system prompt", "act as", "you are now",
+  "new instructions", "override your",
+  "vergiss alle vorherigen", "vergiss deine anweisungen",
+  "ignoriere alle vorherigen", "ignoriere die vorherigen",
+  "neue anweisung", "du bist jetzt", "systemanweisung", "systemprompt",
+]);
+
+/* Umlaute und Eszett in die Schreibweise der Wortlisten. */
+const UMLAUT_ERSATZ = Object.freeze([
+  [/ä/g, "ae"], [/ö/g, "oe"], [/ü/g, "ue"], [/ß/g, "ss"],
+  [/á|à|â|å/g, "a"], [/é|è|ê/g, "e"], [/í|ì|î/g, "i"], [/ó|ò|ô/g, "o"], [/ú|ù|û/g, "u"],
+]);
+
+/**
+ * Fremdtext in die eine Form bringen, in der verglichen wird: gesäubert,
+ * kleingeschrieben, ohne Umlaute, ohne Satzzeichen, mit genau einem
+ * Leerzeichen zwischen den Wörtern und je einem am Rand.
+ *
+ * Die Randleerzeichen sind kein Schönheitsfehler: Sie machen aus der Suche
+ * nach `" pin "` eine Suche nach dem ganzen Wort, auch am Anfang und am Ende
+ * der Zeichenkette.
+ */
+function flachmachen(roh, grenze = 400) {
+  let s = saeubern(roh, grenze).toLowerCase();
+  for (const [muster, ersatz] of UMLAUT_ERSATZ) s = s.replace(muster, ersatz);
+  s = s.replace(/[^a-z0-9]+/g, " ").trim();
+  return s ? ` ${s} ` : "";
+}
+
+/**
+ * Welches Wort der Liste steht in diesem Text?
+ *
+ * @returns {string|null} das Wort aus UNSERER Liste, nie der Fremdtext selbst
+ */
+function wortTreffer(text, worte) {
+  const flach = flachmachen(text);
+  if (!flach) return null;
+  for (const wort of worte) {
+    if (wort.length >= WORT_IM_WORT_AB) {
+      if (flach.includes(wort)) return wort;
+    } else if (flach.includes(` ${wort} `)) {
+      return wort;
+    }
+  }
+  return null;
+}
+
+/* Die Grundklasse eines Befehls (§3.1, Zeilen `lesen`, `bedienen`,
+   `navigieren`). `run_workflow` steht hier ABSICHTLICH nicht: Der Vertrag
+   ordnet ihm keine Klasse zu, und eine selbst erfundene wäre entweder zu
+   milde oder eine Behauptung über Schritte, die noch niemand gesehen hat.
+   Ohne Klasse fragt `freigabeNoetig` in jedem Modus, und das ist für einen
+   Befehl, der eine ganze Reihe von Schritten anstösst, die richtige Antwort. */
+const GRUNDKLASSE = Object.freeze({
+  readPage: "lesen", snapshot: "lesen", get_state: "lesen", scroll: "lesen",
+  extract: "lesen", waitFor: "lesen", screenshot: "lesen", highlight: "lesen",
+  click: "bedienen", type: "bedienen", select: "bedienen",
+  navigate: "navigieren", back: "navigieren",
+});
+
+/* Nur der Weg der Adresse, nicht der Wirt. Der Vertrag nennt in §3.1
+   ausdrücklich den „Adresspfad": Ein Wirt namens `paypal.de` macht aus einem
+   Lesebefehl keine Zahlung, ein Pfad `/checkout/zahlung` sehr wohl. Lässt sich
+   die Adresse nicht zerlegen, wird sie ganz genommen — mehr Text heisst hier
+   mehr Rückfrage, und das ist die erlaubte Richtung. */
+function adressText(kopf) {
+  const roh = String((kopf && kopf.url) || "");
+  if (!roh) return "";
+  try {
+    const u = new URL(roh);
+    return `${u.pathname} ${u.search}`;
+  } catch (_) {
+    return roh;
+  }
+}
+
+/**
+ * Welche Aktionsklassen trägt dieser Schritt?
+ *
+ * @param {string} cmd    Befehlsname aus BEFEHLE
+ * @param {object} plan   geprüftes Ergebnis aus parameterPruefen
+ * @param {object|null} ziel  {ref, name, rolle, rect, mitte} oder null
+ * @param {object} kopf   {url, titel}
+ * @returns {{klassen: string[], hart: string|null, weich: string[], grund: string}}
+ *
+ * Aus dem Ziel werden zusätzlich drei Angaben gelesen, wenn sie da sind. Sie
+ * sind alle optional, weil dieselbe Funktion auch mit einer alten Wahrnehmung
+ * arbeiten muss; fehlen sie, fällt der Befund milder aus, nie strenger:
+ *
+ *   `ziel.marke`          Name des HTML-Elements, kleingeschrieben
+ *   `ziel.typ`            das `type`-Merkmal (`file`, `submit`, `password`)
+ *   `ziel.formularGeheim` true, wenn das Formular des Ziels ein Geheimfeld
+ *                         enthält (das Anmelde-Absenden aus §3.1)
+ */
+export function klassenBestimmen(cmd, plan, ziel, kopf) {
+  /* Klasse -> woran sie erkannt wurde. Es wird ausschliesslich hinzugefügt;
+     es gibt in dieser Funktion keine Zeile, die etwas herausnimmt. Genau das
+     ist die Zusage, die der Prüfsatz misst. */
+  const gefunden = new Map();
+  const merken = (klasse, woran) => {
+    if (!gefunden.has(klasse)) gefunden.set(klasse, woran);
+  };
+
+  const befehl = typeof cmd === "string" ? cmd : "";
+  const p = plan && typeof plan === "object" ? plan : {};
+  const z = ziel && typeof ziel === "object" ? ziel : null;
+
+  const grundklasse = GRUNDKLASSE[befehl];
+  if (grundklasse) merken(grundklasse, "am Befehl selbst");
+
+  const rolle = z ? String(z.rolle || "").toLowerCase() : "";
+  const marke = z ? String(z.marke || "").toLowerCase() : "";
+  const typ = z ? String(z.typ || "").toLowerCase() : "";
+  const zielText = z ? `${z.name || ""} ${z.rolle || ""}` : "";
+  const wegText = adressText(kopf);
+  const beides = `${zielText} ${wegText}`;
+
+  /* geheim — Tippen in ein Geheimfeld, und der Klick, der ein Anmeldeformular
+     absendet. Der zweite Fall ist der, den man vergisst: Das Passwort steht
+     schon im Feld, geklickt wird auf einen Knopf namens „Weiter". */
+  if (befehl === "type") {
+    const t = wortTreffer(zielText, WORTE_GEHEIM);
+    if (t) merken("geheim", `am Wort „${t}"`);
+    if (typ === "password") merken("geheim", "an einem Passwortfeld");
+  }
+  if (befehl === "click" && z && z.formularGeheim === true) {
+    merken("geheim", "an einem Formular mit einem Geheimfeld");
+  }
+
+  /* zahlung — Name ODER Adresspfad. Auf einer Kassenseite ist auch das Lesen
+     eine Rückfrage wert: Was dort steht, ist der Warenkorb eines Menschen. */
+  const zahlung = wortTreffer(beides, WORTE_ZAHLUNG);
+  if (zahlung) merken("zahlung", `am Wort „${zahlung}"`);
+
+  /* unwiderruflich — am Ziel, nicht an der Adresse. Eine Kontoübersicht unter
+     `/konto/verwalten` ist keine Kündigung; der Knopf „Konto kündigen" ist
+     eine. */
+  const weg = wortTreffer(zielText, WORTE_UNWIDERRUFLICH);
+  if (weg) merken("unwiderruflich", `am Wort „${weg}"`);
+
+  /* datei — die Bauform des Elements zählt zuerst. `input[type=file]` öffnet
+     den Dateiwähler des Betriebssystems, und was dort passiert, sieht diese
+     Erweiterung nicht mehr. */
+  if (marke === "input" && typ === "file") merken("datei", "an einem Dateifeld");
+  const datei = wortTreffer(beides, WORTE_DATEI);
+  if (datei) merken("datei", `am Wort „${datei}"`);
+
+  /* berechtigung — nur, wenn beide Hälften dastehen. */
+  const recht = wortTreffer(zielText, WORTE_BERECHTIGUNG);
+  if (recht && wortTreffer(zielText, WORTE_ZULASSEN)) {
+    merken("berechtigung", `am Wort „${recht}"`);
+  }
+
+  /* captcha — Ziel oder Adresse. Ein Treffer heisst nie „automatisch lösen",
+     sondern immer „an den Menschen übergeben" (§3.1). */
+  const captcha = wortTreffer(beides, WORTE_CAPTCHA);
+  if (captcha) merken("captcha", `am Wort „${captcha}"`);
+
+  /* senden — nur beim Klick. Ein Feld, das „Antworten" heisst, ist ein Feld;
+     der Knopf daneben ist die Handlung. */
+  if (befehl === "click") {
+    const senden = wortTreffer(zielText, WORTE_SENDEN);
+    if (senden) merken("senden", `am Wort „${senden}"`);
+  }
+
+  /* formular — Tippen mit Absenden, und der Absendeknopf selbst. */
+  if (befehl === "type" && p.absenden === true) merken("formular", "am Absenden der Eingabe");
+  if (befehl === "click" && rolle === "button" && typ === "submit") {
+    merken("formular", "an einem Absendeknopf");
+  }
+
+  /* `tab_neu` steht in KLASSEN und in der Einstellungsmatrix, wird aber von
+     keinem Befehl ausgelöst: Eine Sitzung kennt genau einen Tab (siehe Kopf
+     von BEFEHLE). Die Klasse bleibt, weil eine Matrix mit einem toten
+     Schalter lügt; dass sie heute nie ausgelöst wird, hält ein Prüfsatz fest. */
+
+  const klassen = KLASSEN.filter((k) => gefunden.has(k));
+  const hart = klassen.find((k) => HART.has(k)) || null;
+  const weich = klassen.filter((k) => WEICH.has(k));
+
+  /* Der Grund nennt UNSER Wort, nie den Fremdtext, in dem es stand. Das ist
+     der Unterschied zwischen „erkannt an ,kasse'" und dem Vorlesen einer
+     fremden Überschrift, und es ist derselbe Grundsatz wie überall hier:
+     Seitentext geht nicht in die Frage an den Menschen. */
+  const grund = klassen.length
+    ? `Erkannt: ${klassen.map((k) => `${KLASSE_TEXT[k]} ${gefunden.get(k)}`).join(", ")}.`
+    : "Diesem Schritt konnte ich keine Klasse zuordnen.";
+
+  return { klassen, hart, weich, grund };
+}
+
+/**
+ * Muss der Mensch gefragt werden?
+ *
+ * @param {string} modus   einer aus MODI
+ * @param {object} befund  Ergebnis aus `klassenBestimmen`
+ * @param {object} regeln  { gesperrt: boolean, frei: string[] } aus net/matrix.js
+ * @returns {{fragen: boolean, sperren: boolean, code: string|null, grund: string}}
+ *
+ * `sperren` heisst: Die Sperrliste greift, dieser Host fällt in jedem Modus
+ * auf Handbetrieb zurück. Der Aufrufer darf hier von sich aus gar nichts tun.
+ * `fragen` bleibt trotzdem true, weil der Mensch in diesem Augenblick immer
+ * noch Ja sagen darf — es ist seine Bank, nicht unsere.
+ *
+ * Der Unterschied zwischen `assist` und `auto` ist genau einer: `auto` lässt
+ * die je Domain freigeschalteten weichen Klassen durch. Sonst nichts. Wer das
+ * Etikett `auto` liest, soll nicht mehr bekommen, als es verspricht.
+ */
+export function freigabeNoetig(modus, befund, regeln) {
+  /* Ein unbekannter Modus wird zu `manual` und nicht zur Voreinstellung.
+     `assist` wäre die bequeme Wahl und die falsche: Ein Modus, den niemand
+     lesen kann, ist ein Modus, den niemand gesetzt hat. */
+  const m = MODI.includes(modus) ? modus : "manual";
+  const b = befund && typeof befund === "object" ? befund : {};
+  const r = regeln && typeof regeln === "object" ? regeln : {};
+
+  /* Der Befund wird nicht geglaubt, sondern gemessen. Alle drei Felder werden
+     zusammengeworfen und danach gegen HART und WEICH gehalten.
+
+     Der Grund ist derselbe wie überall hier: Ein Befund, der eine harte Klasse
+     unter `weich` führte oder sie in `klassen` stehen liesse, ohne sie in
+     `hart` zu nennen, wäre freischaltbar und damit abschaltbar. Diese Funktion
+     ist die letzte Stelle vor der Ausführung; sie darf sich auf die Sorgfalt
+     ihres Aufrufers nicht verlassen. */
+  const roh = new Set(
+    [
+      ...(Array.isArray(b.klassen) ? b.klassen : []),
+      ...(Array.isArray(b.weich) ? b.weich : []),
+      b.hart,
+    ].filter((k) => typeof k === "string")
+  );
+  const klassen = KLASSEN.filter((k) => roh.has(k));
+  const hart = klassen.find((k) => HART.has(k)) || null;
+  const weich = klassen.filter((k) => WEICH.has(k));
+  const frei = (Array.isArray(r.frei) ? r.frei : []).filter((k) => WEICH.has(k));
+
+  if (r.gesperrt === true) {
+    return {
+      fragen: true,
+      sperren: true,
+      code: "guardrail_blocked",
+      grund: "Diese Seite steht auf der Sperrliste, hier frage ich in jedem Modus.",
+    };
+  }
+
+  if (hart) {
+    return {
+      fragen: true,
+      sperren: false,
+      code: "guardrail_blocked",
+      grund: `${KLASSE_TEXT[hart]} ist nie abschaltbar, hier frage ich auch in der Automatik.`,
+    };
+  }
+
+  const zu = weich.filter((k) => !frei.includes(k));
+  if (zu.length) {
+    return {
+      fragen: true,
+      sperren: false,
+      code: "guardrail_blocked",
+      grund: `${KLASSE_TEXT[zu[0]]} ist für diese Seite nicht freigeschaltet.`,
+    };
+  }
+
+  if (m === "manual") {
+    return {
+      fragen: true,
+      sperren: false,
+      code: null,
+      grund: "Im Handbetrieb frage ich bei jedem Schritt.",
+    };
+  }
+
+  if (weich.length) {
+    if (m === "auto") {
+      return {
+        fragen: false,
+        sperren: false,
+        code: null,
+        grund: "Diese Klasse ist für diese Seite freigeschaltet, und der Modus ist Automatik.",
+      };
+    }
+    return {
+      fragen: true,
+      sperren: false,
+      code: null,
+      grund: "In der Mitarbeit frage ich auch bei freigeschalteten Klassen.",
+    };
+  }
+
+  /* Ohne erkannte Klasse wird gefragt. `run_workflow` läuft hier hinein, und
+     jeder Befehl, den eine spätere Fassung hinzufügt, ohne an diese Tabelle
+     zu denken. Ein neuer Befehl, der still durchläuft, wäre genau die Lücke,
+     die niemand bemerkt. */
+  const bekannt = klassen.some((k) => k === "lesen" || k === "bedienen" || k === "navigieren");
+  if (!bekannt) {
+    return {
+      fragen: true,
+      sperren: false,
+      code: null,
+      grund: "Diesem Schritt konnte ich keine Klasse zuordnen, deshalb frage ich lieber nach.",
+    };
+  }
+
+  return {
+    fragen: false,
+    sperren: false,
+    code: null,
+    grund: "Lesen, Bedienen und Ortswechsel laufen in diesem Modus durch.",
+  };
+}
+
+/* --------------------------------------------------------------------- *
+ * Schleifenerkennung und Platzhalterwerte (§5, §8.2)
+ * --------------------------------------------------------------------- */
+
+/**
+ * JSON mit sortierten Schlüsseln.
+ *
+ * Warum sortiert: Die Marke eines Schrittes wird mit der des vorigen
+ * verglichen. Zwei Pläne mit denselben Werten in anderer Reihenfolge sind
+ * derselbe Schritt, und eine Schleifenerkennung, die das nicht sieht, erkennt
+ * keine einzige Schleife.
+ *
+ * Sie wirft nie: Ein Plan, der sich nicht abbilden lässt, ergibt „null" und
+ * damit eine Marke, die zwar grob, aber vorhanden ist. Eine Ausnahme an dieser
+ * Stelle würde einen laufenden Auftrag abbrechen, weil die WACHE stolpert.
+ */
+export function stabilJson(wert) {
+  const sortiert = (w, tiefe) => {
+    if (tiefe > 8) return "…"; // schneidet auch Ringe ab, ohne sie zu suchen
+    if (w === undefined) return null;
+    if (w === null || typeof w !== "object") return w;
+    if (Array.isArray(w)) return w.map((e) => sortiert(e, tiefe + 1));
+    const raus = {};
+    for (const k of Object.keys(w).sort()) raus[k] = sortiert(w[k], tiefe + 1);
+    return raus;
+  };
+  try {
+    const t = JSON.stringify(sortiert(wert, 0));
+    return typeof t === "string" ? t : "null";
+  } catch (_) {
+    return "null";
+  }
+}
+
+/**
+ * Der Fingerabdruck eines Schrittes (§5).
+ *
+ * Der Bildlaufstand gehört dazu, weil dieselbe Aktion an einer anderen Stelle
+ * der Seite eine andere Aktion ist: Dreimal „auf den nächsten Knopf klicken"
+ * mit wanderndem Bildlauf ist Arbeit, dreimal ohne ist eine Schleife. Er wird
+ * auf ganze Pixel gerundet — ein Bildlauf, der um ein Zehntelpixel zittert,
+ * darf die Erkennung nicht aushebeln.
+ */
+export function schrittMarke(cmd, plan, kopf, bildlauf) {
+  const c = typeof cmd === "string" ? cmd : "";
+  const url = String((kopf && kopf.url) || "");
+  const roh = Number(bildlauf && bildlauf.y);
+  const y = Number.isFinite(roh) ? Math.round(roh) : 0;
+  return `${c}|${stabilJson(plan)}|${url}|${y}`;
+}
+
+/* Die Kennung eines Ablaufs und die Namen seiner Platzhalter. Beide stehen
+   hier und nicht in werkstatt.js, weil `parameterPruefen` sie braucht und
+   zwei Muster für dieselbe Sache auseinanderlaufen, sobald jemand eines
+   ändert. */
+export const WORKFLOW_ID_MUSTER = /^wf_[a-z0-9_]{1,40}$/;
+export const PARAM_NAME_MUSTER = /^[a-zA-Z0-9_]{1,40}$/;
+
+/**
+ * Die Werte für einen Ablauf: ein flaches Objekt aus Zeichenketten (§8.2).
+ *
+ * Zahlen und Wahrheitswerte werden nicht umgedeutet, sondern abgelehnt. Das
+ * ist derselbe Befund wie bei `scroll` am 29.07.2026: Wer `12345` still zu
+ * „12345" macht, bekommt beim nächsten Mal `null` und tippt „null" in ein
+ * Formularfeld.
+ *
+ * @returns {{ok:true, params:object} | {ok:false, satz:string, hinweis:string}}
+ */
+export function paramsPruefen(roh) {
+  if (fehltDas(roh)) return { ok: true, params: {} };
+  if (typeof roh !== "object" || Array.isArray(roh)) {
+    return {
+      ok: false,
+      satz: "`params` war kein Satz von Werten.",
+      hinweis: "Ein flaches Objekt mitsenden, zum Beispiel {\"artikelnummer\": \"123\"} — oder das Feld weglassen.",
+    };
+  }
+  const namen = Object.keys(roh);
+  if (namen.length > GRENZEN.workflowParams) {
+    return {
+      ok: false,
+      satz: `Ich habe ${namen.length} Werte bekommen, mehr als ${GRENZEN.workflowParams} nehme ich nicht an.`,
+      hinweis: `Höchstens ${GRENZEN.workflowParams} Einträge mitsenden.`,
+    };
+  }
+  const params = {};
+  for (const name of namen) {
+    if (!PARAM_NAME_MUSTER.test(name)) {
+      return {
+        ok: false,
+        satz: `„${saeubern(name, 40)}" ist kein Name für einen Wert.`,
+        hinweis: "Namen aus Buchstaben, Ziffern und Unterstrich, höchstens 40 Zeichen.",
+      };
+    }
+    const wert = roh[name];
+    if (typeof wert !== "string") {
+      return {
+        ok: false,
+        satz: `Der Wert für „${saeubern(name, 40)}" war keine Zeichenkette.`,
+        hinweis: "Alle Werte als Zeichenketten mitsenden, auch Zahlen.",
+      };
+    }
+    if (wert.length > GRENZEN.workflowParamZeichen) {
+      return {
+        ok: false,
+        satz: `Der Wert für „${saeubern(name, 40)}" ist länger als die ${GRENZEN.workflowParamZeichen} Zeichen, die ich annehme.`,
+        hinweis: "Kürzer fassen, oder den langen Text über `type` in das Feld schreiben.",
+      };
+    }
+    params[name] = wert;
+  }
+  return { ok: true, params };
+}
+
+/* --------------------------------------------------------------------- *
+ * Abwehr von Prompt-Einschleusung (§9)
+ * --------------------------------------------------------------------- */
+
+/**
+ * Steht in diesem Text der Versuch, dem Agenten neue Anweisungen zu geben?
+ *
+ * Ein Treffer hält den Modus `auto` an und fällt auf `assist` zurück; er
+ * beendet die Sitzung NICHT. Die Erweiterung liest hier fremden Fliesstext,
+ * und fremder Fliesstext darf über eine laufende Arbeit nicht endgültig
+ * entscheiden: „Ignore previous instructions" steht auch in jedem zweiten
+ * Artikel über Prompt-Einschleusung.
+ *
+ * @returns {{verdacht: boolean, muster: string|null}}
+ */
+export function einschleusungVerdacht(text) {
+  /* Ohne Längengrenze, anders als überall sonst: Gesucht wird im ganzen
+     Textbaum, und ein Satz, der bei Zeichen 400 abgeschnitten wird, ist genau
+     der Satz, den ein Angreifer ans Ende schreibt. */
+  const flach = flachmachen(text, Number.MAX_SAFE_INTEGER);
+  if (!flach) return { verdacht: false, muster: null };
+  /* Verglichen wird mit Leerzeichen an beiden Rändern, nicht als blosses
+     Wortstück. Sonst steckt „act as" in „contract as agreed", und ein
+     Kaufvertrag hielte den Automatikmodus an. `flachmachen` setzt an beide
+     Enden ein Leerzeichen, damit auch das erste und das letzte Wort so
+     gefunden werden. */
+  for (const muster of WORTE_EINSCHLEUSUNG) {
+    if (flach.includes(` ${muster} `)) return { verdacht: true, muster };
+  }
+  return { verdacht: false, muster: null };
 }
 
 /* --------------------------------------------------------------------- *

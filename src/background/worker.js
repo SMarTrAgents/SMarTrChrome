@@ -21,9 +21,18 @@
 import * as link from "../net/link.js";
 import * as chat from "../net/chat.js";
 import * as konto from "../net/konto.js";
+import * as werkstatt from "../net/werkstatt.js";
+import * as protokollbuch from "../net/protokollbuch.js";
+/* Der Ausführer als Modul, nicht als benanntes Feld: `run_workflow` bekommt
+   seine Ausführung in derselben Runde (Vertrag v3.5 §8.2). Fehlt sie noch,
+   soll der Dienstarbeiter trotzdem laden und eine Aussage liefern, statt gar
+   nicht erst zu starten. */
+import * as ausfuehrer from "../net/ausfuehrer.js";
 import { alteRechteAufraeumen } from "../net/rechte.js";
-import { overlaySicherstellen } from "../net/seite.js";
+import { overlaySicherstellen, anSeite } from "../net/seite.js";
 import { CLOUD_URSPRUNG } from "../net/dienste.js";
+import { MODI, MODUS_STANDARD, MODUS_ABLAGE, GRENZEN } from "../net/befehle.js";
+import { REKORDER_ABLAGE } from "../net/werkstatt.js";
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.sidePanel
@@ -32,6 +41,7 @@ chrome.runtime.onInstalled.addListener(() => {
   /* Nach Installation oder Aktualisierung gibt es keine laufende Sitzung.
      Also darf es auch kein Seitenrecht geben. */
   alteRechteAufraeumen().catch(() => {});
+  aufzeichnungAufraeumen().catch(() => {});
   abzeichenAus();
 });
 
@@ -40,8 +50,31 @@ chrome.runtime.onInstalled.addListener(() => {
    getöteter Worker, hart geschlossener Browser. */
 chrome.runtime.onStartup.addListener(() => {
   alteRechteAufraeumen().catch(() => {});
+  aufzeichnungAufraeumen().catch(() => {});
   abzeichenAus();
 });
+
+/*
+ * Reste einer Aufzeichnung wegräumen (§7.2, Ablage `sa_rekorder`).
+ *
+ * Sie liegt in `chrome.storage.local`, weil sie einen Seitenwechsel überleben
+ * muss. Einen BROWSERSTART darf sie nicht überleben: Danach ist das
+ * Inhaltsskript weg, die Seitenleiste zu, und die Schritte gehören zu Seiten,
+ * die niemand mehr offen hat. Eine Aufzeichnung, die sich stumm wieder
+ * einschaltet, ist eine Mitschrift, um die niemand gebeten hat.
+ *
+ * Ausdrücklich NICHT bei jedem Start des Dienstarbeiters: MV3 beendet ihn im
+ * Leerlauf, und eine laufende Aufzeichnung wäre nach dreissig Sekunden weg.
+ * Deshalb hängt es an `onStartup` und `onInstalled`, nicht am Modulrumpf.
+ */
+async function aufzeichnungAufraeumen() {
+  try {
+    await chrome.storage.local.remove(REKORDER_ABLAGE);
+  } catch (_) {
+    /* Ohne Ablage gibt es auch keinen Rest. */
+  }
+  await ausfuehrer.rekorderBilderLeeren().catch(() => {});
+}
 
 /* Das LIVE-Abzeichen am Symbol ist browserweite Oberfläche und überlebt einen
    Neustart des Hintergrunddienstes. Läuft keine Sitzung mehr, muss es weg —
@@ -52,6 +85,99 @@ function abzeichenAus() {
   } catch (_) {
     /* ohne action-API bleibt der grüne Rahmen im Tab das Hauptsignal */
   }
+}
+
+/*
+ * Bei JEDEM Start dieses Dienstarbeiters, nicht nur bei Installation und
+ * Browserstart.
+ *
+ * MV3 beendet den Dienstarbeiter im Leerlauf. Wacht er wieder auf, ist die
+ * Leitung zum Relay tot, die Sitzung in der Ablage aber noch da. Bis zum
+ * 14.08.2026 fiel das erst dem 30-Sekunden-Wecker auf — und nur, wenn es ihn
+ * überhaupt noch gab. `anlaufPruefen` beendet eine solche Sitzung sofort und
+ * ehrlich, mit Widerruf beim Relay, und nimmt das Abzeichen weg. Es baut
+ * ausdrücklich nichts wieder auf: Die Freigabe galt einer Verbindung, nicht
+ * dem Recht, sie nachzubilden.
+ *
+ * Der Aufruf steht im Modulrumpf und damit im Produktivweg jedes Starts.
+ */
+link.anlaufPruefen().catch(() => {});
+
+/* ------------------------------------------------------------------ *
+ * Der Betriebsmodus je Tab (Vertrag v3.5 §2)
+ *
+ * Ablage `chrome.storage.session`, Schlüssel `sa_modus`. Er stirbt mit dem
+ * Browser: Ein Modus, der einen Neustart überlebt, wäre eine Vollmacht, an die
+ * sich niemand erinnert.
+ *
+ * **Gelesen und geschrieben wird die Ablage ausschliesslich in
+ * `net/ausfuehrer.js`.** Dieser Dienstarbeiter reicht `modus:setzen` und
+ * `modus:stand?` nur durch.
+ *
+ * Befund vom 14.08.2026 (Verzahnung): Bis hierher standen zwei Fassungen
+ * derselben Ablage nebeneinander, und sie lasen dasselbe Feld verschieden. Für
+ * diesen Dienstarbeiter war `schritte[42]` das eingestellte LIMIT, für den
+ * Ausführer der bisher verbrauchte ZÄHLER. Wer in der Seitenleiste 200 Schritte
+ * einstellte, schrieb damit „200 Schritte sind schon gelaufen" — der nächste
+ * Befehl wäre mit `step_limit` gestorben. Deshalb hat die Ablage ab jetzt genau
+ * einen Leser und einen Schreiber. Das eingestellte Limit heisst dort `grenze`,
+ * der Zähler bleibt `schritte`.
+ *
+ * Nach aussen, in den Nachrichten aus §6, heisst das Limit weiterhin
+ * `schritte` — so steht es im Vertrag, und so liest es die Seitenleiste.
+ * ------------------------------------------------------------------ */
+
+/** Was für diesen Tab gilt. Ohne Eintrag die Voreinstellung, nie „auto". */
+async function modusStand(tabId) {
+  const stand = await ausfuehrer.modusStand(tabId);
+  return {
+    modus: MODI.includes(stand.modus) ? stand.modus : MODUS_STANDARD,
+    /* Das Limit, das für diesen Tab gilt. Der Vertrag nennt dieses Feld in
+       `modus:stand?` `schritte`. */
+    schritte: Number.isFinite(stand.grenze) ? stand.grenze : GRENZEN.schritteJeAuftrag,
+    /* Was davon verbraucht ist. Neu und freiwillig: Die Seitenleiste kann
+       damit anzeigen, wie weit ein Auftrag ist, ohne dafür raten zu müssen. */
+    getan: Number.isFinite(stand.schritte) ? stand.schritte : 0,
+  };
+}
+
+/**
+ * Den Modus eines Tabs setzen.
+ *
+ * @returns {Promise<{ok:true, modus:string, schritte:number} | {ok:false, kennung:string, klartext:string}>}
+ *
+ * Ein unbekannter Modus wird abgelehnt und nicht auf die Voreinstellung
+ * gebogen: Wer „auto" tippt und „assist" bekommt, glaubt, er habe etwas
+ * eingestellt. Umgekehrt wäre eine stillschweigende Erhöhung noch schlimmer.
+ */
+async function modusSetzen(tabId, modus, schritte) {
+  if (!Number.isInteger(tabId)) {
+    return {
+      ok: false,
+      kennung: "tab_unbekannt",
+      klartext: "Zu dieser Einstellung fehlt der Tab, für den sie gelten soll.",
+    };
+  }
+  if (!MODI.includes(modus)) {
+    return {
+      ok: false,
+      kennung: "modus_unbekannt",
+      klartext: `Diesen Modus kenne ich nicht. Möglich sind ${MODI.join(", ")}.`,
+    };
+  }
+
+  /* Das Schrittlimit ist in der Seitenleiste einstellbar (§5), der Deckel von
+     500 ist es nicht. Durchgesetzt wird er dort, wo die Ablage geschrieben
+     wird, damit er nicht an zwei Stellen steht. */
+  const ergebnis = await ausfuehrer.modusSetzen(tabId, modus, schritte);
+  if (!ergebnis.ok) {
+    return {
+      ok: false,
+      kennung: "ablage_fehler",
+      klartext: "Die Einstellung liess sich nicht merken. Bitte versuche es noch einmal.",
+    };
+  }
+  return { ok: true, ...(await modusStand(tabId)) };
 }
 
 /*
@@ -82,6 +208,98 @@ function abzeichenAus() {
  */
 function ausEigenerOberflaeche(absender) {
   return !!absender && absender.id === chrome.runtime.id && !absender.tab;
+}
+
+/* Ein Satz für alle Absagen dieser Art, damit sie überall gleich klingen. Ein
+   zweiter Versuch hilft hier nicht, also wird er auch nicht empfohlen
+   (Regel Inhaber 28.07.2026). */
+const ABSAGE_ABSENDER = Object.freeze({
+  ok: false,
+  kennung: "absender_ungueltig",
+  klartext:
+    "Diese Anfrage kam nicht aus der Seitenleiste. Aus Sicherheitsgründen habe ich sie verworfen.",
+});
+
+/*
+ * Das Aufzeichnungsskript (§7.1, §7.2).
+ *
+ * Es steht bewusst nicht im Manifest: Eingespielt wird erst, wenn der Mensch
+ * die Aufzeichnung startet, nicht schon beim Besuch einer Seite. Erst wird
+ * gefragt, ob schon jemand da ist; antwortet niemand, wird eingespielt und
+ * genau einmal nachgefragt. Die Reihenfolge der Dateien ist verbindlich:
+ * `selektor.js` schreibt nach `globalThis.SMARTR_SELEKTOR` und muss vor
+ * `rekorder.js` laufen.
+ */
+const REKORDER_DATEIEN = ["src/content/selektor.js", "src/content/rekorder.js"];
+
+async function rekorderSenden(tabId, nachricht) {
+  if (!Number.isInteger(tabId)) return { ok: false, fehler: "tab_unbekannt" };
+
+  const erster = await anSeite(tabId, nachricht, 4000);
+  if (erster.ok) return erster;
+
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: false },
+      files: REKORDER_DATEIEN,
+    });
+  } catch (_) {
+    /* Kein Recht für diesen Ursprung, oder eine Seite, in die Chrome nichts
+       einspielt (Web Store, PDF-Betrachter, Fehlerseite). Für den Aufrufer ist
+       das dasselbe: Hier kann nicht aufgezeichnet werden. */
+    return { ok: false, fehler: "einspielen_fehlgeschlagen" };
+  }
+  return anSeite(tabId, nachricht, 4000);
+}
+
+/*
+ * Einen gespeicherten Ablauf abspielen (§7.3).
+ *
+ * **Durch dieselbe Befehlsschleife wie ein Agentenbefehl.** Das ist keine
+ * Bequemlichkeit, sondern die Bedingung, unter der es diesen Knopf überhaupt
+ * geben darf: Ein Workflow ist eine Reihe von Befehlen, keine zweite Tür. Er
+ * umgeht weder Modus noch Freigabe noch Bereichsprüfung noch Verdeckungswache,
+ * weil er denselben Weg nimmt und nicht einen eigenen daneben.
+ *
+ * Einen `agent` trägt dieser Rahmen NICHT. Hier steuert kein Agent, hier hat
+ * ein Mensch auf „Abspielen" gedrückt, und ein erfundener Agentenname stünde
+ * hinterher im Protokollbuch als Tatsache.
+ */
+async function ablaufSpielen(id, params) {
+  const kennung = typeof id === "string" ? id : "";
+  if (typeof ausfuehrer.befehlAusfuehren !== "function") {
+    return {
+      ok: false,
+      kennung: "nicht_gebaut",
+      klartext: "Abläufe abspielen kann diese Fassung noch nicht.",
+    };
+  }
+
+  const sitzung = await link.zustand();
+  const ergebnis = await ausfuehrer.befehlAusfuehren(
+    {
+      /* Die Kennung des Ablaufs ist zugleich die Kennung dieses Laufes. Der
+         Weg über den Relay hat dafür zwei getrennte Felder; hier ist keiner
+         dazwischen, der eine zweite vergeben könnte. */
+      id: kennung,
+      cmd: "run_workflow",
+      /* Der Satz, der dem Menschen vorgelesen wird. Er ist Pflicht, und er
+         stammt an dieser Stelle von uns, weil kein Agent gefragt hat. */
+      reason: `Ich spiele den gespeicherten Ablauf ${kennung} ab.`,
+      params: params && typeof params === "object" && !Array.isArray(params) ? params : {},
+    },
+    sitzung && sitzung.verbunden ? sitzung : {}
+  );
+
+  return {
+    ok: !!(ergebnis && ergebnis.success),
+    kennung: ergebnis && ergebnis.error ? ergebnis.error.code : null,
+    klartext:
+      ergebnis && ergebnis.error
+        ? ergebnis.error.message
+        : "Der Ablauf ist durchgelaufen.",
+    daten: (ergebnis && ergebnis.data) || null,
+  };
 }
 
 chrome.runtime.onMessage.addListener((n, absender, antwort) => {
@@ -291,6 +509,254 @@ chrome.runtime.onMessage.addListener((n, absender, antwort) => {
       .unbeaufsichtigtSetzen(n.an === true)
       .then(() => antwort({ ok: true }))
       .catch(() => antwort({ ok: false }));
+    return true;
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Die Nachrichten aus Vertrag v3.5 §6
+   *
+   * Jede einzelne davon durchläuft `ausEigenerOberflaeche()`. Ohne Ausnahme:
+   * `notbremse` und `rekorder:stand` sind die beiden, die aus einem Tab kommen
+   * dürfen, und sie stehen an ihrer eigenen Stelle. Alles Übrige stellt etwas
+   * ein, spielt etwas ab oder gibt etwas heraus — eine besuchte Seite darf
+   * nichts davon.
+   *
+   * Warum das eine Positivliste ist und keine Aufzählung des Verbotenen: Ein
+   * Inhaltsskript läuft in einer fremden Seite. Was von dort kommt, wird
+   * gemessen, nicht geglaubt. `absender.tab` setzt Chrome selbst, aus der Seite
+   * heraus ist es nicht fälschbar.
+   * ---------------------------------------------------------------- */
+
+  if (n.typ === "modus:setzen") {
+    if (!ausEigenerOberflaeche(absender)) {
+      antwort(ABSAGE_ABSENDER);
+      return false;
+    }
+    modusSetzen(n.tabId, n.modus, n.schritte)
+      .then(antwort)
+      .catch(() =>
+        antwort({
+          ok: false,
+          kennung: "unerwartet",
+          klartext:
+            "In der Erweiterung ist etwas schiefgegangen. Die Einstellung ist nicht angekommen, das liegt an uns.",
+        })
+      );
+    return true;
+  }
+
+  if (n.typ === "modus:stand?") {
+    if (!ausEigenerOberflaeche(absender)) {
+      /* Auch die Auskunft ist eine Auskunft. Sie verrät, wie weit dieser
+         Browser gerade freigeschaltet ist, und geht deshalb nur an die eigene
+         Oberfläche. Die Voreinstellung ist die vorsichtige. */
+      antwort({ modus: MODUS_STANDARD, schritte: GRENZEN.schritteJeAuftrag });
+      return false;
+    }
+    modusStand(Number.isInteger(n.tabId) ? n.tabId : -1)
+      .then(antwort)
+      .catch(() => antwort({ modus: MODUS_STANDARD, schritte: GRENZEN.schritteJeAuftrag }));
+    return true;
+  }
+
+  /* Der Stoppknopf der Seitenleiste. Derselbe Weg wie Esc Esc im Tab und
+     Alt+Umschalt+S, nur mit einem anderen Absender. */
+  if (n.typ === "link:notaus") {
+    if (!ausEigenerOberflaeche(absender)) {
+      antwort(ABSAGE_ABSENDER);
+      return false;
+    }
+    link.trennen("notbremse").catch(() => {});
+    chrome.runtime
+      .sendMessage({ typ: "notbremse:an-panel", quelle: n.grund || "seitenleiste" })
+      .catch(() => {});
+    antwort({ ok: true });
+    return true;
+  }
+
+  if (n.typ === "rekorder:start" || n.typ === "rekorder:stop") {
+    if (!ausEigenerOberflaeche(absender)) {
+      antwort(ABSAGE_ABSENDER);
+      return false;
+    }
+    rekorderSenden(n.tabId, { typ: n.typ, tabId: n.tabId })
+      .then((lage) => {
+        if (!lage.ok) {
+          antwort({
+            ok: false,
+            kennung: lage.fehler || "kein_empfaenger",
+            klartext:
+              "Auf dieser Seite kann ich nicht aufzeichnen. Öffne bitte eine gewöhnliche Webseite und versuche es dort.",
+          });
+          return;
+        }
+        antwort({ ok: true, ...(lage.antwort || {}) });
+      })
+      .catch(() =>
+        antwort({
+          ok: false,
+          kennung: "unerwartet",
+          klartext: "In der Erweiterung ist etwas schiefgegangen. Die Aufzeichnung läuft nicht, das liegt an uns.",
+        })
+      );
+    return true;
+  }
+
+  /* Das Miniaturbild zu einem aufgezeichneten Schritt (§7.2).
+   *
+   * Sie ist die DRITTE Nachricht, die aus einem Tab kommen darf, neben
+   * `notbremse` und `rekorder:stand`. Sie darf es, weil sie nichts einstellt
+   * und nichts auslöst: Der Rekorder nennt Name, Nummer und Rechteck, die
+   * Aufnahme macht der Ausführer.
+   *
+   * Der Tab kommt von Chrome (`absender.tab.id`) und ausdrücklich NICHT aus
+   * der Nutzlast. Sonst könnte ein Inhaltsskript im Hintergrund die Seite
+   * fotografieren lassen, die gerade vorn steht — `captureVisibleTab` nimmt
+   * den sichtbaren Tab auf, nicht den genannten. Der Ausführer prüft das ein
+   * zweites Mal, unmittelbar vor der Aufnahme. */
+  if (n.typ === "rekorder:bild") {
+    const ausTab = absender && absender.tab ? absender.tab.id : null;
+    if (!Number.isInteger(ausTab)) {
+      /* Aus der Seitenleiste kommt kein Bild: Dort steht keine Aufzeichnung,
+         die eines brauchte. */
+      antwort(ABSAGE_ABSENDER);
+      return false;
+    }
+    ausfuehrer
+      .rekorderBild(ausTab, { name: n.name, nr: n.nr, anlass: n.anlass, rect: n.rect })
+      .then(antwort)
+      .catch(() =>
+        antwort({
+          ok: false,
+          kennung: "unerwartet",
+          klartext: "Das Bild ist nicht entstanden, das liegt an uns.",
+        })
+      );
+    return true;
+  }
+
+  /* Der Zählerstand der Aufzeichnung kommt AUS dem Tab und gehört in die
+     Seitenleiste. Er ist neben `notbremse` und `rekorder:bild` die einzige
+     Nachricht, die ein Inhaltsskript absetzen darf: Sie stellt nichts ein und
+     löst nichts aus, sie sagt nur, wie viele Schritte bisher aufgezeichnet
+     wurden. */
+  if (n.typ === "rekorder:stand") {
+    chrome.runtime
+      .sendMessage({
+        typ: "rekorder:stand",
+        anzahl: Number.isFinite(Number(n.anzahl)) ? Math.max(0, Math.floor(Number(n.anzahl))) : 0,
+        laeuft: n.laeuft === true,
+        /* Aus welchem Tab, setzt Chrome, nicht die Seite. */
+        tabId: absender && absender.tab ? absender.tab.id : null,
+      })
+      .catch(() => {});
+    antwort({ ok: true });
+    return true;
+  }
+
+  if (n.typ === "werkbank:liste") {
+    if (!ausEigenerOberflaeche(absender)) {
+      antwort({ workflows: [] });
+      return false;
+    }
+    werkstatt
+      .workflowsLesen()
+      .then((workflows) => antwort({ workflows }))
+      .catch(() => antwort({ workflows: [] }));
+    return true;
+  }
+
+  if (n.typ === "werkbank:schreiben") {
+    if (!ausEigenerOberflaeche(absender)) {
+      antwort(ABSAGE_ABSENDER);
+      return false;
+    }
+    werkstatt
+      .workflowSchreiben(n.workflow)
+      .then((ergebnis) =>
+        antwort(
+          ergebnis.ok
+            ? { ok: true, workflow: ergebnis.workflow }
+            : { ok: false, kennung: ergebnis.code, klartext: ergebnis.satz, hinweis: ergebnis.hinweis }
+        )
+      )
+      .catch(() =>
+        antwort({
+          ok: false,
+          kennung: "unerwartet",
+          klartext: "In der Erweiterung ist etwas schiefgegangen. Der Ablauf ist nicht gespeichert, das liegt an uns.",
+        })
+      );
+    return true;
+  }
+
+  if (n.typ === "werkbank:loeschen") {
+    if (!ausEigenerOberflaeche(absender)) {
+      antwort(ABSAGE_ABSENDER);
+      return false;
+    }
+    werkstatt
+      .workflowLoeschen(typeof n.id === "string" ? n.id : "")
+      .then((ergebnis) =>
+        antwort(
+          ergebnis.ok
+            ? { ok: true, id: ergebnis.id }
+            : { ok: false, kennung: ergebnis.code, klartext: ergebnis.satz, hinweis: ergebnis.hinweis }
+        )
+      )
+      .catch(() =>
+        antwort({
+          ok: false,
+          kennung: "unerwartet",
+          klartext: "In der Erweiterung ist etwas schiefgegangen. Der Ablauf steht noch da, das liegt an uns.",
+        })
+      );
+    return true;
+  }
+
+  if (n.typ === "werkbank:spielen") {
+    if (!ausEigenerOberflaeche(absender)) {
+      antwort(ABSAGE_ABSENDER);
+      return false;
+    }
+    ablaufSpielen(n.id, n.params)
+      .then(antwort)
+      .catch(() =>
+        antwort({
+          ok: false,
+          kennung: "unerwartet",
+          klartext: "In der Erweiterung ist etwas schiefgegangen. Der Ablauf ist nicht gelaufen, das liegt an uns.",
+        })
+      );
+    return true;
+  }
+
+  if (n.typ === "buch:lesen") {
+    if (!ausEigenerOberflaeche(absender)) {
+      /* Das Buch nennt Adressen, auf denen gearbeitet wurde. Eine besuchte
+         Seite erführe daraus, wo der Mensch sonst noch war. */
+      antwort({ eintraege: [] });
+      return false;
+    }
+    protokollbuch
+      .lesen({
+        von: Number.isFinite(Number(n.von)) ? Number(n.von) : 0,
+        bis: Number.isFinite(Number(n.bis)) ? Number(n.bis) : Infinity,
+      })
+      .then((eintraege) => antwort({ eintraege }))
+      .catch(() => antwort({ eintraege: [] }));
+    return true;
+  }
+
+  if (n.typ === "buch:ausgeben") {
+    if (!ausEigenerOberflaeche(absender)) {
+      antwort({ json: "" });
+      return false;
+    }
+    protokollbuch
+      .ausgeben()
+      .then((json) => antwort({ json }))
+      .catch(() => antwort({ json: "" }));
     return true;
   }
 
