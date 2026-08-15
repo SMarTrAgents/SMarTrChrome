@@ -5,6 +5,40 @@ Fassung ist **Was nicht geht**. Er steht hier und nicht in der Ankündigung.
 
 ---
 
+## 0.6.1, 15.08.2026 — Beibringen im Hauptlayout, SMarTrBrowser auf der Liste
+
+### Neu
+
+- **Der Teach-Modus hat einen Einstieg im Hauptlayout.** Bis 0.6.0 war er nur
+  über Menü → Werkbank erreichbar. Jetzt steht unterhalb der Moduswahl die
+  Karte „Beibringen": Aufnahme starten, Aufnahme beenden, der Zustand steht
+  als Wortlaut daneben (der rote Punkt ist nur Zweitsignal), und nach dem
+  Beenden nennt ein Satz den Ablageort samt Knopf in die Werkbank. Es ist
+  keine zweite Logikfassung: Die Karte ruft exakt die Wege der Werkbank, beide
+  Ansichten zeigen denselben Zustand aus einer Quelle, und ein Prüfsatz misst,
+  dass `rekorder:start` und `rekorder:stop` im Panel genau einmal existieren.
+- **`SMarTrBrowser` steht auf der Positivliste der Agenten.** Das Gateway
+  signiert seit dem 15.08.2026 den Anspruch `agent` im Bridge-Token
+  (DRAHTFORMAT §13.4), der Relay trägt ihn in jeden Befehlsrahmen. Ohne den
+  Listeneintrag hätte die Erweiterung jeden Cloud-Befehl mit
+  `agent_not_permitted` abgewiesen. Die Agentenmatrix gilt für ihn wie für
+  jeden anderen: leere Matrix im selbständigen Modus heisst weiterhin fragen,
+  nicht durchwinken.
+- **Der Aufnahmezähler der Werkbank spricht jetzt beide Sprachen** und kommt
+  aus dem Katalog (vorher fest deutsch, ohne Umlaut). Beide Kataloge tragen
+  348 Schlüssel, ohne Lücke und ohne Waisen.
+
+### Prüfung
+
+960 Prüfsätze, 960 grün, gemessen am 15.08.2026. Die sieben neuen (sechs zum
+Beibringen-Einstieg, einer zur Agentenkette über den Produktivweg) sind
+zweimal gemessen: grün am Bau, rot am probeweise zurückgedrehten Bau. Eine
+unabhängige Nachmessung hat die Verdrahtung zusätzlich mit eigenen Mutationen
+geprüft. Der Handlauf im echten Chrome (Optik, Vorlesen, Trefferflächen der
+neuen Karte) steht noch aus.
+
+---
+
 ## 0.6.0, 14.08.2026 — Modi, Teach-Modus, Remote Bridge
 
 Die Fassung, die aus einem Assistenten mit Einzelfreigabe ein Werkzeug macht,

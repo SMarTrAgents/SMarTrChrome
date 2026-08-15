@@ -82,7 +82,7 @@
         <span class="haken" aria-hidden="true"></span> <span data-i18n="kopf_menue_beenden">Verbindung beenden</span>
       </button>
 
-      <p class="menue-fuss">SMarTrChrome 0.5.3</p>
+      <p class="menue-fuss">SMarTrChrome 0.6.1</p>
     </div>
 
     <!-- Läuft eine Cloud-Sitzung, steht das hier, und zwar durchgehend
@@ -186,6 +186,50 @@
       </div>
       <p id="modus-auskunft" class="modus-auskunft" data-i18n="modus_assist_auskunft"></p>
       <p id="modus-riegel" class="modus-riegel" data-i18n="modus_riegel"></p>
+    </section>
+
+    <!--
+      Beibringen — der sichtbare Einstieg in den Teach-Modus (Vertrag §7.2).
+
+      Befund Inhaber 15.08.2026: Aufzeichnen war nur über Menü und Werkbank
+      erreichbar, also hinter zwei Klicks versteckt, und wer die Leiste zum
+      ersten Mal sieht, findet den Weg nicht. Der Einstieg steht deshalb hier,
+      unterhalb des Modus-Bereichs, im Hauptlayout.
+
+      Er ist eine ZWEITE ANSICHT derselben Bedienung, keine zweite Logik (F4):
+      Die Knöpfe rufen über werkbankGriffHolen() in panel.js exakt die
+      Funktionen der Werkbank (aufnahmeStarten, aufnahmeBeenden), und der
+      Zähler kommt aus derselben Quelle wie dort (`rekorder:stand` und die
+      Antworten der Dienste). Eine Sperre während einer laufenden
+      Cloud-Sitzung gibt es hier NICHT, weil die Werkbank keine hat — geprüft
+      am 15.08.2026 in werkbank.js, worker.js und rekorder.js: Der Rekorder
+      wird dort nirgends an der Sitzung gemessen.
+
+      Der Aufnahmezustand steht als Punkt UND Wortlaut da (WCAG 1.4.1): Farbe
+      ist nie das einzige Signal. aria-live="polite" wie am Zähler der
+      Werkbank; doppelt spricht dabei nichts, weil setzeZustand diese Karte
+      ausblendet, solange die Werkbank offen ist — zwei sichtbare Vorlesezonen
+      mit demselben Satz wären der Sprechblasen-Fund (F7) in neuer Gestalt.
+    -->
+    <section id="beibringen-bereich" class="beibringen-bereich" aria-labelledby="beibringen-titel">
+      <h2 id="beibringen-titel" class="beibringen-titel" data-i18n="werkbank_beibringen_titel">Beibringen</h2>
+      <p class="beibringen-hinweis" data-i18n="werkbank_beibringen_hinweis">Mach die Arbeit einmal selbst vor. Ich schreibe die Schritte mit, und daraus entsteht ein Ablauf.</p>
+      <p id="beibringen-stand" class="beibringen-stand" data-laeuft="nein" aria-live="polite">
+        <span class="beibringen-punkt" aria-hidden="true"></span>
+        <span id="beibringen-wort" data-i18n="werkbank_aufnahme_aus">Es läuft keine Aufnahme.</span>
+      </p>
+      <div class="knopfreihe">
+        <button id="beibringen-start" class="neben" type="button" data-i18n="werkbank_aufnahme_start">Aufnahme starten</button>
+        <button id="beibringen-stop" class="neben" type="button" data-i18n="werkbank_aufnahme_stop">Aufnahme beenden</button>
+      </div>
+      <!-- Das Ergebnis des letzten Beendens. KEIN aria-live: Gesprochen wird
+           über die Ansage (#ansage), eine zweite Vorlesezone spräche denselben
+           Satz doppelt (F7). Der Knopf darunter erscheint nur, wenn wirklich
+           ein Ablauf entstanden ist — ein Weg ohne Ziel wird weggelassen,
+           nicht ausgegraut. -->
+      <p id="beibringen-ergebnis" class="beibringen-ergebnis" hidden></p>
+      <button id="beibringen-werkbank" class="chip vorschlag beibringen-weg" type="button" hidden
+              data-i18n="werkbank_beibringen_weg">Ablauf in der Werkbank ansehen</button>
     </section>
 
     <!-- Der Beispielauftrag gehört zur laufenden Sitzung, nicht zum

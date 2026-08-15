@@ -1011,13 +1011,21 @@ export function aufbauen(wurzel, dienste = {}) {
    * sein.
    * ------------------------------------------------------------------ */
 
-  /** Wie die Aufnahme gerade steht. Sie wird angezeigt, nicht behauptet. */
+  /** Wie die Aufnahme gerade steht. Sie wird angezeigt, nicht behauptet.
+   *
+   * Der Zaehler geht seit dem 15.08.2026 durch den Katalog: Der Teach-Modus
+   * hat einen zweiten Einstieg im Hauptlayout der Seitenleiste bekommen
+   * (panel.js, beibringenStandZeigen), und beide Ansichten muessen denselben
+   * Wortlaut zeigen — die Schluessel `aufnahme_laeuft_einer` und
+   * `aufnahme_laeuft_viele` sind die eine Quelle dafuer. Nebenbefund dabei:
+   * Der alte Satz stand fest auf Deutsch und ohne Umlaut da und waere in der
+   * englischen Oberflaeche deutsch geblieben. */
   function aufnahmeStandSetzen({ anzahl = 0, laeuft = false } = {}) {
     const zahl = Number.isFinite(Number(anzahl)) ? Math.max(0, Math.floor(Number(anzahl))) : 0;
-    if (laeuft) {
-      aufnahmeStand.removeAttribute("data-i18n");
-      aufnahmeStand.textContent =
-        zahl === 1 ? "Aufnahme laeuft, 1 Schritt." : `Aufnahme laeuft, ${zahl} Schritte.`;
+    if (laeuft && zahl === 1) {
+      beschriften(aufnahmeStand, "aufnahme_laeuft_einer", "Aufnahme läuft, 1 Schritt.");
+    } else if (laeuft) {
+      beschriften(aufnahmeStand, "aufnahme_laeuft_viele", "Aufnahme läuft, $1 Schritte.", [String(zahl)]);
     } else {
       beschriften(aufnahmeStand, "werkbank_aufnahme_aus", "Es läuft keine Aufnahme.");
     }

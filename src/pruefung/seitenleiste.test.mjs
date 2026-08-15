@@ -4461,6 +4461,254 @@ test("WB4 — Kommt kein Buch zurueck, gibt es eine Absage statt eines toten Kno
 });
 
 /* ------------------------------------------------------------------ *
+ * BB — Beibringen: der Teach-Modus im Hauptlayout (15.08.2026)
+ *
+ * Der Auftrag des Inhabers: Aufzeichnen war nur ueber Menue und Werkbank
+ * erreichbar; jetzt steht ein Einstieg unter dem Modus-Bereich. Die Zusagen,
+ * die hier gemessen werden:
+ *
+ *  1. Der Einstieg ist WIRKLICH verdrahtet (die Lehre der 0.5.3: gebaut und
+ *     nirgends eingebaut ist ein Blocker, keine Funktion).
+ *  2. Keine zweite Logikfassung (Festlegung F4): Start und Ende laufen durch
+ *     die Funktionen der Werkbank, und `rekorder:start`/`rekorder:stop`
+ *     stehen im ganzen panel.js an genau EINER Stelle.
+ *  3. Beide Ansichten zeigen denselben Zustand aus derselben Quelle.
+ *  4. Der Zustand steht als Wortlaut da, nicht nur als Farbe (WCAG 1.4.1).
+ *  5. Waehrend einer laufenden Cloud-Sitzung gilt die Regel der Werkbank —
+ *     und die ist gemessen KEINE: werkbank.js, worker.js und rekorder.js
+ *     halten den Rekorder nirgends an der Sitzung an, also tut es dieser
+ *     Einstieg auch nicht.
+ * ------------------------------------------------------------------ */
+
+test("BB1 — Der Einstieg steht im Hauptlayout, mit Zustand als Wortlaut und den Woertern der Werkbank", () => {
+  /* Unterhalb des Modus-Bereichs und VOR der Gespraechsflaeche — im
+     Hauptlayout, nicht in einer Karte, die erst jemand oeffnen muss. */
+  const modus = html.indexOf('id="modus-bereich"');
+  const beibringen = html.indexOf('id="beibringen-bereich"');
+  const flaeche = html.indexOf('id="flaeche"');
+  assert.ok(modus >= 0 && beibringen > modus, "der Einstieg steht unter dem Modus-Bereich");
+  assert.ok(beibringen < flaeche, "und vor der Gespraechsflaeche, also immer im Blick");
+
+  /* Der Aufnahmezustand ist Punkt UND Wortlaut (WCAG 1.4.1): Der Punkt ist
+     fuer den Bildschirmleser unsichtbar, das Wort traegt die Aussage. */
+  const stand = /<p id="beibringen-stand"[^>]*>([\s\S]*?)<\/p>/.exec(html);
+  assert.ok(stand, "die Zustandszeile fehlt");
+  assert.match(stand[1], /aria-hidden="true"/, "der Punkt ist reine Zier und als solche markiert");
+  assert.match(stand[1], /id="beibringen-wort"[^>]*data-i18n="werkbank_aufnahme_aus"/,
+    "das Wort daneben traegt denselben Schluessel wie der Zaehler der Werkbank");
+
+  /* Dieselben Katalogschluessel wie die Knoepfe der Werkbank: zwei Ansichten,
+     ein Wortlaut. Und beide sind echte Knoepfe, keine Klickspannen. */
+  assert.equal(TAG_IM_HTML.get("beibringen-start"), "button");
+  assert.equal(TAG_IM_HTML.get("beibringen-stop"), "button");
+  assert.match(html, /id="beibringen-start"[^>]*data-i18n="werkbank_aufnahme_start"/);
+  assert.match(html, /id="beibringen-stop"[^>]*data-i18n="werkbank_aufnahme_stop"/);
+
+  /* Die Ergebniszeile ist KEINE zweite Vorlesezone (F7): gesprochen wird ueber
+     die Ansage. Und der Weg zur Werkbank erscheint erst, wenn dort wirklich
+     ein Ablauf liegt — weggelassen, nicht ausgegraut. */
+  const ergebnis = /<p id="beibringen-ergebnis"[^>]*>/.exec(html);
+  assert.ok(ergebnis, "die Ergebniszeile fehlt");
+  assert.ok(!/aria-live|role=/.test(ergebnis[0]), "keine zweite Vorlesezone neben der Ansage");
+  assert.ok(VERSTECKT_IM_HTML.has("beibringen-ergebnis"), "die Ergebniszeile beginnt leer");
+  assert.ok(VERSTECKT_IM_HTML.has("beibringen-werkbank"), "der Weg zur Werkbank beginnt verborgen");
+});
+
+test("BB2 — Aufnahme starten laeuft durch die Werkbank, und beide Ansichten zeigen denselben Stand", async (t) => {
+  /* Frische globale Ablage: Die ECHTE Werkbank liest und schreibt ueber die
+     globale Attrappe, nicht ueber die Sandbox der Seitenleiste. */
+  attrappeSetzen({ panelAntwortet: null });
+  const echt = await import("../panel/werkbank.js");
+  const p = await panelStarten({
+    werkbankModul: echt,
+    workerAntworten: { "rekorder:start": { ok: true, anzahl: 0 } },
+  });
+  t.after(p.aufraeumen);
+
+  await p.klick("beibringen-start");
+
+  /* Der Weg zum Dienst ist derselbe wie aus der Werkbank: dieselbe Nachricht,
+     derselbe Tab (Rueckfallwert; das wahre Ziel kennt der Dienstarbeiter aus
+     seiner Tabnotiz `sa_rekorder_tab`). */
+  const start = p.anWorkerVoll().find((n) => n.typ === "rekorder:start");
+  assert.ok(start, "rekorder:start erreicht den Dienst");
+  assert.equal(start.tabId, 7, "und nennt den Tab, den der Mensch vor sich hat");
+
+  /* Der Zustand steht als Wortlaut da, nicht nur als Farbe (WCAG 1.4.1). */
+  assert.equal(p.el("beibringen-stand").dataset.laeuft, "ja");
+  assert.equal(p.el("beibringen-wort").textContent, "Aufnahme läuft, 0 Schritte.");
+  assert.equal(
+    p.el("ansage").textContent,
+    "Die Aufnahme läuft. Mach jetzt im Tab, was der Ablauf können soll.",
+    "und die Ansage sagt, was jetzt zu tun ist"
+  );
+
+  /* `rekorder:stand` aus dem Tab zieht BEIDE Ansichten nach — eine Quelle.
+     Der Zaehler der Werkbank ist der eine Knoten, der die geteilten
+     Katalogschluessel traegt; gesucht wird ueber den ganzen Anker, damit der
+     Pruefsatz nicht an der Baureihenfolge der Abschnitte haengt. */
+  p.melden({ typ: "rekorder:stand", anzahl: 3, laeuft: true });
+  assert.equal(p.el("beibringen-wort").textContent, "Aufnahme läuft, 3 Schritte.");
+  const alleKnoten = (el, raus = []) => {
+    for (const k of el.kinder || []) {
+      if (typeof k === "string") continue;
+      raus.push(k);
+      alleKnoten(k, raus);
+    }
+    return raus;
+  };
+  const zaehlerSchluessel = ["werkbank_aufnahme_aus", "aufnahme_laeuft_einer", "aufnahme_laeuft_viele"];
+  const werkbankZaehler = alleKnoten(p.el("werkbank-inhalt")).find(
+    (k) => typeof k.getAttribute === "function" && zaehlerSchluessel.includes(k.getAttribute("data-i18n"))
+  );
+  assert.ok(werkbankZaehler, "die Werkbank hat ihren Zaehler");
+  assert.equal(werkbankZaehler.textContent, "Aufnahme läuft, 3 Schritte.",
+    "beide Ansichten sagen woertlich dasselbe");
+
+  /* Ein Schrittzaehler von genau 1 spricht in der Einzahl — in beiden. */
+  p.melden({ typ: "rekorder:stand", anzahl: 1, laeuft: true });
+  assert.equal(p.el("beibringen-wort").textContent, "Aufnahme läuft, 1 Schritt.");
+  assert.equal(werkbankZaehler.textContent, "Aufnahme läuft, 1 Schritt.");
+
+  /* Und das Ende der Aufnahme kommt genauso in beiden an. */
+  p.melden({ typ: "rekorder:stand", anzahl: 0, laeuft: false });
+  assert.equal(p.el("beibringen-stand").dataset.laeuft, "nein");
+  assert.equal(p.el("beibringen-wort").textContent, "Es läuft keine Aufnahme.");
+  assert.equal(werkbankZaehler.textContent, "Es läuft keine Aufnahme.");
+});
+
+test("BB3 — Aufnahme beenden speichert ueber die Werkbank, sagt wo der Ablauf liegt, und der Knopf fuehrt hin", async (t) => {
+  /* Frische globale Ablage — hier wird wirklich gespeichert. */
+  attrappeSetzen({ panelAntwortet: null });
+  const echt = await import("../panel/werkbank.js");
+  const schritte = [{ type: "navigate", url: "https://geizhals.de/warenkorb" }];
+  const p = await panelStarten({
+    werkbankModul: echt,
+    workerAntworten: {
+      "rekorder:start": { ok: true, anzahl: 0 },
+      "rekorder:stop": { ok: true, anzahl: 1, schritte },
+    },
+  });
+  t.after(p.aufraeumen);
+
+  await p.klick("beibringen-start");
+  await p.klick("beibringen-stop");
+
+  const stop = p.anWorkerVoll().find((n) => n.typ === "rekorder:stop");
+  assert.ok(stop, "rekorder:stop erreicht den Dienst");
+
+  /* Gespeichert hat die WERKBANK (Festlegung F4): Der Ablauf liegt in der
+     Ablage, gegangen durch workflowPruefen und adressenPruefen — nicht durch
+     eine zweite Fassung in panel.js. */
+  const daten = await globalThis.chrome.storage.local.get("sa_workflows");
+  const ablaeufe = daten.sa_workflows || [];
+  assert.equal(ablaeufe.length, 1, "genau ein neuer Ablauf liegt in der Ablage");
+  assert.match(ablaeufe[0].id, /^wf_a/, "mit der Kennung, die die Werkbank vergibt");
+  assert.match(ablaeufe[0].name, /^Aufnahme vom /, "und dem Namen, den die Werkbank baut");
+  assert.equal(ablaeufe[0].steps.length, 1);
+  assert.equal(ablaeufe[0].steps[0].url, "https://geizhals.de/warenkorb");
+
+  /* Der Satz danach sagt, WO der Ablauf liegt — und der Knopf fuehrt hin. */
+  assert.equal(p.el("beibringen-ergebnis").hidden, false);
+  assert.equal(
+    p.el("beibringen-ergebnis").textContent,
+    "Aufgezeichnet. Der neue Ablauf liegt in der Werkbank, dort kannst du ihn ansehen, umbenennen und abspielen."
+  );
+  assert.equal(p.el("beibringen-werkbank").hidden, false, "der Weg zur Werkbank steht offen");
+  assert.equal(p.el("beibringen-stand").dataset.laeuft, "nein", "und die Aufnahme ist sichtbar beendet");
+
+  await p.klick("beibringen-werkbank");
+  assert.equal(p.el("app").dataset.state, "werkbank", "der Knopf oeffnet wirklich die Werkbank");
+  assert.equal(p.el("werkbank").hidden, false);
+  /* In der Werkbank verschwindet der Einstieg: Dort stehen dieselben Knoepfe
+     mit demselben Zaehler, und zwei sichtbare aria-live-Zonen mit demselben
+     Satz waeren der Sprechblasen-Fund (F7) in neuer Gestalt. */
+  assert.equal(p.el("beibringen-bereich").hidden, true);
+
+  await p.klick("werkbank-zurueck");
+  assert.equal(p.el("beibringen-bereich").hidden, false, "zurueck im Hauptlayout steht er wieder da");
+});
+
+test("BB4 — Absagen kommen woertlich aus dem Bestand, eine leere Aufnahme behauptet keinen Ablauf", async (t) => {
+  attrappeSetzen({ panelAntwortet: null });
+  const echt = await import("../panel/werkbank.js");
+
+  /* Die leere Aufnahme: beendet ist beendet, aber es liegt nichts vor — also
+     kein Satz ueber einen Ablauf und KEIN Knopf zu einem, den es nicht gibt. */
+  const leer = await panelStarten({
+    werkbankModul: echt,
+    workerAntworten: { "rekorder:stop": { ok: true, anzahl: 0, schritte: [] } },
+  });
+  t.after(leer.aufraeumen);
+  await leer.klick("beibringen-stop");
+  assert.equal(leer.el("beibringen-ergebnis").textContent, "Die Aufnahme ist beendet, aufgezeichnet wurde nichts.");
+  assert.equal(leer.el("beibringen-werkbank").hidden, true, "kein Weg zu einem Ablauf, den es nicht gibt");
+
+  /* Die Absage des Dienstes steht woertlich da — derselbe Klartext, den auch
+     die Werkbank zeigt, keine zweite Formulierung. */
+  const satz = "Auf dieser Seite kann ich nicht aufzeichnen. Öffne bitte eine gewöhnliche Webseite und versuche es dort.";
+  const absage = await panelStarten({
+    werkbankModul: echt,
+    workerAntworten: { "rekorder:start": { ok: false, kennung: "kein_empfaenger", klartext: satz } },
+  });
+  t.after(absage.aufraeumen);
+  await absage.klick("beibringen-start");
+  assert.equal(absage.el("beibringen-ergebnis").textContent, satz);
+  assert.match(absage.el("beibringen-ergebnis").className, /absage/, "als Absage abgesetzt, nicht als Erfolg");
+  assert.notEqual(absage.el("beibringen-stand").dataset.laeuft, "ja", "und es wird keine Aufnahme behauptet");
+  assert.equal(absage.el("ansage").textContent, satz, "die Absage wird auch angesagt");
+
+  /* Fehlt die Werkbank ganz, faellt es sicher zu: derselbe Satz wie ihre
+     eigene Absage `kein_dienst`, kein toter Knopf, keine Ausnahme. */
+  const ohne = await panelStarten({});
+  t.after(ohne.aufraeumen);
+  await ohne.klick("beibringen-start");
+  assert.equal(ohne.el("beibringen-ergebnis").textContent, "Aufzeichnen kann diese Fassung hier nicht.");
+});
+
+test("BB5 — Waehrend einer laufenden Cloud-Sitzung gilt die Regel der Werkbank: keine Sperre", async (t) => {
+  /* Gemessen am 15.08.2026: werkbank.js, worker.js und rekorder.js halten den
+     Rekorder nirgends an einer laufenden Sitzung an — es gibt keine solche
+     Regel und keinen Absagetext. Der neue Einstieg erfindet auch keine. Ein
+     Riegel, den nur eine der beiden Ansichten haette, waere eine zweite
+     Logikfassung (F4) — genau die verbotene Bauform. */
+  attrappeSetzen({ panelAntwortet: null });
+  const echt = await import("../panel/werkbank.js");
+  const p = await panelStarten({
+    werkbankModul: echt,
+    workerAntworten: { "rekorder:start": { ok: true, anzahl: 0 } },
+  });
+  t.after(p.aufraeumen);
+
+  await p.sitzungHerstellen();
+  assert.ok(p.zustand.sitzung, "Vorbedingung: es laeuft eine Sitzung");
+  assert.equal(p.el("beibringen-bereich").hidden, false, "der Einstieg bleibt auch jetzt stehen");
+
+  await p.klick("beibringen-start");
+  assert.ok(p.anWorker().includes("rekorder:start"), "der Start geht durch, wie in der Werkbank");
+  assert.equal(p.el("beibringen-stand").dataset.laeuft, "ja");
+});
+
+test("BB6 — Keine zweite Logikfassung: rekorder:start und rekorder:stop stehen an genau EINER Stelle", () => {
+  /* Festlegung F4 als Quelltextzusage: Beide Nachrichten entstehen einzig in
+     den Diensten von werkbankGriffHolen — der Stelle, durch die Werkbank UND
+     Beibringen-Einstieg gehen. Eine zweite Sendestelle waere der Anfang von
+     zwei Fassungen, die auseinanderlaufen. */
+  assert.equal(quelle.split('typ: "rekorder:start"').length - 1, 1);
+  assert.equal(quelle.split('typ: "rekorder:stop"').length - 1, 1);
+  const griffQuelle = abschnitt("function werkbankGriffHolen", "async function werkbankOeffnen");
+  assert.ok(griffQuelle.includes('typ: "rekorder:start"'), "der Start wohnt in werkbankGriffHolen");
+  assert.ok(griffQuelle.includes('typ: "rekorder:stop"'), "das Ende auch");
+
+  /* Und die Knoepfe des Einstiegs rufen die Funktionen der WERKBANK, keine
+     eigenen: aufnahmeStarten und aufnahmeBeenden am Griff. */
+  const starten = abschnitt("async function beibringenStarten", "async function beibringenBeenden");
+  assert.ok(starten.includes("griff.aufnahmeStarten()"), "Start laeuft ueber die Werkbank");
+  const beenden = abschnitt("async function beibringenBeenden", "/* ---");
+  assert.ok(beenden.includes("griff.aufnahmeBeenden()"), "Beenden laeuft ueber die Werkbank");
+});
+
+/* ------------------------------------------------------------------ *
  * I — Sprache (Vertrag §12)
  * ------------------------------------------------------------------ */
 

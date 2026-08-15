@@ -284,6 +284,48 @@ body {
   font-size: 14px; line-height: 1.4;
 }
 
+/* ---------------- Beibringen (Teach-Modus) ---------------- */
+
+.beibringen-bereich {
+  flex: 0 0 auto;
+  display: grid; gap: 4px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--rand);
+}
+.beibringen-titel { font-size: 15px; color: var(--leise); font-weight: 600; }
+.beibringen-hinweis { margin: 0; font-size: 14px; color: var(--leise); line-height: 1.4; }
+.beibringen-stand {
+  margin: 0; min-height: 24px;
+  display: flex; align-items: center; gap: 8px;
+  font-size: 14px; color: var(--leise);
+}
+.beibringen-punkt { width: 10px; height: 10px; border-radius: 50%; background: var(--rand); flex: 0 0 auto; }
+/* Läuft die Aufnahme, wird der Punkt rot — und das Wort daneben sagt dasselbe
+   in Sprache (panel.js, beibringenStandZeigen): Farbe ist nie das einzige
+   Signal (WCAG 1.4.1). Rot heisst hier „es wird mitgeschrieben", nicht
+   „Fehler" — dieselbe Bedeutung wie das Zeichen ● im Tab (rekorder.js). */
+.beibringen-stand[data-laeuft="ja"] { color: var(--text); }
+.beibringen-stand[data-laeuft="ja"] .beibringen-punkt { background: var(--rot); }
+.beibringen-bereich .knopfreihe button { flex: 0 1 auto; }
+/* Das Ergebnis des letzten Beendens: ruhig wie der Modus-Riegel, denn ein
+   fertiger Ablauf ist kein Alarm. Eine Absage wird gelb abgesetzt, nicht rot —
+   „auf dieser Seite geht es nicht" ist eine Regel, kein Defekt. */
+.beibringen-ergebnis {
+  margin: 0; padding: 4px 8px; border-radius: 8px;
+  border-left: 2px solid var(--cyan);
+  background: rgba(0,212,255,.06);
+  font-size: 14px; line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.beibringen-ergebnis.absage {
+  border-left-color: var(--gelb);
+  background: rgba(255,214,10,.08);
+}
+.beibringen-weg { margin: 0; }
+@media (prefers-reduced-motion: no-preference) {
+  .beibringen-stand[data-laeuft="ja"] .beibringen-punkt { animation: pulsen 2.4s ease-in-out infinite; }
+}
+
 /* ---------------- Tab-Liste ---------------- */
 
 .startseite { display: grid; gap: 4px; }

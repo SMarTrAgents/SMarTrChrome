@@ -1,4 +1,10 @@
 {
+  "aufnahme_laeuft_einer": {
+    "message": "Recording is running, 1 step."
+  },
+  "aufnahme_laeuft_viele": {
+    "message": "Recording is running, $1 steps."
+  },
   "ausweis_keine_knopf": {
     "message": "Open the sign-in page"
   },
@@ -338,6 +344,12 @@
   "dialog_zweck_write": {
     "message": "Click and type for you on $1"
   },
+  "einschleusung_meldung_text": {
+    "message": "The open page contains an attempt to slip new instructions to the agent. From now on I will ask again at every step."
+  },
+  "einschleusung_meldung_titel": {
+    "message": "SMarTrChrome has paused the automatic mode"
+  },
   "ext_beschreibung": {
     "message": "SMarTrAgents in your browser. The agent reads, points, clicks, types and selects, you approve every step. Never passwords."
   },
@@ -440,17 +452,11 @@
   "freigabe_rest_viele": {
     "message": "$1 seconds left for your answer."
   },
-  "freigabe_standardfrage": {
-    "message": "The agent would like to carry out a step."
-  },
   "freigabe_ruf_titel": {
     "message": "SMarTrChrome is waiting for your approval"
   },
-  "einschleusung_meldung_titel": {
-    "message": "SMarTrChrome has paused the automatic mode"
-  },
-  "einschleusung_meldung_text": {
-    "message": "The open page contains an attempt to slip new instructions to the agent. From now on I will ask again at every step."
+  "freigabe_standardfrage": {
+    "message": "The agent would like to carry out a step."
   },
   "freigabe_zurueckgezogen_ansage": {
     "message": "The agent did not wait any longer. This step did not happen."
@@ -937,6 +943,18 @@
   },
   "werkbank_austausch_titel": {
     "message": "Save and restore"
+  },
+  "werkbank_beibringen_fertig": {
+    "message": "Recorded. The new workflow is under Rules and workflows, where you can view, rename and play it."
+  },
+  "werkbank_beibringen_hinweis": {
+    "message": "Do the work yourself once. I write down the steps, and they become a workflow."
+  },
+  "werkbank_beibringen_titel": {
+    "message": "Teach me"
+  },
+  "werkbank_beibringen_weg": {
+    "message": "View the workflow under Rules and workflows"
   },
   "werkbank_beschreibung": {
     "message": "Description"

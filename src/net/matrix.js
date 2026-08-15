@@ -49,11 +49,18 @@ export const MATRIX_VERSION = 1;
  * Was nicht darin steht, ist kein Agent. Der Name kommt vom Relay und damit
  * aus einer Quelle, die wir nicht selbst schreiben; er wird deshalb genauso
  * behandelt wie jeder andere Fremdtext: gemessen, nicht geglaubt.
+ *
+ * `SMarTrBrowser` steht seit dem 15.08.2026 darauf: Das Gateway signiert ab
+ * diesem Tag den Anspruch `agent="SMarTrBrowser"` im Bridge-Token (Profil
+ * smartr-browser, DRAHTFORMAT §13.4), und der Relay trägt ihn in jeden
+ * Befehlsrahmen. Ohne diesen Eintrag stürbe damit JEDER Cloud-Befehl an
+ * `agent_not_permitted`. Sonderrechte hat der Name nicht: Die Agentenmatrix
+ * gilt für ihn wie für jeden anderen, und ab Werk ist sie leer.
  */
 export const AGENTEN = Object.freeze([
   "SMarTrCEO", "SMarTrItgott", "SMarTrMarketing", "SMarTrContent",
   "SMarTrHRGott", "SMarTrTrader", "SMarTrInfluencer", "SMarTrSocialMedia",
-  "SMarTrPenTester",
+  "SMarTrPenTester", "SMarTrBrowser",
 ]);
 
 /*

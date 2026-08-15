@@ -1711,8 +1711,11 @@ ausgeführt. **Ein Rahmen ohne `agent` läuft weiter**, und zwar ausdrücklich: 
 lässt auch den Alltags-Ausweis des Sitzungseigentümers als Befehlsausweis zu,
 und der trägt keinen Agentennamen. Dort fährt der Mensch selbst.
 
-*Stand der Umsetzung:* Das Bridge-Token trägt den Anspruch noch nicht, das Feld
-bleibt damit leer, siehe `docs/OFFEN-v3.5.md` §2.2.
+*Stand der Umsetzung:* Das Bridge-Token trägt den Anspruch seit dem 15.08.2026:
+Das Gateway signiert `agent="SMarTrBrowser"` im Profil smartr-browser, der Relay
+trägt ihn in jeden Befehlsrahmen, und der Name steht seit Fassung 0.6.1 auf der
+Positivliste der Erweiterung (`src/net/matrix.js`, `AGENTEN`). Die Agentenmatrix
+gilt für ihn wie für jeden anderen Namen, ab Werk ist sie leer.
 
 ### 13.5 Neue Fehlerkennungen der Erweiterung
 

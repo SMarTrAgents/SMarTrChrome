@@ -1,4 +1,10 @@
 {
+  "aufnahme_laeuft_einer": {
+    "message": "Aufnahme läuft, 1 Schritt."
+  },
+  "aufnahme_laeuft_viele": {
+    "message": "Aufnahme läuft, $1 Schritte."
+  },
   "ausweis_keine_knopf": {
     "message": "Anmeldeseite öffnen"
   },
@@ -338,6 +344,12 @@
   "dialog_zweck_write": {
     "message": "Auf $1 für dich klicken und tippen"
   },
+  "einschleusung_meldung_text": {
+    "message": "Auf der offenen Seite steht ein Versuch, dem Agenten neue Anweisungen unterzuschieben. Ab jetzt wird wieder bei jedem Schritt gefragt."
+  },
+  "einschleusung_meldung_titel": {
+    "message": "SMarTrChrome hat die Automatik angehalten"
+  },
   "ext_beschreibung": {
     "message": "SMarTrAgents im Browser. Der Agent liest, zeigt, klickt, tippt und wählt aus, jeden Schritt gibst du frei. Passwörter nie."
   },
@@ -440,17 +452,11 @@
   "freigabe_rest_viele": {
     "message": "Noch $1 Sekunden für deine Antwort."
   },
-  "freigabe_standardfrage": {
-    "message": "Der Agent möchte einen Schritt ausführen."
-  },
   "freigabe_ruf_titel": {
     "message": "SMarTrChrome wartet auf deine Freigabe"
   },
-  "einschleusung_meldung_titel": {
-    "message": "SMarTrChrome hat die Automatik angehalten"
-  },
-  "einschleusung_meldung_text": {
-    "message": "Auf der offenen Seite steht ein Versuch, dem Agenten neue Anweisungen unterzuschieben. Ab jetzt wird wieder bei jedem Schritt gefragt."
+  "freigabe_standardfrage": {
+    "message": "Der Agent möchte einen Schritt ausführen."
   },
   "freigabe_zurueckgezogen_ansage": {
     "message": "Der Agent hat nicht länger gewartet. Dieser Schritt ist nicht passiert."
@@ -937,6 +943,18 @@
   },
   "werkbank_austausch_titel": {
     "message": "Sichern und zurückholen"
+  },
+  "werkbank_beibringen_fertig": {
+    "message": "Aufgezeichnet. Der neue Ablauf liegt in der Werkbank, dort kannst du ihn ansehen, umbenennen und abspielen."
+  },
+  "werkbank_beibringen_hinweis": {
+    "message": "Mach die Arbeit einmal selbst vor. Ich schreibe die Schritte mit, und daraus entsteht ein Ablauf."
+  },
+  "werkbank_beibringen_titel": {
+    "message": "Beibringen"
+  },
+  "werkbank_beibringen_weg": {
+    "message": "Ablauf in der Werkbank ansehen"
   },
   "werkbank_beschreibung": {
     "message": "Beschreibung"

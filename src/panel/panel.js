@@ -355,6 +355,13 @@ function setzeZustand(name) {
    * nicht über einen zweiten Antrag.
    */
   $("startseite").hidden = !(name === "bereit" || name === "aktiv");
+  /* Der Beibringen-Einstieg weicht genau EINER Ansicht: der Werkbank selbst.
+     Dort stehen dieselben Knöpfe mit demselben Zähler, und zwei sichtbare
+     aria-live-Zonen mit demselben Satz würden doppelt vorgelesen — der
+     Sprechblasen-Fund (F7) in neuer Gestalt. In jedem anderen Zustand bleibt
+     der Einstieg stehen, damit eine laufende Aufnahme von hier aus beendet
+     werden kann. */
+  $("beibringen-bereich").hidden = name === "werkbank";
   /* Der Beispielauftrag wohnte bis 0.4.0 in #leer und war damit nie zu sehen:
      sitzungAnzeigen() blendet ihn ein und schaltet unmittelbar danach auf
      `aktiv`, wo #leer verschwindet. Jetzt steht er neben der Sitzungsleiste
@@ -3098,14 +3105,19 @@ function dateiAnbieten(text, dateiname) {
   return true;
 }
 
-async function werkbankOeffnen() {
-  setzeZustand("werkbank");
-  ansagen(t("werkbank_ansage", "Regeln und Abläufe. Hier stellst du je Website ein, was ohne Rückfrage laufen darf."));
-  /* Die Regeln je Domain (Vertrag §4) und die Abläufe (§7.3) sind zwei
-     Ansichten und bekommen zwei Anker: Eine gemeinsame Wurzel hiesse, dass die
-     eine beim Aufbau die andere wegräumt. */
-  ankerBauen("matrix", werkbank.matrixAufbauen, $("matrix-inhalt"));
-  const griff = ankerBauen("werkbank", werkbank.aufbauen, $("werkbank-inhalt"), {
+/*
+ * Der EINE Griff auf die Werkbank-Ansicht — für die Werkbank-Karte selbst und
+ * für den Beibringen-Einstieg im Hauptlayout.
+ *
+ * Warum eine eigene Funktion (15.08.2026): Der Teach-Modus hat seit heute
+ * zwei sichtbare Einstiege, die Karte in der Werkbank und die
+ * Beibringen-Leiste unter dem Modus-Bereich. Beide müssen durch DIESELBEN
+ * Funktionen laufen (Festlegung F4, keine zweite Logikfassung) — also gibt es
+ * genau einen Ort, an dem der Griff entsteht. `ankerBauen` merkt sich den
+ * ersten Aufbau; wer später ruft, bekommt denselben Griff zurück.
+ */
+function werkbankGriffHolen() {
+  return ankerBauen("werkbank", werkbank.aufbauen, $("werkbank-inhalt"), {
     spielen: (id, params) => anWorker({ typ: "werkbank:spielen", id, params: params || {} }),
     ausgeben: dateiAnbieten,
     /* Der Weg des Menschen in den Teach-Modus (§7.2). Der Tab kommt von hier
@@ -3118,10 +3130,37 @@ async function werkbankOeffnen() {
        aufgezeichnet wurde. Wohin die Aufnahme gehört, weiss der
        Dienstarbeiter aus seiner Tabnotiz (`sa_rekorder_tab`); er nimmt sie
        als Ziel und greift auf die Nummer von hier nur zurück, wenn die
-       Notiz verloren ging. */
-    aufnahmeStart: () => anWorker({ typ: "rekorder:start", tabId: modusTabId() }),
-    aufnahmeStop: () => anWorker({ typ: "rekorder:stop", tabId: modusTabId() }),
+       Notiz verloren ging.
+
+       Die Beibringen-Leiste wird HIER nachgezogen und nicht in den beiden
+       Ansichten: Durch diese zwei Dienste geht jeder Start und jedes Ende,
+       ganz gleich, wo gedrückt wurde — eine Quelle, beide Ansichten. */
+    aufnahmeStart: async () => {
+      const antwort = await anWorker({ typ: "rekorder:start", tabId: modusTabId() });
+      if (antwort && antwort.ok === true) {
+        beibringenStandZeigen({ anzahl: Number(antwort.anzahl) || 0, laeuft: true });
+      }
+      return antwort;
+    },
+    aufnahmeStop: async () => {
+      const antwort = await anWorker({ typ: "rekorder:stop", tabId: modusTabId() });
+      /* Nach dem Beenden läuft nichts mehr, auch wenn das Beenden selbst
+         scheiterte — dieselbe Entscheidung wie in der Werkbank
+         (aufnahmeBeenden setzt den Stand bedingungslos zurück). */
+      beibringenStandZeigen({ anzahl: 0, laeuft: false });
+      return antwort;
+    },
   });
+}
+
+async function werkbankOeffnen() {
+  setzeZustand("werkbank");
+  ansagen(t("werkbank_ansage", "Regeln und Abläufe. Hier stellst du je Website ein, was ohne Rückfrage laufen darf."));
+  /* Die Regeln je Domain (Vertrag §4) und die Abläufe (§7.3) sind zwei
+     Ansichten und bekommen zwei Anker: Eine gemeinsame Wurzel hiesse, dass die
+     eine beim Aufbau die andere wegräumt. */
+  ankerBauen("matrix", werkbank.matrixAufbauen, $("matrix-inhalt"));
+  const griff = werkbankGriffHolen();
   if (griff) {
     if (typeof griff.laden === "function") await griff.laden();
     return "modul";
@@ -3185,6 +3224,123 @@ async function buchAusgeben() {
 }
 
 /* ------------------------------------------------------------------ *
+ * Beibringen — der Teach-Modus im Hauptlayout (Vertrag §7.2)
+ *
+ * Zwei Knöpfe und ein Zustand, mehr nicht. Die Logik wohnt NICHT hier
+ * (Festlegung F4): Start und Ende laufen durch die Funktionen der Werkbank
+ * (werkbankGriffHolen → aufnahmeStarten/aufnahmeBeenden), und dort durch
+ * dieselbe Prüfung wie jeder eingelesene Ablauf. Hier steht nur die zweite
+ * Ansicht desselben Zustands.
+ *
+ * Eine Sperre während einer laufenden Cloud-Sitzung gibt es hier keine, und
+ * das ist gemessen, nicht vergessen (15.08.2026): Weder die Werkbank noch
+ * worker.js noch rekorder.js halten den Rekorder an einer Sitzung an — die
+ * Regel des Bestands ist „keine Regel", also erfindet dieser Einstieg auch
+ * keine.
+ * ------------------------------------------------------------------ */
+
+/**
+ * Wie die Aufnahme gerade steht — Punkt UND Wortlaut (WCAG 1.4.1).
+ *
+ * Dieselben Katalogschlüssel wie am Zähler der Werkbank
+ * (werkbank.js, aufnahmeStandSetzen): zwei Ansichten, ein Wortlaut.
+ */
+function beibringenStandZeigen({ anzahl = 0, laeuft = false } = {}) {
+  const stand = $("beibringen-stand");
+  const wort = $("beibringen-wort");
+  const zahl = Number.isFinite(Number(anzahl)) ? Math.max(0, Math.floor(Number(anzahl))) : 0;
+  stand.dataset.laeuft = laeuft ? "ja" : "nein";
+  if (laeuft) {
+    wort.removeAttribute("data-i18n");
+    wort.textContent = zahl === 1
+      ? t("aufnahme_laeuft_einer", "Aufnahme läuft, 1 Schritt.")
+      : t("aufnahme_laeuft_viele", "Aufnahme läuft, $1 Schritte.", String(zahl));
+  } else {
+    wort.setAttribute("data-i18n", "werkbank_aufnahme_aus");
+    wort.textContent = t("werkbank_aufnahme_aus", "Es läuft keine Aufnahme.");
+  }
+  return { anzahl: zahl, laeuft: laeuft === true };
+}
+
+/**
+ * Das Ergebnis des letzten Beendens — sichtbar in der Leiste, gesprochen über
+ * die Ansage. `mitWeg` zeigt den Knopf zur Werkbank; er erscheint nur, wenn
+ * dort wirklich ein neuer Ablauf liegt.
+ */
+function beibringenErgebnisZeigen(text, { absage = false, mitWeg = false } = {}) {
+  const zeile = $("beibringen-ergebnis");
+  const weg = $("beibringen-werkbank");
+  if (!text) {
+    zeile.textContent = "";
+    zeile.className = "beibringen-ergebnis";
+    zeile.hidden = true;
+    weg.hidden = true;
+    return;
+  }
+  zeile.textContent = text;
+  zeile.className = absage ? "beibringen-ergebnis absage" : "beibringen-ergebnis";
+  zeile.hidden = false;
+  weg.hidden = !mitWeg;
+}
+
+/* Derselbe Satz wie die Absage `kein_dienst` der Werkbank (werkbank.js,
+   aufnahmeStarten) — wörtlich, denn es ist dieselbe Lage: Das Modul fehlt,
+   also kann keine der beiden Ansichten aufzeichnen. */
+const BEIBRINGEN_KEIN_DIENST = "Aufzeichnen kann diese Fassung hier nicht.";
+
+async function beibringenStarten() {
+  const griff = werkbankGriffHolen();
+  if (!griff || typeof griff.aufnahmeStarten !== "function") {
+    beibringenErgebnisZeigen(BEIBRINGEN_KEIN_DIENST, { absage: true });
+    ansagen(BEIBRINGEN_KEIN_DIENST, true);
+    return { ok: false };
+  }
+  beibringenErgebnisZeigen(null);
+  /* Der Produktivweg der Werkbank, nicht eine zweite Fassung: Absagen kommen
+     von dort wörtlich zurück und werden hier nur gezeigt und gesprochen. */
+  const antwort = await griff.aufnahmeStarten();
+  if (antwort && antwort.ok === true) {
+    ansagen(t("werkbank_aufnahme_laeuft", "Die Aufnahme läuft. Mach jetzt im Tab, was der Ablauf können soll."), true);
+  } else {
+    const satz = (antwort && antwort.satz) || BEIBRINGEN_KEIN_DIENST;
+    beibringenErgebnisZeigen(satz, { absage: true });
+    ansagen(satz, true);
+  }
+  return antwort || { ok: false };
+}
+
+async function beibringenBeenden() {
+  const griff = werkbankGriffHolen();
+  if (!griff || typeof griff.aufnahmeBeenden !== "function") {
+    beibringenErgebnisZeigen(BEIBRINGEN_KEIN_DIENST, { absage: true });
+    ansagen(BEIBRINGEN_KEIN_DIENST, true);
+    return { ok: false };
+  }
+  /* Speichern, Prüfung, Benennung — alles in der Werkbank (aufnahmeBeenden).
+     Hier wird nur gesagt, was dabei herausgekommen ist und wo es liegt. */
+  const antwort = await griff.aufnahmeBeenden();
+  if (antwort && antwort.ok === true) {
+    if (antwort.leer === true) {
+      const satz = t("werkbank_aufnahme_leer", "Die Aufnahme ist beendet, aufgezeichnet wurde nichts.");
+      beibringenErgebnisZeigen(satz);
+      ansagen(satz, true);
+    } else {
+      const satz = t("werkbank_beibringen_fertig", "Aufgezeichnet. Der neue Ablauf liegt in der Werkbank, dort kannst du ihn ansehen, umbenennen und abspielen.");
+      beibringenErgebnisZeigen(satz, { mitWeg: true });
+      ansagen(satz, true);
+    }
+  } else {
+    /* Dieselbe Zusammensetzung wie absageSagen in der Werkbank: der Satz,
+       dahinter der Hinweis, falls einer mitkam. */
+    const satz = (antwort && antwort.satz) || "Die Aufnahme liess sich nicht beenden.";
+    const zusatz = antwort && antwort.hinweis ? ` ${antwort.hinweis}` : "";
+    beibringenErgebnisZeigen(`${satz}${zusatz}`, { absage: true });
+    ansagen(`${satz}${zusatz}`, true);
+  }
+  return antwort || { ok: false };
+}
+
+/* ------------------------------------------------------------------ *
  * Ereignisse
  * ------------------------------------------------------------------ */
 
@@ -3213,6 +3369,11 @@ $("menue-buch").addEventListener("click", () => {
   menueOeffnen(false);
   return buchOeffnen();
 });
+/* Der Teach-Modus im Hauptlayout. Die Rueckgabe wird durchgereicht wie bei
+   den Menuepunkten darueber: Wer drueckt, wartet auf ein Ergebnis. */
+$("beibringen-start").addEventListener("click", beibringenStarten);
+$("beibringen-stop").addEventListener("click", beibringenBeenden);
+$("beibringen-werkbank").addEventListener("click", () => werkbankOeffnen());
 $("werkbank-zurueck").addEventListener("click", () => {
   setzeZustand(zustand.sitzung ? "aktiv" : "bereit");
 });
@@ -3686,6 +3847,11 @@ chrome.runtime.onMessage.addListener((n) => {
     if (wb && typeof wb.aufnahmeStandSetzen === "function") {
       wb.aufnahmeStandSetzen({ anzahl: n.anzahl, laeuft: n.laeuft === true });
     }
+    /* Und die Beibringen-Leiste im Hauptlayout: dieselbe Nachricht, derselbe
+       Stand, zweite Ansicht (Festlegung F4). Sie wird auch dann nachgezogen,
+       wenn die Werkbank nie geöffnet war — der Zähler ist die einzige Stelle,
+       an der der Mensch dort sieht, DASS mitgeschrieben wird. */
+    beibringenStandZeigen({ anzahl: n.anzahl, laeuft: n.laeuft === true });
   }
 
   /* Die Notbremse hat mehrere Absender: Esc Esc im Tab, der Stoppknopf im

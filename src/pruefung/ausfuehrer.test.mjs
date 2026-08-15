@@ -3363,6 +3363,68 @@ test("Agent: ein Rahmen ohne Kennung läuft weiter, damit heutige Gegenstellen n
   assert.equal(ergebnis.success, true);
 });
 
+test("Agent: SMarTrBrowser steht auf der Positivliste, und die Matrix gilt für ihn wie für jeden", async () => {
+  /*
+   * Grund (15.08.2026): Das Gateway signiert ab diesem Tag den Anspruch
+   * `agent="SMarTrBrowser"` im Bridge-Token (Profil smartr-browser,
+   * DRAHTFORMAT §13.4), und der Relay trägt ihn in JEDEN Befehlsrahmen. Ohne
+   * den Listeneintrag in `AGENTEN` stürbe damit jeder Cloud-Befehl an der
+   * Positivliste (`agent_not_permitted`, „steht nicht auf der Liste").
+   *
+   * Gemessen wird die ganze Kette am Produktivweg (`befehlAusfuehren`), nicht
+   * an einer Attrappe der Liste — und zwar BEIDE Hälften, weil jede allein
+   * eine halbe Wahrheit wäre:
+   *
+   *  1. Leere Matrix im Modus `auto`: Absage. Der neue Name bekommt keine
+   *     Sonderrechte — Voreinstellung ist alles aus, wie es die
+   *     AUTOMODUS-Befunde für jeden anderen Agenten festgehalten haben.
+   *     Dass die Absage von der MATRIX kommt und nicht von der Positivliste,
+   *     unterscheidet der Wortlaut: Die Liste sagt „steht nicht auf der
+   *     Liste", die Matrix sagt „nicht freigeschaltet". Fiele der Eintrag
+   *     beim nächsten Umbau wieder heraus, würde genau dieser Satz rot.
+   *  2. Mit Eintrag läuft derselbe Rahmen durch. Ohne diese Gegenprobe wäre
+   *     Satz 1 auch über einer Fassung grün, die den Namen gar nicht kennt.
+   */
+  const leer = await laufen(
+    { id: "sb-1", cmd: "readPage", reason: "Ich lese.", agent: "SMarTrBrowser" },
+    { ablageSession: modusAblage(7, "auto") }
+  );
+  assert.equal(leer.ergebnis.success, false);
+  assert.equal(leer.ergebnis.error.code, "agent_not_permitted");
+  assert.match(leer.ergebnis.error.message, /nicht freigeschaltet/,
+    "die Absage kommt von der Matrix (Schritt 9c), nicht von der Positivliste");
+  assert.ok(leer.ergebnis.error.message.includes("SMarTrBrowser"), leer.ergebnis.error.message);
+  assert.ok(!freigabefrage(leer.spur), "im Modus auto wird nicht ersatzweise der Mensch gefragt");
+  assert.ok(!anDieSeite(leer.spur).includes("overlay:baum"), "und die Seite wird nicht gelesen");
+
+  const mit = await laufen(
+    { id: "sb-2", cmd: "readPage", reason: "Ich lese.", agent: "SMarTrBrowser" },
+    {
+      ablageSession: modusAblage(7, "auto"),
+      ablageLocal: {
+        sa_workflows: [ABLAUF],
+        ...agentenAblage({ SMarTrBrowser: { "geizhals.de": ["lesen"] } }),
+      },
+    }
+  );
+  assert.equal(mit.ergebnis.success, true, JSON.stringify(mit.ergebnis.error || {}));
+
+  /* Und der Eintrag ist eine Freischaltung je Klasse, kein Blankoscheck:
+     `lesen` erlaubt SMarTrBrowser nicht auch das Bedienen. */
+  const klick = await laufen(
+    { id: "sb-3", cmd: "click", reason: "Ich klicke.", agent: "SMarTrBrowser", ...VOLLSTAENDIG.click },
+    {
+      sitzung: { ...SITZUNG, stufe: "write" },
+      ablageSession: modusAblage(7, "auto"),
+      ablageLocal: {
+        sa_workflows: [ABLAUF],
+        ...agentenAblage({ SMarTrBrowser: { "geizhals.de": ["lesen"] } }),
+      },
+    }
+  );
+  assert.equal(klick.ergebnis.error.code, "agent_not_permitted");
+});
+
 /** Das Protokollbuch, wie es nach dem Lauf wirklich in der Ablage steht. */
 const buchAus = (spur) => zuletztGeschrieben(spur, "local", BUCH_ABLAGE) || [];
 

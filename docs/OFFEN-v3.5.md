@@ -9,10 +9,11 @@ den Befund vom 11.08.2026: An dem Tag lagen 18 grüne Prüfsätze über einer Wa
 die im ausgelieferten Klickweg niemand rief. Grün heisst gemessen, nicht
 eingebaut, und der Unterschied gehört aufgeschrieben.
 
-**Der Stand in einem Satz:** 953 Prüfsätze sind grün, der Relay läuft in
-Helsinki, die Nachabnahme der Runde 2 ist durch (11 Funde, alle repariert und
-einzeln nachgemessen), die Verdeckungswache ist im echten kopflosen Chrome
-gemessen, und diese Fassung ist als v0.6.0 veröffentlicht.
+**Der Stand in einem Satz:** 960 Prüfsätze sind grün, die Nachabnahme der
+Runde 2 ist durch (11 Funde, alle repariert und einzeln nachgemessen), die
+Verdeckungswache ist im echten kopflosen Chrome gemessen, v0.6.0 und v0.6.1
+sind veröffentlicht, und das Leitungs-Trio (§2) ist gebaut und wartet auf den
+einen Serverschalter.
 
 **Nachtrag 14.08.2026, nachmittags.** Über den 733 grünen Prüfsätzen des
 Vormittags fand eine Gegenlesung 31 Befunde, davon neun Blocker, und keiner
@@ -78,31 +79,48 @@ Absagen. Der Relay steht, die Erweiterung kann folgen.
 
 ## 2. Gebaut und gemessen, aber ohne Wirkung, bis draussen etwas nachzieht
 
-Diese vier Punkte liegen ausserhalb dieses Baums. Ohne sie ist v3.5 auf der
+Diese Punkte liegen ausserhalb dieses Baums. Ohne sie ist v3.5 auf der
 Leitung halb.
 
-### 2.1 `assist` entsteht nie
-`/home/tongie/$SMarTrAgents/Deploy/smartrlink-ticket/ticket.py`: `SCHRITTMODI`
-(Z86) kennt `assist` nicht, und die Sitzungsfreigabe (Z893 bis Z906) setzt
-`step_mode` hart auf `confirm_each`. **Folge:** Der Umschalter in der
-Seitenleiste kann nur einschränken, nie erweitern. In einer Sitzung mit
-Einzelfreigabe gilt deshalb „jeder Schritt einzeln", ganz gleich, was der
-Schalter zeigt. Erst bei Vollzugriff entscheidet er wirklich. Gemeldet von
-A-RELAY und A-VERZAHNUNG.
+**Nachtrag 15.08.2026, nach der Freigabe des Inhabers: alle drei Punkte sind
+GEBAUT und geprüft** (ticket.py 110 Prüfsätze, Relay 366, Agentenseite 140,
+alle grün), die Abbilder `smartr-gateway:20260815-leitung` und
+`smartr-connect:v35-20260815` liegen fertig auf dem Server, die
+Agentenseiten-Fracht (Profil `smartr-browser` samt `session_set`-Plugin, das
+in den Tenants bis dahin komplett fehlte) liegt unter
+`/root/agentenseite-20260815/`. **Geschaltet wird alles in einem Schritt über
+`/root/rollout-leitung-20260815.sh`** — der Lauf braucht die Einzelbestätigung
+des Inhabers (Helsinki-Regel). Bis dahin gilt der jeweils beschriebene alte
+Zustand weiter.
 
-### 2.2 Die Agentenmatrix hat nichts zu prüfen
-Gateway, `POST /api/v1/link/session/bind` (E17, Bridge-Token): Der Anspruch
-`agent` mit dem Namen des gebundenen Agenten wird nicht signiert. `agent_aus_ausweis`
-liest genau diesen Anspruch, aus dem Rumpf darf der Name nicht kommen, das wäre
-eine Selbstauskunft. **Folge:** Das Feld bleibt leer, die gebaute und gemessene
-Matrix greift nirgends. Ein Rahmen ohne `agent` läuft bewusst weiter, sonst wäre
-der Mensch auf dem Alltagsweg ausgesperrt.
+### 2.1 `assist` entsteht nie — ✅ gebaut, wartet auf den Schalter
+`Deploy/smartrlink-ticket/ticket.py`: `SCHRITTMODI` kennt jetzt `assist`, und
+die Sitzungsfreigabe folgt dem Schrittmodus des Antrags; `auto` gibt es nur,
+solange `LINK_AUTO_MODUS` ihn freigibt (steht mit dem Rollout auf 1), sonst
+fällt der Antrag auf `confirm_each` zurück, statt die Sitzung mit 403
+abzubrechen. Alt-Folge bis zum Schalter: Der Umschalter in der Seitenleiste
+kann nur einschränken, nie erweitern.
 
-### 2.3 Kein Agent kann `run_workflow` bauen
-`/home/tongie/$SMarTrAgents/Deploy/smartrlink-agentenseite/usr/agents/smartr-browser/tools/smartrbrowser.py`:
-Die Werkzeugtabelle kennt den Befehl nicht. Der Relay lässt ihn durch, gebaut
-werden kann er nicht. Nötig sind Stufe `write`, Frist 120, die Felder
-`workflowId` und `params`.
+### 2.2 Die Agentenmatrix hat nichts zu prüfen — ✅ gebaut, wartet auf den Schalter
+Gateway, `POST /api/v1/link/session/bind` (E17): Das Bridge-Token trägt jetzt
+den signierten Anspruch `agent: "SMarTrBrowser"` (Konstante `LINK_BIND_AGENT`;
+die Bindung legt den Auftrag immer im Profil smartr-browser an, session_set
+erzwingt das). Die Erweiterung führt den Namen seit 0.6.1 auf ihrer
+Positivliste, die Matrix gilt für ihn wie für jeden. Ein Rahmen ohne `agent`
+läuft weiterhin bewusst weiter (§6, Alltagsweg des Menschen).
+
+### 2.3 Kein Agent kann `run_workflow` bauen — ✅ gebaut, wartet auf den Schalter
+`smartrbrowser.py`: Die Werkzeugtabelle kennt `run_workflow` (Stufe `write`,
+Frist 120, Felder `workflowId` und `params`, `workflowId` Pflicht), die
+Werkzeug-Doku des Profils erklärt ihn dem Modell. Dabei gefunden und im Relay
+geschlossen: `BEFEHLSFELDER` kannte `workflowId` nicht — der Relay hätte die
+Ablaufkennung stillschweigend verworfen und die Erweiterung wäre auf ihre
+Rückfalllesart (`id`) gelaufen, also `workflow_not_found` für einen richtig
+gebauten Befehl. Der Spiegel-Prüfsatz der Agentenseite hat genau das gefangen.
+**Grösser als gedacht:** Das Profil `smartr-browser` und das
+`session_set`-Plugin existierten in KEINEM Container — ohne diese Fracht
+endete jede Bindung seit je mit `bindung_fehlgeschlagen`, die Kette
+Erweiterung→Agent konnte nie durchlaufen.
 
 ### 2.4 Falscher Erfolg auf der Desktopschiene
 `connector.rs` beantwortet einen unbekannten Browserbefehl auf einer
