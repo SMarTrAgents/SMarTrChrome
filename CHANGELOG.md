@@ -5,6 +5,62 @@ Fassung ist **Was nicht geht**. Er steht hier und nicht in der Ankündigung.
 
 ---
 
+## 0.6.4, 15.08.2026 — die Sitzung ist die Freigabe
+
+Aus dem ersten echten Ende-zu-Ende-Lauf am Abend: Der erste Agentenbefehl der
+Geschichte kam mit signiertem Namen in genau dem Tab an, den der Mensch Sekunden
+zuvor freigegeben hatte — und wurde in 73 Millisekunden hart abgewiesen, weil
+die Agentenmatrix leer war. Eine leere Einstellungstabelle hat die ausdrückliche
+Freigabe des Menschen überstimmt. Leitsatz des Inhabers daraus, und Titel dieser
+Fassung: **Die Sitzung ist die Freigabe.**
+
+### Geändert
+
+- **Eine leere Agentenmatrix sperrt den gebundenen Agenten nicht mehr.** Liegt
+  das Ziel im freigegebenen Sitzungsbereich und hat der Mensch für diesen
+  Agenten **nichts** eingetragen, läuft der Rahmen durch die normalen Modus-
+  und Klassenprüfungen — genau wie ein Rahmen ohne Agentennamen. Hat er dagegen
+  für den Agenten **etwas** eingetragen, gilt die Matrix streng wie bisher: Wer
+  konfiguriert, dem wird gehorcht. Das gilt an **beiden** Stellen: bei der
+  Vorprüfung des Schrittes und in der Nachwache nach einer Weiterleitung — sonst
+  hätte der Browser-Agent mit leerer Matrix zwar lesen, aber nach einem
+  Ortswechsel die neue Seite nicht mehr wahrnehmen dürfen.
+
+### Unverändert und mit Absicht
+
+Nichts an den Schutzgrenzen ist aufgeweicht. Die harten Klassen — Zahlungen,
+Passwörter und Geheimfelder, Löschungen und Unwiderrufliches, Browser-Berech­
+tigungen, CAPTCHAs, Dateien — fragen weiterhin in **jedem** Modus, auch im
+selbständigen. Die Sperrliste greift weiter in jedem Modus. Ein Ziel ausserhalb
+des freigegebenen Sitzungsbereichs profitiert von der Deckung nicht — dort hält
+die Bereichswache. Die Positivliste der Agenten und die Prüfung auf einen
+unlesbaren Namen stehen weiter davor. Und der selbständige Modus liess Lesen,
+Bedienen und Navigieren schon immer ohne Rückfrage laufen; neu ist nur, dass die
+leere Matrix ihm nicht mehr im Weg steht.
+
+### Prüfung
+
+967 Prüfsätze, 967 grün, gemessen am 15.08.2026. Der neue Kettenprüfsatz misst
+alle vier Fälle am Produktivweg (leere Matrix läuft, Einzelfreigabe fragt,
+fremder Eintrag sperrt, deckender Eintrag läuft), doppelt gemessen gegen den
+zurückgedrehten Bau.
+
+### Was nicht geht
+
+- **Das wiederholte Abmelden mit 401 ist noch NICHT behoben.** Live gesehen:
+  Nach dem Ende einer Sitzung schickte die Erweiterung den Abmelde-POST
+  mehrfach, jeder mit 401 beantwortet. Der genaue Auslöser der Wiederholung
+  liess sich aus dem Serverprotokoll allein nicht einer Stelle im Code
+  zuordnen, und ohne diesen Beleg wurde hier bewusst nichts geändert, statt
+  eine Stelle auf Verdacht umzubauen. Es ist Log-Lärm, kein Sicherheits- oder
+  Funktionsfehler — die Sitzung ist beendet, der Relay sagt nur „schon weg".
+  Gehört mit einem Handlauf im echten Chrome reproduziert und dann gezielt
+  geschlossen.
+- **Am Gerät ist 0.6.4 noch nicht nachgemessen** (Modus-Popup, Beibringen-Knopf,
+  der ganze neue Ablauf), wie bei jeder Fassung seit 0.5.2.
+
+---
+
 ## 0.6.3, 15.08.2026 — alles Bedienen wandert nach unten zum Chat
 
 Zweite Rückmeldung des Inhabers am selben Tag, mit Bildschirmfoto: Das

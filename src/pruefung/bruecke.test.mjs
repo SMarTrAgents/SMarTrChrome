@@ -170,6 +170,7 @@ async function sitzungAufbauen({
   tabId = 7,
   stufe = "read",
   expiry = 1800,
+  stepMode = "confirm_each",
 } = {}) {
   globalThis.WebSocket = DrahtAttrappe;
   const laeuft = link.verbinden({ ticket: "einweg-ticket", ausweis: "ausweis", tabId });
@@ -181,7 +182,7 @@ async function sitzungAufbauen({
     access: stufe,
     allow: ["geizhals.de"],
     mode: "tab",
-    step_mode: "confirm_each",
+    step_mode: stepMode,
     expiry,
   };
   if (agent !== null) rahmen.agent = agent;
@@ -454,7 +455,12 @@ test("Sichtbarkeit: ohne die Berechtigung `notifications` beginnt die Sitzung tr
 test("Sichtbarkeit: der Name wird nachgetragen, wenn er erst mit dem ersten Befehl kommt", async () => {
   weltNeu();
   const ab = welt.spur.length;
-  const draht = await sitzungAufbauen({ agent: null });
+  /* Automatikmodus, damit der Befehl selbst keine Freigabe braucht: Seit dem
+     15.08.2026 deckt die Sitzung den gebundenen Agenten (leere Matrix), ein
+     Lesebefehl läuft im Automatikmodus durch. In `confirm_each` würde er
+     korrekt eine Freigabe-Systemmeldung auslösen — das ist ein anderer
+     Piepser als der eine beim Sitzungsstart, den dieser Satz misst. */
+  const draht = await sitzungAufbauen({ agent: null, stepMode: "auto" });
   const nachStart = zeichen(ab);
   assert.equal(nachStart.zeile[0].nachricht.agent, "", "Ohne Angabe steht kein Name da, auch kein erfundener.");
   assert.equal(nachStart.meldung.length, 1, "Die Systemmeldung lief einmal.");

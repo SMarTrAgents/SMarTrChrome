@@ -3329,15 +3329,21 @@ test("Agent: was nicht auf der Positivliste steht, ist kein Agent", async () => 
   assert.ok(!freigabefrage(spur), "und den Menschen auch nicht");
 });
 
-test("Agent: die Matrix erlaubt nichts von selbst, aber alles, was eingetragen ist", async () => {
-  /* Voreinstellung ist alles aus (§4). Ein Agent ohne Eintrag darf nichts,
-     auch nicht lesen — und mit Eintrag genau das, was dort steht. */
+test("Agent: ohne Eintrag deckt die Sitzung, mit Eintrag gilt die Matrix streng", async () => {
+  /* Bis zum 15.08.2026 galt hier „Voreinstellung alles aus, ein Agent ohne
+     Eintrag darf nichts". Der Leitsatz des Inhabers „die Sitzung ist die
+     Freigabe" hat das umgekehrt: Ohne Eintrag deckt die vom Menschen erteilte
+     Sitzungsfreigabe den gebundenen Agenten, und die normalen Modus- und
+     Klassenprüfungen entscheiden — bei Einzelfreigabe wird gefragt (der Mensch
+     sagt hier über panelSagtJa Ja), im Automatikmodus liefe Lesen durch. Mit
+     Eintrag gilt die Matrix wieder streng. */
   const ohne = await laufen(
     { id: "ag-2", cmd: "readPage", reason: "Ich lese.", agent: "SMarTrCEO" },
     {}
   );
-  assert.equal(ohne.ergebnis.error.code, "agent_not_permitted");
-  assert.ok(ohne.ergebnis.error.message.includes("SMarTrCEO"), ohne.ergebnis.error.message);
+  assert.ok(freigabefrage(ohne.spur),
+    "ohne Matrixeintrag deckt die Sitzung — der Mensch wird gefragt, nicht der Agent abgewiesen");
+  assert.equal(ohne.ergebnis.success, true, JSON.stringify(ohne.ergebnis.error || {}));
 
   const mit = await laufen(
     { id: "ag-3", cmd: "readPage", reason: "Ich lese.", agent: "SMarTrCEO" },
@@ -3363,58 +3369,77 @@ test("Agent: ein Rahmen ohne Kennung läuft weiter, damit heutige Gegenstellen n
   assert.equal(ergebnis.success, true);
 });
 
-test("Agent: SMarTrBrowser steht auf der Positivliste, und die Matrix gilt für ihn wie für jeden", async () => {
+test("Agent: die Sitzung ist die Freigabe — leere Matrix deckt den gebundenen Agenten, ein Eintrag gilt streng", async () => {
   /*
-   * Grund (15.08.2026): Das Gateway signiert ab diesem Tag den Anspruch
-   * `agent="SMarTrBrowser"` im Bridge-Token (Profil smartr-browser,
-   * DRAHTFORMAT §13.4), und der Relay trägt ihn in JEDEN Befehlsrahmen. Ohne
-   * den Listeneintrag in `AGENTEN` stürbe damit jeder Cloud-Befehl an der
-   * Positivliste (`agent_not_permitted`, „steht nicht auf der Liste").
+   * Grund (15.08.2026, Leitsatz des Inhabers nach dem ersten echten
+   * Ende-zu-Ende-Lauf): „Die Sitzung ist die Freigabe." Das Gateway signiert
+   * seit diesem Tag `agent="SMarTrBrowser"` im Bridge-Token (Profil
+   * smartr-browser, DRAHTFORMAT §13.4), der Relay trägt ihn in jeden Rahmen.
    *
-   * Gemessen wird die ganze Kette am Produktivweg (`befehlAusfuehren`), nicht
-   * an einer Attrappe der Liste — und zwar BEIDE Hälften, weil jede allein
-   * eine halbe Wahrheit wäre:
+   * Gemessen wurde live: Der erste Agentenbefehl kam mit diesem Namen in dem
+   * Tab an, den der Mensch Sekunden zuvor für „bedienen" freigegeben hatte,
+   * und wurde in 73 ms mit `agent_not_permitted` abgewiesen, weil `agentDarf`
+   * bei LEERER Matrix `false` liefert. Eine leere Einstellungstabelle hat die
+   * ausdrückliche Sitzungsfreigabe überstimmt. Das war die falsche Richtung.
    *
-   *  1. Leere Matrix im Modus `auto`: Absage. Der neue Name bekommt keine
-   *     Sonderrechte — Voreinstellung ist alles aus, wie es die
-   *     AUTOMODUS-Befunde für jeden anderen Agenten festgehalten haben.
-   *     Dass die Absage von der MATRIX kommt und nicht von der Positivliste,
-   *     unterscheidet der Wortlaut: Die Liste sagt „steht nicht auf der
-   *     Liste", die Matrix sagt „nicht freigeschaltet". Fiele der Eintrag
-   *     beim nächsten Umbau wieder heraus, würde genau dieser Satz rot.
-   *  2. Mit Eintrag läuft derselbe Rahmen durch. Ohne diese Gegenprobe wäre
-   *     Satz 1 auch über einer Fassung grün, die den Namen gar nicht kennt.
+   * Die vier Hälften der neuen Regel, alle am Produktivweg (`befehlAusfuehren`):
    */
-  const leer = await laufen(
+
+  /* 1. Leere Matrix, Modus auto, Ziel im Sitzungsbereich: Die Sitzung deckt
+   *    den Agenten, `readPage` (Klasse lesen) läuft ohne Rückfrage durch —
+   *    genau wie für einen Rahmen ohne `agent`-Feld. Vor dem 15.08. war das
+   *    hier eine harte Absage. */
+  const leerAuto = await laufen(
     { id: "sb-1", cmd: "readPage", reason: "Ich lese.", agent: "SMarTrBrowser" },
-    { ablageSession: modusAblage(7, "auto") }
+    { sitzung: { ...SITZUNG, schrittmodus: "auto" }, ablageSession: modusAblage(7, "auto") }
   );
-  assert.equal(leer.ergebnis.success, false);
-  assert.equal(leer.ergebnis.error.code, "agent_not_permitted");
-  assert.match(leer.ergebnis.error.message, /nicht freigeschaltet/,
-    "die Absage kommt von der Matrix (Schritt 9c), nicht von der Positivliste");
-  assert.ok(leer.ergebnis.error.message.includes("SMarTrBrowser"), leer.ergebnis.error.message);
-  assert.ok(!freigabefrage(leer.spur), "im Modus auto wird nicht ersatzweise der Mensch gefragt");
-  assert.ok(!anDieSeite(leer.spur).includes("overlay:baum"), "und die Seite wird nicht gelesen");
+  assert.equal(leerAuto.ergebnis.success, true,
+    JSON.stringify(leerAuto.ergebnis.error || {}));
+  assert.ok(!freigabefrage(leerAuto.spur),
+    "im Modus auto läuft Lesen im Sitzungsbereich ohne Rückfrage");
 
-  const mit = await laufen(
+  /* 2. Dieselbe leere Matrix, aber Modus confirm_each: Es wird GEFRAGT, nicht
+   *    hart abgesagt. Der Mensch (panelSagtJa) bestätigt, dann läuft es. Die
+   *    leere Matrix nimmt ihm die Entscheidung nicht ab, sie überlässt sie ihm. */
+  const leerConfirm = await laufen(
     { id: "sb-2", cmd: "readPage", reason: "Ich lese.", agent: "SMarTrBrowser" },
-    {
-      ablageSession: modusAblage(7, "auto"),
-      ablageLocal: {
-        sa_workflows: [ABLAUF],
-        ...agentenAblage({ SMarTrBrowser: { "geizhals.de": ["lesen"] } }),
-      },
-    }
+    { ablageSession: modusAblage(7, "confirm_each") }
   );
-  assert.equal(mit.ergebnis.success, true, JSON.stringify(mit.ergebnis.error || {}));
+  assert.ok(freigabefrage(leerConfirm.spur),
+    "bei Einzelfreigabe wird der Mensch gefragt statt der Agent abgewiesen");
+  assert.equal(leerConfirm.ergebnis.success, true,
+    JSON.stringify(leerConfirm.ergebnis.error || {}));
 
-  /* Und der Eintrag ist eine Freischaltung je Klasse, kein Blankoscheck:
-     `lesen` erlaubt SMarTrBrowser nicht auch das Bedienen. */
-  const klick = await laufen(
-    { id: "sb-3", cmd: "click", reason: "Ich klicke.", agent: "SMarTrBrowser", ...VOLLSTAENDIG.click },
+  /* 3. Sobald der Mensch für DIESEN Agenten ETWAS einträgt, gilt die Matrix
+   *    wieder streng: Ein Eintrag, der nur einen ANDEREN Wirt nennt, deckt
+   *    geizhals.de nicht, also `agent_not_permitted` — obwohl die Sitzung für
+   *    geizhals.de läuft. Wer konfiguriert, dem wird gehorcht; die
+   *    Sitzungsdeckung greift nur bei LEERER Matrix (`agentHatEintrag`). */
+  const eintragAnderswo = await laufen(
+    { id: "sb-3", cmd: "readPage", reason: "Ich lese.", agent: "SMarTrBrowser" },
     {
-      sitzung: { ...SITZUNG, stufe: "write" },
+      sitzung: { ...SITZUNG, schrittmodus: "auto" },
+      ablageSession: modusAblage(7, "auto"),
+      ablageLocal: {
+        sa_workflows: [ABLAUF],
+        ...agentenAblage({ SMarTrBrowser: { "andere.de": ["lesen"] } }),
+      },
+    }
+  );
+  assert.equal(eintragAnderswo.ergebnis.success, false);
+  assert.equal(eintragAnderswo.ergebnis.error.code, "agent_not_permitted");
+  assert.match(eintragAnderswo.ergebnis.error.message, /nicht freigeschaltet/,
+    "die strenge Absage kommt von der Matrix, weil ein Eintrag da ist");
+  assert.ok(!freigabefrage(eintragAnderswo.spur),
+    "ein ausdrücklicher, nicht deckender Eintrag sagt hart ab, statt zu fragen");
+
+  /* 4. Und deckt der Eintrag den Wirt und die Klasse, läuft derselbe Rahmen
+   *    durch. Ohne diese Gegenprobe wäre Satz 3 auch über einer Fassung grün,
+   *    die den Namen gar nicht kennt. */
+  const eintragDeckt = await laufen(
+    { id: "sb-4", cmd: "readPage", reason: "Ich lese.", agent: "SMarTrBrowser" },
+    {
+      sitzung: { ...SITZUNG, schrittmodus: "auto" },
       ablageSession: modusAblage(7, "auto"),
       ablageLocal: {
         sa_workflows: [ABLAUF],
@@ -3422,7 +3447,8 @@ test("Agent: SMarTrBrowser steht auf der Positivliste, und die Matrix gilt für 
       },
     }
   );
-  assert.equal(klick.ergebnis.error.code, "agent_not_permitted");
+  assert.equal(eintragDeckt.ergebnis.success, true,
+    JSON.stringify(eintragDeckt.ergebnis.error || {}));
 });
 
 /** Das Protokollbuch, wie es nach dem Lauf wirklich in der Ablage steht. */
@@ -5150,4 +5176,25 @@ test("AUTOMODUS-8 — die Agentenmatrix gilt auch für den Wirt, auf dem eine We
   );
   assert.equal(frei.ergebnis.success, true, JSON.stringify(frei.ergebnis.error || {}));
   assert.ok(frei.ergebnis.data.snapshot, "der freigeschaltete Wechsel liefert keine Wahrnehmung");
+
+  /* Und die dritte Lage, seit dem 15.08.2026 (Leitsatz „die Sitzung ist die
+     Freigabe"): Bei LEERER Matrix deckt die Sitzung den Agenten auch nach der
+     Weiterleitung — solange die Landeadresse im freigegebenen Bereich liegt
+     (fremd.de ist Teil von ZWEI_WIRTE). Vor dieser Angleichung hätte der
+     Browser-Agent hier lesen, aber nicht navigieren können. Die Sperre gegen
+     eine Landung AUSSERHALB des Bereichs bleibt davon unberührt — die trägt
+     die Bereichswache, die vor dieser Stelle greift. */
+  const gedeckt = await laufen(
+    { id: "a8-3", cmd: "navigate", url: "https://geizhals.de/angebote", reason: "Ich gehe dorthin.", agent: "SMarTrBrowser" },
+    {
+      sitzung: ZWEI_WIRTE,
+      ablageSession: modusAblage(7, "auto"),
+      ablageLocal: { sa_workflows: [ABLAUF] },
+      umleitungNach: "https://fremd.de/seite",
+      panel: panelSagtJa,
+    }
+  );
+  assert.equal(gedeckt.ergebnis.success, true, JSON.stringify(gedeckt.ergebnis.error || {}));
+  assert.ok(gedeckt.ergebnis.data.snapshot,
+    "leere Matrix: die Sitzung deckt den Agenten auch nach der Weiterleitung in den Bereich");
 });

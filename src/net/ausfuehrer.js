@@ -76,7 +76,7 @@ import {
    Klassifizierer arbeitet. Ein zweiter Vergleich mit eigenen Regeln wäre der
    F4-Fehler in seiner dritten Auflage. */
 import { gleicherText, messtext } from "./messform.js";
-import { AGENTEN, regelnFuer, agentDarf } from "./matrix.js";
+import { AGENTEN, regelnFuer, agentDarf, agentHatEintrag } from "./matrix.js";
 import { workflowHolen, platzhalterFuellen } from "./werkstatt.js";
 import { eintragen as buchEintragen } from "./protokollbuch.js";
 import { anSeite, overlaySicherstellen, tabAdresse } from "./seite.js";
@@ -2707,8 +2707,19 @@ async function nachDemWechsel(lage, fristMs) {
    * Seiteninhalt in die Antwort — und die Absage nennt die Adresse nicht
    * (dieselbe Zusage wie bei `WACHE_ABGEWANDERT`: Wer sagt, WO der Tab jetzt
    * steht, ist selbst das Leck).
+   *
+   * Dieselbe Zweiteilung wie in Schritt 9c der Schleife (Leitsatz „die Sitzung
+   * ist die Freigabe", 15.08.2026): NUR wenn der Mensch für diesen Agenten
+   * ausdrücklich etwas gepflegt hat (`agentHatEintrag`), gilt die Matrix
+   * streng auch hinter der Weiterleitung. Ohne Eintrag deckt die
+   * Sitzungsfreigabe den Agenten — und das ist hier sicher, weil die gelandete
+   * Adresse die Bereichswache und die Sperrliste oben schon passiert hat: Sie
+   * liegt bewiesen im freigegebenen Bereich. Ohne diese Angleichung könnte der
+   * Browser-Agent mit leerer Matrix lesen, aber nach einem `navigate` die neue
+   * Seite nicht mehr wahrnehmen — genau der Widerspruch, den die Nachmessung
+   * am 15.08.2026 gefunden hat.
    */
-  if (lage.agent) {
+  if (lage.agent && await agentHatEintrag(lage.agent)) {
     const zuPruefen = new Set([
       ...(Array.isArray(lage.klassen) ? lage.klassen : []),
       ...neueKlassen.klassen,
@@ -3979,7 +3990,40 @@ async function einzeln(rahmen, sitzung, { id, cmd, begonnen, meineGeneration, no
          anderen. `back` trägt kein Ziel und kann keines tragen — wohin der
          Verlauf führt, weiss vorher niemand; dort bleibt es bei der Herkunft,
          und `nachDemWechsel` sieht danach noch einmal hin. */
-  if (agent) {
+  /*
+   * Befund vom 15.08.2026, erster echter Ende-zu-Ende-Lauf, und Leitsatz des
+   * Inhabers daraus: „Die Sitzung ist die Freigabe."
+   *
+   * Gemessen: Der erste Agentenbefehl der Geschichte kam mit signiertem
+   * `agent="SMarTrBrowser"` in genau dem Tab an, den der Mensch Sekunden zuvor
+   * für Stufe „bedienen" freigegeben hatte — und wurde in 73 ms mit
+   * `agent_not_permitted` hart abgewiesen, weil `agentDarf` bei LEERER Matrix
+   * `false` liefert. Eine leere Einstellungstabelle hat die ausdrückliche
+   * Freigabe des Menschen überstimmt, ohne ihn auch nur zu fragen. Das ist die
+   * falsche Richtung: Die Matrix ist ein ZUSÄTZLICHER Zügel für den, der sie
+   * pflegt, nicht ein Ersatz für die Zustimmung, die der Mensch beim Verbinden
+   * schon gegeben hat.
+   *
+   * Ab jetzt zwei Fälle, und der Unterschied ist `agentHatEintrag`:
+   *
+   *   - Hat der Mensch für DIESEN Agenten etwas eingetragen, gilt die Matrix
+   *     streng wie bisher: erlaubt nur, was auf Herkunft UND Ziel steht, sonst
+   *     `agent_not_permitted`. Wer konfiguriert, dem wird gehorcht.
+   *   - Hat er nichts eingetragen, deckt die Sitzungsfreigabe den gebundenen
+   *     Agenten im Sitzungsbereich ab. Der Rahmen geht dann durch die normalen
+   *     Modus- und Klassenprüfungen (`freigabeNoetig`, oben schon berechnet),
+   *     die dann fragen oder laufen lassen — EXAKT wie für einen Rahmen ohne
+   *     `agent`-Feld.
+   *
+   * Was dabei UNBERÜHRT bleibt, und zwar mit Absicht: Die harten Klassen
+   * (`HART` in befehle.js) fragen weiter in jedem Modus. Die Sperrliste greift
+   * weiter über `regelnZusammen`/`freigabeNoetig` und erzwingt in jedem Modus
+   * eine Frage. Der Bereich ist längst geprüft (`bereichPasst`, Schritt 6);
+   * ausserhalb des Sitzungsbereichs kommt kein Schritt bis hierher. Die
+   * Positivliste `AGENTEN` und die Unlesbar-Wache (AUTOMODUS-7) stehen oben und
+   * fangen einen fremden oder leeren Namen vor dieser Stelle ab.
+   */
+  if (agent && await agentHatEintrag(agent)) {
     const noetig = cmd === "run_workflow" ? ["workflow", ...befund.klassen] : befund.klassen;
     const zieladresse = cmd === "navigate" ? plan.url : null;
     for (const klasse of noetig) {
@@ -3988,7 +4032,7 @@ async function einzeln(rahmen, sitzung, { id, cmd, begonnen, meineGeneration, no
         `Für ${saeubern(agent, 40)} ist auf dieser Seite nicht freigeschaltet, was dieser Schritt tut.`,
         {
           retryable: false,
-          hint: "Den Nutzer bitten, das in den Einstellungen der Erweiterung für diesen Agenten und diese Seite freizuschalten.",
+          hint: "Den Nutzer bitten, das in den Einstellungen der Erweiterung für diesen Agenten und diese Seite freizuschalten, oder den Eintrag zu entfernen — ohne Eintrag deckt die Sitzungsfreigabe den Agenten.",
           m: m(),
         });
     }

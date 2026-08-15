@@ -463,3 +463,29 @@ export async function agentDarf(agent, host, klasse) {
   }
   return false;
 }
+
+/**
+ * Hat der Mensch für DIESEN Agenten ausdrücklich eine Matrix gepflegt?
+ *
+ * Der Unterschied, den diese Frage trägt (Leitsatz des Inhabers 15.08.2026,
+ * „die Sitzung ist die Freigabe"): Eine LEERE Matrix ist keine Einstellung,
+ * sondern die Abwesenheit einer Einstellung. Wer die Sitzung für einen Host
+ * und eine Stufe ausdrücklich freigegeben hat, soll nicht zusätzlich von einer
+ * leeren Tabelle überstimmt werden. Hat der Mensch dagegen für diesen Agenten
+ * ETWAS eingetragen, dann meint er es so, und die Matrix gilt streng wie bisher
+ * (`agentDarf`). Diese Funktion beantwortet nur „gibt es überhaupt einen
+ * Eintrag", nie „was ist erlaubt" — das trennt die Frage nach dem OB von der
+ * nach dem WAS, wie an jeder anderen Stelle dieses Gebietes.
+ *
+ * Die Sperrliste bleibt davon unberührt: Sie greift in `regelnFuer` /
+ * `freigabeNoetig` und erzwingt in JEDEM Modus eine Frage, ganz gleich, ob für
+ * den Agenten ein Eintrag steht.
+ *
+ * @returns {Promise<boolean>} true, wenn `agenten[agent]` mindestens einen Host trägt
+ */
+export async function agentHatEintrag(agent) {
+  if (!AGENTEN.includes(agent)) return false;
+  const matrix = await matrixLesen();
+  const je = matrix.agenten[agent];
+  return !!je && Object.keys(je).length > 0;
+}

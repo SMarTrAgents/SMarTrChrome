@@ -1682,21 +1682,37 @@ test("V-f2: Ein Rahmen OHNE agent bleibt der Weg des Menschen und wird nicht ges
   assert.equal(ergebnis.success, true, "ohne Agentennamen fährt der Mensch selbst");
 });
 
-test("V-f3: Ein bekannter Agent ohne Eintrag in der Matrix kommt auch nicht durch", async () => {
+test("V-f3: Ein bekannter Agent ohne Eintrag ist von der Sitzung gedeckt; ein fremder Eintrag sperrt", async () => {
   /*
-   * Die zweite Hälfte von §4: Voreinstellung ist alles aus. Ein Agent, der in
-   * der Positivliste steht, aber für diesen Wirt nichts freigeschaltet hat,
-   * wird ebenso abgelehnt — nur eben an der Matrix und nicht an der Liste.
+   * §4, neu gefasst am 15.08.2026 (Leitsatz des Inhabers „die Sitzung ist die
+   * Freigabe", Live-Befund: eine leere Matrix wies den gebundenen Agenten ab,
+   * obwohl der Mensch die Sitzung freigegeben hatte). Ein Agent auf der
+   * Positivliste OHNE eigenen Matrixeintrag ist von der Sitzungsfreigabe
+   * gedeckt und läuft die normalen Prüfungen wie ein Rahmen ohne `agent` — hier
+   * im Automatikmodus also durch. Trägt der Mensch dagegen ETWAS für den Agenten
+   * ein, gilt die Matrix streng, und ein Eintrag für einen ANDEREN Wirt deckt
+   * diese Seite nicht.
    */
   const knopf = knoten("button", { text: "Weiter" });
-  const stand = weltMitSeite([knopf], { ablageLocal: {} });
 
-  const ergebnis = await ausfuehrer.befehlAusfuehren(
-    { id: "vf-3", cmd: "readPage", reason: "Ich lese die Seite.", agent: "SMarTrTrader" },
-    stand.sitzung
+  /* Ohne Eintrag: gedeckt, läuft durch (Modus auto). */
+  const ohne = weltMitSeite([knopf], { ablageLocal: {} });
+  const gedeckt = await ausfuehrer.befehlAusfuehren(
+    { id: "vf-3a", cmd: "readPage", reason: "Ich lese die Seite.", agent: "SMarTrTrader" },
+    ohne.sitzung
   );
-  assert.equal(ergebnis.success, false);
-  assert.equal(ergebnis.error.code, "agent_not_permitted");
+  assert.equal(gedeckt.success, true, JSON.stringify(gedeckt.error || {}));
+
+  /* Mit einem Eintrag NUR für einen fremden Wirt: streng, also abgewiesen. */
+  const mitFremd = weltMitSeite([knopf], {
+    ablageLocal: { sa_matrix: { version: 1, domains: {}, gesperrt: [], agenten: { SMarTrTrader: { "andere.de": ["lesen"] } } } },
+  });
+  const gesperrt = await ausfuehrer.befehlAusfuehren(
+    { id: "vf-3b", cmd: "readPage", reason: "Ich lese die Seite.", agent: "SMarTrTrader" },
+    mitFremd.sitzung
+  );
+  assert.equal(gesperrt.success, false);
+  assert.equal(gesperrt.error.code, "agent_not_permitted");
 });
 
 /* ================================================================== *

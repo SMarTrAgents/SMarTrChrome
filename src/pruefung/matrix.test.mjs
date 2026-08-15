@@ -27,6 +27,7 @@ const {
   MATRIX_ABLAGE,
   MATRIX_VERSION,
   agentDarf,
+  agentHatEintrag,
   hostMuster,
   matrixLesen,
   matrixPruefen,
@@ -109,6 +110,28 @@ test("M3 — `agentDarf` sagt Nein zu unbekanntem Agenten, Host und Klasse", asy
   /* Und eine Klasse, die dieser Agent auf diesem Host nicht hat. */
   assert.equal(await agentDarf("SMarTrTrader", "tradingview.com", "bedienen"), false);
   assert.equal(await agentDarf("SMarTrTrader", "ebay.de", "lesen"), false);
+});
+
+test("M3b — agentHatEintrag trennt das OB vom WAS (Leitsatz 15.08.2026: die Sitzung ist die Freigabe)", async () => {
+  /* Der Unterschied trägt die neue Regel des Ausführers: Ohne Eintrag deckt
+     die Sitzungsfreigabe den Agenten, mit Eintrag gilt die Matrix streng.
+     Diese Funktion beantwortet NUR das OB, nie das WAS. */
+  attrappeSetzen({ ablageLocal: { [MATRIX_ABLAGE]: VOLL } });
+  assert.equal(await agentHatEintrag("SMarTrCEO"), true, "SMarTrCEO hat einen Eintrag");
+  assert.equal(await agentHatEintrag("SMarTrTrader"), true, "SMarTrTrader hat einen Eintrag");
+  /* Auf der Positivliste, aber ohne eigenen Eintrag: die Sitzung deckt ihn. */
+  assert.equal(await agentHatEintrag("SMarTrContent"), false, "SMarTrContent steht in keiner Matrixzeile");
+  /* Nicht auf der Positivliste: kein Agent, also erst recht kein Eintrag. */
+  for (const fremd of ["", null, undefined, "a0", "smartrceo", "__proto__"]) {
+    assert.equal(await agentHatEintrag(fremd), false, String(fremd));
+  }
+
+  /* Bei leerer Matrix hat NIEMAND einen Eintrag — genau der Fall, in dem der
+     Live-Befund vom 15.08. den Agenten fälschlich abgewiesen hatte. */
+  attrappeSetzen();
+  for (const agent of AGENTEN) {
+    assert.equal(await agentHatEintrag(agent), false, `leere Matrix: ${agent}`);
+  }
 });
 
 test("M4 — Ein gesperrter Host wird durch KEINE Eintragung wieder frei", async () => {
