@@ -12,8 +12,8 @@ eingebaut, und der Unterschied gehört aufgeschrieben.
 **Der Stand in einem Satz:** 960 Prüfsätze sind grün, die Nachabnahme der
 Runde 2 ist durch (11 Funde, alle repariert und einzeln nachgemessen), die
 Verdeckungswache ist im echten kopflosen Chrome gemessen, v0.6.0 und v0.6.1
-sind veröffentlicht, und das Leitungs-Trio (§2) ist gebaut und wartet auf den
-einen Serverschalter.
+sind veröffentlicht, und das Leitungs-Trio (§2) ist seit dem 15.08.2026 abends
+geschaltet: Relay, Gateway und Agentenseite laufen mit dem neuen Stand.
 
 **Nachtrag 14.08.2026, nachmittags.** Über den 733 grünen Prüfsätzen des
 Vormittags fand eine Gegenlesung 31 Befunde, davon neun Blocker, und keiner
@@ -57,14 +57,14 @@ adversarischen Nachabnahme" wurde eingehalten: Die Nachabnahme lief am 15.08.,
 ihre 11 Funde sind repariert und einzeln nachgemessen, siehe Nachtrag oben.
 
 ### 1.2 Der Relay läuft in Helsinki ✅
-Seit dem 14.08.2026 abends: Image `smartr-connect:v35-20260814`, Container
-`smartr-connect` unverändert benannt (Caddy routet auf den Namen),
-`connect.smartragents.ai/health` antwortet von aussen. 356 von 356 im Abbild
-lauffähigen Prüfsätzen grün; die zehn übersprungenen vergleichen mit Dateien,
-die im Abbild nicht liegen, und messen den Relay nicht. Vor dem Tausch
-WAL-sicher gesichert (13 Verbindungen, 56 Prüfzeilen, `integrity=ok`) nach
-`/root/relay-v35-20260814/sicherung/`. Rücknahme: altes Image
-`20260728-cutover`, gleicher Name, neu starten.
+Seit dem 15.08.2026 abends: Image `smartr-connect:v35-20260815` (wie
+v35-20260814 vom Vortag, plus `workflowId` in `BEFEHLSFELDER`, siehe §2.3),
+Container `smartr-connect` unverändert benannt (Caddy routet auf den Namen),
+`connect.smartragents.ai/health` antwortet von aussen, 366 Prüfsätze grün.
+Vor jedem Tausch WAL-sicher gesichert (15.08.:
+`/data/sicherung-vor-v35-20260815.db`; 14.08.:
+`/root/relay-v35-20260814/sicherung/`). Rücknahme: Vorgänger-Image, gleicher
+Name, neu starten.
 
 **Dabei gefunden, und es betrifft die Backup-Kette:** `connect.db` ist 24 KB
 und seit dem 29.07. nicht mehr eingecheckt — die Daten leben in der 939-KB-Datei
@@ -83,17 +83,24 @@ Diese Punkte liegen ausserhalb dieses Baums. Ohne sie ist v3.5 auf der
 Leitung halb.
 
 **Nachtrag 15.08.2026, nach der Freigabe des Inhabers: alle drei Punkte sind
-GEBAUT und geprüft** (ticket.py 110 Prüfsätze, Relay 366, Agentenseite 140,
-alle grün), die Abbilder `smartr-gateway:20260815-leitung` und
-`smartr-connect:v35-20260815` liegen fertig auf dem Server, die
-Agentenseiten-Fracht (Profil `smartr-browser` samt `session_set`-Plugin, das
-in den Tenants bis dahin komplett fehlte) liegt unter
-`/root/agentenseite-20260815/`. **Geschaltet wird alles in einem Schritt über
-`/root/rollout-leitung-20260815.sh`** — der Lauf braucht die Einzelbestätigung
-des Inhabers (Helsinki-Regel). Bis dahin gilt der jeweils beschriebene alte
-Zustand weiter.
+GEBAUT, geprüft und seit dem Abend GESCHALTET** (ticket.py 110 Prüfsätze,
+Relay 366, Agentenseite 140, alle grün). Der Lauf über
+`/root/rollout-leitung-20260815.sh` mit Einzelbestätigung des Inhabers:
+Relay läuft als `smartr-connect:v35-20260815` (WAL-sichere Sicherung vorher),
+die Agentenseiten-Fracht (Profil `smartr-browser` samt `session_set`-Plugin,
+das in den Tenants bis dahin komplett fehlte) liegt in allen 13
+Tenant-Volumes und dem Admin-Container, alle danach healthy, und das Gateway
+läuft aus `smartr-gateway:20260815-leitung` mit `LINK_AUTO_MODUS=1`
+(health 200, Ticketausgabe „1 zugelassen", alle 15 Netze dran). Rücknahme:
+Skriptkopf; der alte Gateway-Container steht als
+`smartr-gateway-alt-20260815-132048` daneben.
 
-### 2.1 `assist` entsteht nie — ✅ gebaut, wartet auf den Schalter
+**Offen geblieben aus dem Rollout:** Neue Tenants bekommen die Fracht nicht
+automatisch — das /a0/usr-Volume wird beim Anlegen nicht mit dem Profil
+`smartr-browser` besät. Vor dem nächsten Kunden-Onboarding den Seed-Weg der
+Provisionierung nachziehen.
+
+### 2.1 ✅ LIVE seit 15.08.2026 — `assist` existiert auf der Leitung
 `Deploy/smartrlink-ticket/ticket.py`: `SCHRITTMODI` kennt jetzt `assist`, und
 die Sitzungsfreigabe folgt dem Schrittmodus des Antrags; `auto` gibt es nur,
 solange `LINK_AUTO_MODUS` ihn freigibt (steht mit dem Rollout auf 1), sonst
@@ -101,7 +108,7 @@ fällt der Antrag auf `confirm_each` zurück, statt die Sitzung mit 403
 abzubrechen. Alt-Folge bis zum Schalter: Der Umschalter in der Seitenleiste
 kann nur einschränken, nie erweitern.
 
-### 2.2 Die Agentenmatrix hat nichts zu prüfen — ✅ gebaut, wartet auf den Schalter
+### 2.2 ✅ LIVE seit 15.08.2026 — das Bridge-Token trägt den Anspruch `agent`
 Gateway, `POST /api/v1/link/session/bind` (E17): Das Bridge-Token trägt jetzt
 den signierten Anspruch `agent: "SMarTrBrowser"` (Konstante `LINK_BIND_AGENT`;
 die Bindung legt den Auftrag immer im Profil smartr-browser an, session_set
@@ -109,7 +116,7 @@ erzwingt das). Die Erweiterung führt den Namen seit 0.6.1 auf ihrer
 Positivliste, die Matrix gilt für ihn wie für jeden. Ein Rahmen ohne `agent`
 läuft weiterhin bewusst weiter (§6, Alltagsweg des Menschen).
 
-### 2.3 Kein Agent kann `run_workflow` bauen — ✅ gebaut, wartet auf den Schalter
+### 2.3 ✅ LIVE seit 15.08.2026 — `run_workflow` ist baubar und kommt durch
 `smartrbrowser.py`: Die Werkzeugtabelle kennt `run_workflow` (Stufe `write`,
 Frist 120, Felder `workflowId` und `params`, `workflowId` Pflicht), die
 Werkzeug-Doku des Profils erklärt ihn dem Modell. Dabei gefunden und im Relay
