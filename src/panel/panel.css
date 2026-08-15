@@ -248,12 +248,11 @@ body {
 
 /* ---------------- Betriebsmodus ---------------- */
 
-.modus-bereich {
-  flex: 0 0 auto;
-  display: grid; gap: 4px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--rand);
-}
+/* Seit 0.6.3 wohnt die Wahl im Popup #modus-dialog an der Modus-Pille der
+   Eingabekarte; einen Dauerblock im Layout gibt es nicht mehr (Befund
+   Inhaber 15.08.2026: die Sektion drückte das Chatfeld unter den
+   Bildschirmrand). Das Popup teilt seine Lage mit dem Beibringen-Dialog,
+   siehe unten. */
 .modus-titel { font-size: 15px; color: var(--leise); font-weight: 600; }
 .segmentwahl {
   display: flex; gap: 4px;
@@ -286,20 +285,10 @@ body {
 
 /* ---------------- Beibringen (Teach-Modus) ---------------- */
 
-/* Die Modus-Zeile: links die drei Stufen, rechts der Beibringen-Knopf. */
-.modus-zeile { display: flex; align-items: stretch; gap: 4px; }
-.modus-zeile .segmentwahl { flex: 1 1 auto; min-width: 0; }
-
-/* Der Knopf trägt die Optik der Segmentknöpfe (.segment: 44 px, Pillenform,
-   dieselbe Schrift), steht aber AUSSERHALB der radiogroup — er ist kein
-   Modus, er öffnet einen Dialog. Der eigene Pillenrahmen macht ihn bündig
-   mit der eingerahmten Gruppe daneben. */
-.beibringen-knopf {
-  flex: 0 0 auto;
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  padding: 2px 12px;
-  border: 1px solid var(--rand); border-radius: 999px;
-}
+/* Der Knopf trägt die Pillen-Optik der Modus-Pille (.modus-chip: 44 px,
+   Pillenform, dieselbe Schrift) und steht seit 0.6.3 direkt neben ihr in
+   der Werkzeugzeile — er ist kein Modus und kein role="radio", er öffnet
+   einen Dialog. */
 .beibringen-knopf .beibringen-punkt { display: none; }
 /* Läuft eine Aufnahme, zeigt der Knopf sie auch bei geschlossenem Dialog:
    roter Punkt UND Wortlaut im Feld daneben (panel.js, beibringenStandZeigen).
@@ -308,9 +297,11 @@ body {
 .beibringen-knopf[data-laeuft="ja"] .beibringen-punkt { display: inline-block; background: var(--rot); }
 .beibringen-knopf-stand { font-size: 13px; }
 
-/* Der Dialog: eine Karte über der Fläche, im Stil des Menüs — Schatten und
-   z-Ebene sagen „das liegt obenauf und geht wieder zu". */
-.beibringen-dialog {
+/* Die Dialoge: Karten über der Fläche, im Stil des Menüs — Schatten und
+   z-Ebene sagen „das liegt obenauf und geht wieder zu". Das Modus-Popup
+   teilt die Lage, denn es folgt demselben Muster (panel.html). */
+.beibringen-dialog,
+.modus-dialog {
   position: fixed; left: 12px; right: 12px; top: 64px; z-index: 30;
   max-height: calc(100% - 88px); overflow-y: auto;
   box-shadow: 0 8px 24px rgba(0,0,0,.6);
@@ -569,10 +560,18 @@ button[disabled] { opacity: .5; cursor: not-allowed; }
 #eingabe:focus-visible { outline: 3px solid var(--cyan); outline-offset: 1px; }
 
 .werkzeugzeile { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 44px; }
+/* Die Modus-Pille ist seit 0.6.3 ein echter Knopf (44 px Bedienziel wie die
+   Antwortmodus-Knöpfe daneben): Sie zeigt den Betriebsmodus UND öffnet das
+   Popup mit der Wahl. Der Beibringen-Knopf trägt dieselbe Klasse — eine
+   Optik, zwei Knöpfe, keine zweite Fassung. */
 .modus-chip {
-  padding: 2px 10px; border-radius: 999px;
-  border: 1px solid var(--rand); color: var(--leise); font-size: 14px;
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 44px; padding: 0 12px;
+  border-radius: 999px; border: 1px solid var(--rand);
+  background: none; color: var(--leise);
+  font: 14px/1.2 inherit; cursor: pointer;
 }
+.modus-chip:focus-visible { outline: 3px solid var(--cyan); outline-offset: 1px; }
 .senden {
   min-width: 44px; min-height: 44px; padding: 0; margin-left: auto;
   background: var(--cyan); color: #05213a; border-color: var(--cyan);

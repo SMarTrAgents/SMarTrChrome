@@ -3796,11 +3796,17 @@ test("MO1 — Drei Stufen, drei Etiketten, und vorbelegt ist das Mitdenken", asy
   assert.equal(p.el("modus-chip").textContent, "Mitdenken", "der Chip spiegelt denselben Modus");
 });
 
-test("MO2 — Die Wahl geht je Tab an den Dienst und spiegelt sich ueberall", async (t) => {
+test("MO2 — Die Wahl laeuft uebers Popup an der Pille, geht je Tab an den Dienst und spiegelt sich ueberall", async (t) => {
   const p = await panelStarten();
   t.after(p.aufraeumen);
   p.spurLeeren();
 
+  /* Der Weg des Menschen seit 0.6.3: Die Pille an der Eingabekarte oeffnet
+     das Popup, die Wahl darin ist DIESELBE Bedienung wie vorher im
+     Dauerblock — dieselben Knoepfe, derselbe Handler, derselbe Weg zur
+     Ablage (modus:setzen an den Dienst, der sa_modus fuehrt). */
+  await p.klick("modus-chip");
+  assert.equal(p.el("modus-dialog").hidden, false, "die Pille oeffnet die Moduswahl");
   await p.klick("modus-auto");
 
   const gesetzt = p.anWorkerVoll().filter((n) => n.typ === "modus:setzen");
@@ -3810,11 +3816,25 @@ test("MO2 — Die Wahl geht je Tab an den Dienst und spiegelt sich ueberall", as
   assert.equal(p.zustand.modus, "auto");
   assert.equal(p.el("modus-auto").getAttribute("aria-checked"), "true");
   assert.equal(p.el("modus-assist").getAttribute("aria-checked"), "false", "genau ein Haken, nicht zwei");
-  assert.equal(p.el("modus-chip").textContent, "Selbständig");
+  /* Nach der Wahl schliesst das Popup von selbst — die Wahl ist getroffen,
+     eine offene Karte darueber waere nur ein Hindernis vor dem Chatfeld. */
+  assert.equal(p.el("modus-dialog").hidden, true, "nach der Wahl schliesst das Popup");
+  assert.equal(p.el("modus-chip").textContent, "Selbständig", "die Pille traegt den neuen Wortlaut");
+  assert.match(
+    p.el("modus-chip").getAttribute("aria-label") || "",
+    /Selbständig/,
+    "und ihr zugaenglicher Name traegt ihn auch — nicht nur ein Wort ohne Frage"
+  );
   assert.equal(
     p.el("modus-auskunft").textContent,
     erklaerungen.MODUS_TEXT.auto.auskunft,
-    "und die Auskunft daneben wechselt mit"
+    "und die Auskunft im Popup wechselt mit"
+  );
+  /* Die Ansage laeuft wie vor dem Umbau: Etikett und Auskunft, beim
+     Selbstaendig-Modus mit dem Riegel im selben Atemzug (modusSetzen). */
+  assert.ok(
+    p.gesprochen.some((s) => s.includes(erklaerungen.MODUS_TEXT.auto.etikett)),
+    `die Wahl wurde nicht angesagt: ${p.gesprochen.join(" | ")}`
   );
 
   /* Der Umschalter ist EIN Halt in der Tabulatorreihe, nicht drei. */
@@ -3925,25 +3945,153 @@ test("MO5 — Das Etikett „Selbständig“ verspricht nichts, was nicht gilt",
   );
 });
 
-test("MO6 — Der Riegel steht BEI der Wahl, nicht in einer Fussnote", () => {
+test("MO6 — Der Riegel steht BEI der Wahl im Popup, nicht in einer Fussnote", () => {
   /* Gemessen wird die Stelle im Text, nicht das blosse Vorkommen: „steht
      irgendwo in panel.html" war schon wahr, als er in der Fusszeile stand.
-     Dieselbe Messung wie bei S3. */
-  const bereichAb = html.indexOf('<section id="modus-bereich"');
+     Dieselbe Messung wie bei S3 — seit 0.6.3 im Popup #modus-dialog, denn
+     der Dauerblock ist weg (Befund Inhaber 15.08.2026). */
+  const bereichAb = html.indexOf('<section id="modus-dialog"');
   const bereichBis = html.indexOf("</section>", bereichAb);
-  assert.ok(bereichAb >= 0 && bereichBis > bereichAb, "der Umschalter braucht seinen eigenen Bereich");
+  assert.ok(bereichAb >= 0 && bereichBis > bereichAb, "die Moduswahl braucht ihren eigenen Dialog");
 
+  const dialogTag = /<section id="modus-dialog"[^>]*>/.exec(html);
+  assert.match(dialogTag[0], /role="dialog"/, "er sagt, was er ist");
+  assert.match(dialogTag[0], /aria-labelledby="modus-titel"/, "und traegt seinen Namen");
+
+  const titel = html.indexOf('id="modus-titel"', bereichAb);
   const wahl = html.indexOf('id="modus-wahl"', bereichAb);
+  const auskunft = html.indexOf('id="modus-auskunft"', bereichAb);
   const riegel = html.indexOf('id="modus-riegel"', bereichAb);
-  assert.ok(wahl > bereichAb && wahl < bereichBis, "der Umschalter steht darin");
-  assert.ok(riegel > wahl && riegel < bereichBis, "und der Riegel unmittelbar danach, im selben Bereich");
+  assert.ok(titel > bereichAb && titel < bereichBis, "die Ueberschrift steht darin");
+  assert.ok(wahl > titel && wahl < bereichBis, "der Umschalter danach");
+  assert.ok(auskunft > wahl && auskunft < bereichBis, "die Auskunft folgt");
+  assert.ok(riegel > auskunft && riegel < bereichBis,
+    "und der Riegel unmittelbar danach, im selben Dialog — wer waehlt, hoert ihn im selben Atemzug");
 
-  /* Der Riegel ist nie versteckt: Er gilt in jedem Modus, also darf ihn kein
-     Modus zudecken. */
-  assert.ok(!VERSTECKT_IM_HTML.has("modus-riegel"), "der Riegel startet sichtbar");
-  assert.ok(!VERSTECKT_IM_HTML.has("modus-bereich"), "und der ganze Bereich auch");
-  /* Und er liegt oberhalb des Gespraechs, nicht darunter — above the fold. */
-  assert.ok(bereichAb < html.indexOf('<main id="flaeche"'), "der Umschalter steht vor der Gespraechsflaeche");
+  /* Der Riegel ist nie einzeln versteckt: Er gilt in jedem Modus, also darf
+     ihn kein Modus zudecken. Der Dialog selbst beginnt zu — er ist ein
+     Popup, kein Dauerblock. */
+  assert.ok(!VERSTECKT_IM_HTML.has("modus-riegel"), "der Riegel haengt nur am Dialog, nicht an einem eigenen hidden");
+  assert.ok(VERSTECKT_IM_HTML.has("modus-dialog"), "das Popup beginnt verborgen");
+});
+
+test("MO7 — Die Pille oeffnet die Moduswahl, der Fokus wandert hinein und beim Schliessen auf die Pille zurueck", async (t) => {
+  /* Dasselbe Muster wie BB7 am Beibringen-Dialog: EIN Popup-Verhalten fuer
+     beide Knoepfe der Werkzeugzeile, keine zweite Fokusregel. */
+  const p = await panelStarten();
+  t.after(p.aufraeumen);
+  assert.equal(p.el("modus-dialog").hidden, true, "Vorbedingung: das Popup beginnt zu");
+
+  await p.klick("modus-chip");
+  assert.equal(p.el("modus-dialog").hidden, false, "die Pille oeffnet das Popup");
+  assert.equal(p.el("modus-chip").getAttribute("aria-expanded"), "true", "und sagt das auch");
+  /* Der Fokus steht auf der Ueberschrift — der Vorleser sagt damit zuerst,
+     WO man gelandet ist (dieselbe Regel wie bei den Karten, ueberschriftVon). */
+  assert.equal(p.fokus(), p.el("modus-titel"), "der Fokus wandert in das Popup, auf die Ueberschrift");
+
+  /* Ein einzelnes Escape schliesst — und der Fokus kehrt auf die Pille
+     zurueck, nicht auf body: Auf body bleibt der Vorleser stumm. */
+  await p.fensterEreignis("keydown", { key: "Escape" });
+  assert.equal(p.el("modus-dialog").hidden, true, "ein einzelnes Escape schliesst das Popup");
+  assert.equal(p.el("modus-chip").getAttribute("aria-expanded"), "false");
+  assert.equal(p.fokus(), p.el("modus-chip"), "der Fokus steht wieder auf der Pille");
+  assert.notEqual(p.fokus(), p.koerper, "und faellt nie auf body");
+
+  /* Die Pille ist auch der Weg zu: Ein zweiter Druck schliesst, wie am
+     Menue-Knopf — samt Fokusrueckgabe. */
+  await p.klick("modus-chip");
+  assert.equal(p.el("modus-dialog").hidden, false);
+  await p.klick("modus-chip");
+  assert.equal(p.el("modus-dialog").hidden, true, "dieselbe Pille schliesst wieder");
+  assert.equal(p.fokus(), p.el("modus-chip"));
+
+  /* Und nach einer WAHL schliesst das Popup von selbst: Die Pille traegt den
+     neuen Wortlaut, der Fokus kehrt zu ihr zurueck — der Mensch steht wieder
+     da, wo er angefangen hat, direkt neben dem Chatfeld. */
+  await p.klick("modus-chip");
+  await p.klick("modus-manual");
+  assert.equal(p.el("modus-dialog").hidden, true, "nach der Wahl schliesst das Popup von selbst");
+  assert.equal(p.el("modus-chip").textContent, "Jeder Schritt einzeln", "die Pille traegt den neuen Wortlaut");
+  assert.equal(p.fokus(), p.el("modus-chip"), "und der Fokus kehrt auf die Pille zurueck");
+});
+
+test("MO8 — Das Popup-Escape der Moduswahl laesst die Notbremse ganz: es stiehlt ihr keinen Schlag und schenkt ihr keinen", async (t) => {
+  /* Dasselbe Muster wie BB8: Ein Dialog, der den ersten Schlag schluckte,
+     machte aus Esc Esc drei Schlaege; einer, der ihn mitbraechte, stoppte
+     die Sitzung beim blossen Schliessen. */
+  const p = await panelStarten();
+  t.after(p.aufraeumen);
+  await p.sitzungHerstellen();
+  assert.ok(p.zustand.sitzung, "Vorbedingung: es laeuft eine Sitzung");
+  await p.klick("modus-chip");
+  assert.equal(p.el("modus-dialog").hidden, false, "Vorbedingung: das Popup ist offen");
+  p.alleSpurenLeeren();
+
+  /* Schlag 1 schliesst NUR das Popup. Die Sitzung lebt weiter. */
+  await p.fensterEreignis("keydown", { key: "Escape" });
+  assert.equal(p.el("modus-dialog").hidden, true, "das erste Escape schliesst das Popup");
+  assert.ok(p.zustand.sitzung, "und beendet keine Sitzung");
+  assert.ok(!p.anWorker().includes("link:notaus"), "kein Not-Aus beim blossen Schliessen");
+
+  /* Schlag 2, unmittelbar danach: Wuerde das Popup-Escape als erster Schlag
+     der Notbremse mitgezaehlt, feuerte JETZT der Not-Aus. */
+  await p.fensterEreignis("keydown", { key: "Escape" });
+  assert.ok(p.zustand.sitzung, "das Schliessen des Popups zaehlt nicht als erster Schlag der Notbremse");
+  assert.ok(!p.anWorker().includes("link:notaus"));
+
+  /* Schlag 3: Jetzt sind es zwei ECHTE Schlaege kurz hintereinander — die
+     Notbremse funktioniert nach dem Popup genau wie vorher (N3). */
+  await p.fensterEreignis("keydown", { key: "Escape" });
+  assert.equal(p.zustand.sitzung, null, "Esc Esc bleibt die Notbremse");
+  const reihe = p.anWorker();
+  assert.ok(reihe.indexOf("link:notaus") < reihe.indexOf("link:trennen"), "auf demselben Weg wie der Knopf");
+  assert.equal(p.anWorkerVoll().find((n) => n.typ === "link:notaus").grund, "esc");
+});
+
+test("MO9 — Genau EIN Bedienelement fuer den Modus, und zwischen Sitzungsleiste und Gespraechsflaeche steht kein Dauerblock", () => {
+  /* Die eine Stelle ist die Pille an der Eingabekarte. Der Dauerbereich der
+     0.6.2 („Wie selbstaendig soll ich arbeiten?" samt Knopfreihe, Auskunft
+     und Riegel) ist restlos weg — nicht versteckt, sondern nicht mehr da
+     (Befund Inhaber 15.08.2026: „button einmal reicht"). */
+  assert.equal(
+    [...html.matchAll(/aria-controls="modus-dialog"/g)].length,
+    1,
+    "genau ein Element oeffnet die Moduswahl"
+  );
+  const pille = /<button id="modus-chip"[^>]*>/.exec(html);
+  assert.ok(pille, "die Pille ist ein echter <button>, keine Klickspanne");
+  assert.equal(TAG_IM_HTML.get("modus-chip"), "button");
+  assert.match(pille[0], /aria-controls="modus-dialog"/, "und genau sie ist dieses eine Element");
+  assert.match(pille[0], /aria-haspopup="dialog"/, "sie kuendigt das Popup an");
+  assert.match(pille[0], /aria-expanded="false"/, "und beginnt zu");
+  assert.ok(!/role=/.test(pille[0]), "role=button bringt das Element selbst mit — und radio traegt sie nie");
+
+  assert.ok(!html.includes('id="modus-bereich"'), "die alte obere Sektion existiert nicht mehr im Dauerlayout");
+  assert.equal(
+    [...html.matchAll(/role="radiogroup" aria-labelledby="modus-titel"/g)].length,
+    1,
+    "eine radiogroup fuer den Modus, keine zweite Fassung"
+  );
+
+  /* Zwischen Sitzungsleiste und Gespraechsflaeche beginnt ALLES verborgen:
+     Jeder Dauerblock dort drueckt das Chatfeld unter den Bildschirmrand,
+     und der Merksatz des Inhabers ist Abnahmekriterium — das Eingabefeld
+     muss IMMER sichtbar sein. */
+  const leisteAb = html.indexOf('id="sitzungsleiste"');
+  const flaecheAb = html.indexOf('<main id="flaeche"');
+  assert.ok(leisteAb >= 0 && flaecheAb > leisteAb, "Sitzungsleiste und Gespraechsflaeche stehen in dieser Reihenfolge");
+  const dazwischen = html
+    .slice(html.indexOf("</div>", leisteAb), flaecheAb)
+    .replace(/<!--[\s\S]*?-->/g, "");
+  for (const tr of dazwischen.matchAll(/<section id="([^"]+)"/g)) {
+    assert.ok(VERSTECKT_IM_HTML.has(tr[1]), `#${tr[1]} steht als Dauerblock zwischen Sitzungsleiste und Gespraechsflaeche`);
+  }
+  /* Auch ausserhalb der Karten darf dort nichts Sichtbares wohnen — was
+     bleibt, sind Elemente, die im HTML selbst `hidden` tragen. */
+  const ohneKarten = dazwischen.replace(/<section[\s\S]*?<\/section>/g, "");
+  for (const tr of ohneKarten.matchAll(/<[a-zA-Z][^>]*\sid="([^"]+)"[^>]*>/g)) {
+    assert.ok(VERSTECKT_IM_HTML.has(tr[1]), `#${tr[1]} steht als Dauerblock zwischen Sitzungsleiste und Gespraechsflaeche`);
+  }
 });
 
 /* ------------------------------------------------------------------ *
@@ -4461,16 +4609,19 @@ test("WB4 — Kommt kein Buch zurueck, gibt es eine Absage statt eines toten Kno
 });
 
 /* ------------------------------------------------------------------ *
- * BB — Beibringen: Knopf in der Modus-Zeile, Inhalt im Popup-Dialog
- * (15.08.2026, abends umgebaut nach Befund des Inhabers: die staendig
- * sichtbare Karte der 0.6.1 machte die Leiste voll, das Gespraech war kaum
- * noch zu finden)
+ * BB — Beibringen: Knopf unten an der Eingabekarte, Inhalt im Popup-Dialog
+ * (15.08.2026 abends als Knopf in der Modus-Zeile gebaut; seit 0.6.3 sitzt
+ * der Knopf unten neben der Modus-Pille, denn die obere Sektion ist weg —
+ * Befund des Inhabers vom 15.08.2026 mit Bildschirmfoto: der Dauerblock
+ * drueckte das Chatfeld unter den Bildschirmrand, und der Knopf ragte
+ * abgeschnitten aus der Zeile)
  *
  * Die Zusagen, die hier gemessen werden:
  *
- *  1. Der Einstieg ist ein Knopf bei der Modus-Knopfreihe — AUSSERHALB der
- *     radiogroup, denn er ist kein Modus — und WIRKLICH verdrahtet (die
- *     Lehre der 0.5.3: gebaut und nirgends eingebaut ist ein Blocker).
+ *  1. Der Einstieg ist ein Knopf neben der Modus-Pille in der
+ *     Werkzeugzeile — KEIN role="radio", denn er ist kein Modus — und
+ *     WIRKLICH verdrahtet (die Lehre der 0.5.3: gebaut und nirgends
+ *     eingebaut ist ein Blocker).
  *  2. Der Dialog traegt exakt den Inhalt der bisherigen Karte, mit den
  *     Woertern und Schluesseln der Werkbank; staendig sichtbar ist er nicht.
  *  3. Keine zweite Logikfassung (Festlegung F4): Start und Ende laufen durch
@@ -4487,28 +4638,32 @@ test("WB4 — Kommt kein Buch zurueck, gibt es eine Absage statt eines toten Kno
  *     Einstieg auch nicht.
  * ------------------------------------------------------------------ */
 
-test("BB1 — Der Einstieg ist ein Knopf in der Modus-Zeile, der Inhalt wohnt im Dialog und nicht mehr im Dauerlayout", () => {
-  /* Der Knopf steht IM Modus-Bereich, unmittelbar bei der Knopfreihe — aber
-     AUSSERHALB der radiogroup: Er ist kein Modus. Ein vierter role="radio"
-     waere eine Luege ueber die Gruppe, und die Pfeiltastenwahl des
-     Umschalters liefe in ihn hinein. */
-  const bereichAb = html.indexOf('<section id="modus-bereich"');
-  const bereichBis = html.indexOf("</section>", bereichAb);
-  const wahlAb = html.indexOf('id="modus-wahl"', bereichAb);
-  const wahlZu = html.indexOf("</div>", wahlAb);
-  const knopfAb = html.indexOf('id="beibringen-knopf"', bereichAb);
-  assert.ok(wahlAb > bereichAb && knopfAb > wahlAb && knopfAb < bereichBis,
-    "der Knopf steht im Modus-Bereich, unmittelbar bei der Knopfreihe");
-  assert.ok(wahlZu < knopfAb, "und AUSSERHALB der radiogroup, als eigener Knopf daneben");
+test("BB1 — Der Einstieg ist ein Knopf neben der Modus-Pille, der Inhalt wohnt im Dialog und nicht mehr im Dauerlayout", () => {
+  /* Der Knopf steht UNTEN an der Eingabekarte, in der Werkzeugzeile neben
+     der Modus-Pille — dort, wo der Mensch ohnehin arbeitet (Befund Inhaber
+     15.08.2026: oben ein Knopf und unten eine Anzeige waren zwei Orte fuer
+     eine Sache). Er steht VOR dem Antwortmodus-Umschalter und nicht darin:
+     Beibringen ist keine Modellwahl. */
+  const formAb = html.indexOf('<form id="chatform"');
+  const formBis = html.indexOf("</form>", formAb);
+  const pilleAb = html.indexOf('id="modus-chip"', formAb);
+  const knopfAb = html.indexOf('id="beibringen-knopf"', formAb);
+  const gruppeAb = html.indexOf('id="chat-modus"', formAb);
+  assert.ok(formAb >= 0 && knopfAb > formAb && knopfAb < formBis,
+    "der Knopf steht in der Eingabekarte, nicht mehr oben im Dauerlayout");
+  assert.ok(pilleAb > formAb && pilleAb < knopfAb, "und zwar neben der Modus-Pille, nach ihr");
+  assert.ok(gruppeAb > knopfAb, "und VOR dem Antwortmodus-Umschalter, nicht darin");
+  assert.equal(html.indexOf('id="beibringen-knopf"'), knopfAb, "den Knopf gibt es nur einmal");
 
   const knopfTag = /<button id="beibringen-knopf"[^>]*>/.exec(html);
   assert.ok(knopfTag, "der Einstieg ist ein echter <button>, keine Klickspanne");
   assert.equal(TAG_IM_HTML.get("beibringen-knopf"), "button");
   assert.ok(!/role=/.test(knopfTag[0]), "role=button bringt das Element selbst mit — und radio traegt er nie");
   assert.match(knopfTag[0], /aria-haspopup="dialog"/, "der Knopf kuendigt den Dialog an");
+  assert.match(knopfTag[0], /aria-controls="beibringen-dialog"/, "und sagt, welchen");
   assert.match(knopfTag[0], /aria-expanded="false"/, "und beginnt zu");
-  assert.match(knopfTag[0], /class="segment beibringen-knopf"/,
-    "dieselbe Optik und dieselbe 44-Pixel-Trefferflaeche wie die Segmentknoepfe (.segment)");
+  assert.match(knopfTag[0], /class="modus-chip beibringen-knopf"/,
+    "dieselbe Pillen-Optik und dasselbe 44-Pixel-Bedienziel wie die Modus-Pille (.modus-chip)");
 
   /* Der Knopf traegt seinen eigenen Zustand: Punkt (reine Zier) und ein Feld
      fuer den Wortlaut — die Anzeige bei GESCHLOSSENEM Dialog (WCAG 1.4.1). */
@@ -4684,7 +4839,7 @@ test("BB3 — Aufnahme beenden speichert ueber die Werkbank, sagt wo der Ablauf 
   assert.equal(p.el("beibringen-dialog").hidden, true, "der Dialog weicht der Werkbank");
 
   await p.klick("werkbank-zurueck");
-  assert.equal(p.el("beibringen-knopf").hidden, false, "der Einstieg in der Modus-Zeile steht immer da");
+  assert.equal(p.el("beibringen-knopf").hidden, false, "der Einstieg an der Eingabekarte steht immer da");
 });
 
 test("BB4 — Absagen kommen woertlich aus dem Bestand, eine leere Aufnahme behauptet keinen Ablauf", async (t) => {

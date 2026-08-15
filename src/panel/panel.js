@@ -113,7 +113,7 @@ function merkmaleUebersetzen() {
 function zusatztexteUebersetzen() {
   const stark = document.querySelector("#dialog-mehr .geltung strong");
   if (stark) stark.textContent = t("dialog_geltung_stark", "Nur dieser eine Tab");
-  /* Der Beibringen-Knopf in der Modus-Zeile teilt seinen Schlüssel mit dem
+  /* Der Beibringen-Knopf an der Eingabekarte teilt seinen Schlüssel mit dem
      Dialogtitel: EIN Wort, zwei Ansichten. Ein data-i18n am Knopf wäre
      derselbe Schlüssel zweimal in panel.html, und Prüfsatz I1 (A-PANEL)
      verlangt zu Recht, dass jeder Schlüssel dort nur einmal steht — also
@@ -365,7 +365,7 @@ function setzeZustand(name) {
   /* Der Beibringen-Dialog weicht genau EINER Ansicht: der Werkbank selbst.
      Dort stehen dieselben Knöpfe mit demselben Zähler, und zwei sichtbare
      aria-live-Zonen mit demselben Satz würden doppelt vorgelesen — der
-     Sprechblasen-Fund (F7) in neuer Gestalt. Der KNOPF in der Modus-Zeile
+     Sprechblasen-Fund (F7) in neuer Gestalt. Der KNOPF an der Eingabekarte
      bleibt in jedem Zustand stehen; läuft eine Aufnahme, zeigt er das selbst
      (beibringenStandZeigen), damit sie von überall beendet werden kann. */
   if (name === "werkbank") beibringenDialogOeffnen(false);
@@ -2888,11 +2888,13 @@ async function demoAuftrag() {
 /* ------------------------------------------------------------------ *
  * Der Betriebsmodus des Tabs (Vertrag §2)
  *
- * Drei Stufen, ein Umschalter, keine Klapptür. Der Modus gilt je Tab und liegt
- * beim Hintergrunddienst; was hier steht, ist die Bedienung davon. Die Liste
- * der Modi kommt aus net/befehle.js und wird hier nicht noch einmal
- * eingetippt — eine zweite Liste liefe genau dann auseinander, wenn eine Stufe
- * dazukäme.
+ * Drei Stufen, ein Umschalter — seit 0.6.3 im Popup an der Modus-Pille der
+ * Eingabekarte (Befund Inhaber 15.08.2026: der Dauerblock oben drückte das
+ * Chatfeld unter den Bildschirmrand, und unten stand derselbe Modus noch
+ * einmal). Der Modus gilt je Tab und liegt beim Hintergrunddienst; was hier
+ * steht, ist die Bedienung davon. Die Liste der Modi kommt aus
+ * net/befehle.js und wird hier nicht noch einmal eingetippt — eine zweite
+ * Liste liefe genau dann auseinander, wenn eine Stufe dazukäme.
  * ------------------------------------------------------------------ */
 
 const modusText = (m) => MODUS_TEXT[m] || MODUS_TEXT[MODUS_STANDARD];
@@ -2929,14 +2931,39 @@ function modusSpiegeln() {
        jemanden, der sich durch die Leiste tabbt, drei Hindernisse. */
     knopf.setAttribute("tabindex", gewaehlt ? "0" : "-1");
   }
-  const t = modusText(zustand.modus);
-  $("modus-auskunft").textContent = t.auskunft;
+  const wort = modusText(zustand.modus);
+  $("modus-auskunft").textContent = wort.auskunft;
   /* Der Riegel steht bei der Wahl und wird nie ausgeblendet: Er gilt in jedem
      Modus, also darf ihn kein Modus verstecken. */
   $("modus-riegel").textContent = MODUS_RIEGEL;
-  /* Der Chip an der Eingabekarte spiegelt denselben Modus. Zwei Anzeigen mit
-     zwei Wahrheiten waren schon einmal der Grund für einen Fehlbefund. */
-  $("modus-chip").textContent = t.etikett;
+  /* Die Pille an der Eingabekarte ist seit 0.6.3 die EINE Anzeige und der
+     EINE Einstieg (Befund Inhaber 15.08.2026: oben eine Sektion und unten
+     eine Anzeige waren zwei Orte für eine Sache). Sie trägt den Wortlaut des
+     Modus, und ihr zugänglicher Name sagt dazu, wofür der Wortlaut steht —
+     „Mitdenken" allein wäre für den Vorleser ein Wort ohne Frage. Derselbe
+     Schlüssel wie die Überschrift des Popups, keine zweite Formulierung. */
+  const pille = $("modus-chip");
+  pille.textContent = wort.etikett;
+  pille.setAttribute(
+    "aria-label",
+    `${t("modus_titel", "Wie selbständig soll ich arbeiten?")} ${wort.etikett}`,
+  );
+}
+
+/**
+ * Das Modus-Popup öffnen oder schließen — exakt die Fokusführung des
+ * Beibringen-Dialogs (beibringenDialogOeffnen): Beim Schließen wandert der
+ * Fokus zurück auf die Pille, BEVOR das Popup versteckt wird (ein
+ * verstecktes Element kann ihn nicht halten, er fiele auf `body`, und dort
+ * bleibt der Vorleser stumm). Beim Öffnen wandert er hinein auf die
+ * Überschrift, damit zuerst gesagt wird, WO man gelandet ist.
+ */
+function modusDialogOeffnen(offen) {
+  const dialog = $("modus-dialog");
+  if (!offen && dialog.contains(document.activeElement)) $("modus-chip").focus();
+  dialog.hidden = !offen;
+  $("modus-chip").setAttribute("aria-expanded", String(offen));
+  if (offen) fokusHin(ueberschriftVon(dialog));
 }
 
 /**
@@ -3118,7 +3145,7 @@ function dateiAnbieten(text, dateiname) {
  *
  * Warum eine eigene Funktion (15.08.2026): Der Teach-Modus hat seit heute
  * zwei sichtbare Einstiege, die Karte in der Werkbank und die
- * Beibringen-Leiste unter dem Modus-Bereich. Beide müssen durch DIESELBEN
+ * Beibringen-Dialog an der Eingabekarte. Beide müssen durch DIESELBEN
  * Funktionen laufen (Festlegung F4, keine zweite Logikfassung) — also gibt es
  * genau einen Ort, an dem der Griff entsteht. `ankerBauen` merkt sich den
  * ersten Aufbau; wer später ruft, bekommt denselben Griff zurück.
@@ -3233,7 +3260,7 @@ async function buchAusgeben() {
 /* ------------------------------------------------------------------ *
  * Beibringen — der Teach-Modus als Knopf und Popup-Dialog (Vertrag §7.2)
  *
- * Ein Knopf in der Modus-Zeile, ein Dialog mit zwei Knöpfen und einem
+ * Ein Knopf an der Eingabekarte, ein Dialog mit zwei Knöpfen und einem
  * Zustand, mehr nicht. Die Logik wohnt NICHT hier (Festlegung F4): Start und
  * Ende laufen durch die Funktionen der Werkbank (werkbankGriffHolen →
  * aufnahmeStarten/aufnahmeBeenden), und dort durch dieselbe Prüfung wie
@@ -3270,7 +3297,7 @@ function beibringenDialogOeffnen(offen) {
  * (werkbank.js, aufnahmeStandSetzen): zwei Ansichten, ein Wortlaut.
  *
  * Nachgezogen wird IMMER beides, die Zustandszeile im Dialog und der Knopf
- * in der Modus-Zeile: Läuft eine Aufnahme bei geschlossenem Dialog, ist der
+ * an der Eingabekarte: Läuft eine Aufnahme bei geschlossenem Dialog, ist der
  * Knopf die einzige sichtbare Stelle dafür — roter Punkt als Zweitsignal,
  * das Wort trägt die Aussage. Stumm bleibt das Feld am Knopf absichtlich:
  * Gesprochen wird über die Ansage und die aria-live-Zeile im offenen
@@ -3392,13 +3419,24 @@ $("verbinden-tab").addEventListener("click", tabVerbinden);
 $("trennen").addEventListener("click", () => beenden("nutzer"));
 $("verbinden-start").addEventListener("click", dialogVorbereiten);
 
-/* Der Umschalter. Die Modi kommen aus dem Vertrag, nicht aus dieser Datei —
-   kommt eine Stufe dazu, hängt sie hier von selbst mit drin, sobald sie einen
-   Knopf hat. */
+/* Der Umschalter, seit 0.6.3 im Popup an der Pille. Die Modi kommen aus dem
+   Vertrag, nicht aus dieser Datei — kommt eine Stufe dazu, hängt sie hier
+   von selbst mit drin, sobald sie einen Knopf hat. Nach der Wahl schließt
+   das Popup: Die Pille trägt dann den neuen Wortlaut (modusSpiegeln), die
+   Ansage läuft in modusSetzen wie bisher, und der Fokus kehrt auf die Pille
+   zurück (modusDialogOeffnen). */
 for (const m of MODI) {
   const knopf = $(`modus-${m}`);
-  if (knopf) knopf.addEventListener("click", () => modusSetzen(m));
+  if (knopf) {
+    knopf.addEventListener("click", async () => {
+      await modusSetzen(m);
+      modusDialogOeffnen(false);
+    });
+  }
 }
+/* Die Pille öffnet und schließt das Popup, wie der Menü-Knopf das Menü und
+   der Beibringen-Knopf seinen Dialog. */
+$("modus-chip").addEventListener("click", () => modusDialogOeffnen($("modus-dialog").hidden));
 
 /* Die Rueckgabe wird durchgereicht und nicht verschluckt: Wer den Punkt
    drueckt, wartet auf eine Ansicht, und ein Aufrufer, der nicht warten kann,
@@ -3411,7 +3449,7 @@ $("menue-buch").addEventListener("click", () => {
   menueOeffnen(false);
   return buchOeffnen();
 });
-/* Der Teach-Modus: Der Knopf in der Modus-Zeile öffnet und schließt den
+/* Der Teach-Modus: Der Knopf an der Eingabekarte öffnet und schließt den
    Dialog, wie der Menü-Knopf das Menü. Die Rueckgabe der Aufnahme-Knöpfe
    wird durchgereicht wie bei den Menuepunkten darueber: Wer drueckt, wartet
    auf ein Ergebnis. */
@@ -3610,6 +3648,15 @@ document.addEventListener("click", (e) => {
     !e.target.closest("#beibringen-knopf")
   ) {
     beibringenDialogOeffnen(false);
+  }
+  /* Und das Modus-Popup genauso: Außenklick schließt, der Modus bleibt, wie
+     er zuletzt gewählt war. */
+  if (
+    !$("modus-dialog").hidden &&
+    !e.target.closest("#modus-dialog") &&
+    !e.target.closest("#modus-chip")
+  ) {
+    modusDialogOeffnen(false);
   }
 });
 for (const b of document.querySelectorAll("[data-vorlesen]")) {
@@ -4191,6 +4238,13 @@ window.addEventListener("keydown", (e) => {
      mitbrächte, stoppte die Sitzung beim bloßen Schließen. */
   if (!$("beibringen-dialog").hidden) {
     beibringenDialogOeffnen(false);
+    return;
+  }
+  /* Dasselbe gilt für das Modus-Popup an der Pille: EIN Escape schließt nur
+     das Popup und rührt `letztesEsc` nicht an — die Notbremse verlangt danach
+     weiterhin ihre zwei eigenen Schläge (Prüfsatz MO8). */
+  if (!$("modus-dialog").hidden) {
+    modusDialogOeffnen(false);
     return;
   }
   const jetzt = performance.now();

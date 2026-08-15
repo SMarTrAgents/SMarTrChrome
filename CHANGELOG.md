@@ -5,6 +5,39 @@ Fassung ist **Was nicht geht**. Er steht hier und nicht in der Ankündigung.
 
 ---
 
+## 0.6.3, 15.08.2026 — alles Bedienen wandert nach unten zum Chat
+
+Zweite Rückmeldung des Inhabers am selben Tag, mit Bildschirmfoto: Das
+Chatfeld war weiterhin nicht ohne Bildlauf erreichbar, und der Modus stand
+doppelt im Panel (grosse Sektion oben, Pille unten). Sein Diktat: oben
+verbinden, unten Modus und Beibringen.
+
+### Geändert
+
+- **Die grosse Modus-Sektion ist aus dem Dauerlayout verschwunden** (Titel,
+  Auswahl, Erklärtexte). Oben stehen nur noch Kopf, Cloud-Zeile, Verbindung
+  und Sitzungsleiste.
+- **Die Modus-Pille unten am Chat ist jetzt das einzige Modus-Bedienelement.**
+  Sie zeigt den aktuellen Modus als Wortlaut und öffnet ein Popup mit der
+  Auswahl samt Erklärtexten; nach der Wahl schliesst es sich, die Ansage
+  läuft wie bisher, und es ist dieselbe Logik wie zuvor, keine zweite
+  Fassung.
+- **Der Beibringen-Knopf sitzt daneben,** gleiche Pillen-Optik, sein Dialog
+  aus 0.6.2 bleibt unverändert samt Zustandsanzeige am Knopf.
+- Popup-Mechanik wie beim Beibringen-Dialog: Fokus rein und zurück, ein
+  Escape schliesst nur das Popup, Esc Esc bleibt die Notbremse — beides
+  einzeln gemessen, auch dass der Notbremse kein Schlag gestohlen oder
+  geschenkt wird.
+
+### Prüfung
+
+966 Prüfsätze, 966 grün, gemessen am 15.08.2026, mit vier Rotproben am
+probeweise zurückgedrehten Bau und unabhängiger Nachmessung. Offen bleibt
+die Sichtprüfung im echten Chrome (Umbruch der Werkzeugzeile bei schmaler
+Leiste, Aussenklick-Schliessweg der Popups).
+
+---
+
 ## 0.6.2, 15.08.2026 — Beibringen als Knopf, das Panel wird wieder schlank
 
 Rückmeldung des Inhabers zur 0.6.1, am selben Tag umgesetzt: Das Panel war zu

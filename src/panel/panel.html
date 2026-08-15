@@ -82,7 +82,7 @@
         <span class="haken" aria-hidden="true"></span> <span data-i18n="kopf_menue_beenden">Verbindung beenden</span>
       </button>
 
-      <p class="menue-fuss">SMarTrChrome 0.6.2</p>
+      <p class="menue-fuss">SMarTrChrome 0.6.3</p>
     </div>
 
     <!-- Läuft eine Cloud-Sitzung, steht das hier, und zwar durchgehend
@@ -159,14 +159,27 @@
     </div>
 
     <!--
-      Der Betriebsmodus des Tabs (Vertrag §2). Drei Stufen, ein Umschalter,
-      keine Klapptür: Was der Agent selbständig darf, ist die wichtigste
-      Einstellung dieser Erweiterung und gehört deshalb sichtbar hierher.
+      Der Betriebsmodus des Tabs (Vertrag §2) — seit 0.6.3 ein Popup an der
+      Modus-Pille der Eingabekarte, kein Dauerblock mehr.
 
-      Der Riegel darunter steht bei der Wahl selbst und nicht in einer Fußnote:
-      Wer sich vorlesen lässt, hört ihn im selben Atemzug mit den drei Knöpfen.
-      Dieselbe Entscheidung ist beim Etikett „Vollzugriff" schon getroffen
-      worden (Prüfsatz S4).
+      Befund Inhaber 15.08.2026 (Bildschirmfoto seiner Seitenleiste): Die
+      ständig sichtbare Sektion oben fraß so viel Platz, dass das
+      Chat-Eingabefeld ohne Bildlauf nicht erreichbar war — und unten stand
+      DERSELBE Modus noch einmal als Pille. Ein Bedienelement reicht: Die
+      Pille an der Eingabekarte zeigt den Modus und öffnet diese Wahl; oben
+      bleibt nur der Weg zur Verbindung.
+
+      Das Popup folgt exakt dem Muster des Beibringen-Dialogs darunter:
+      role="dialog", Fokus hinein auf die Überschrift, beim Schließen zurück
+      auf die Pille, EIN Escape schließt nur das Popup (Esc Esc bleibt die
+      Notbremse), ein Klick außerhalb schließt (panel.js, modusDialogOeffnen).
+      Drinnen stehen dieselben drei Knöpfe mit derselben Logik wie bisher:
+      dieselben Handler, dieselbe Ablage sa_modus über modusSetzen, KEINE
+      zweite Fassung.
+
+      Der Riegel steht weiterhin BEI der Wahl selbst und nicht in einer
+      Fußnote: Wer sich vorlesen lässt, hört ihn im selben Atemzug mit den
+      drei Knöpfen (Prüfsatz MO6).
 
       #modus-auskunft trägt den Schlüssel der VOREINSTELLUNG (assist,
       MODUS_STANDARD), nicht einen eigenen: Was hier vor dem ersten Umschalten
@@ -174,54 +187,30 @@
       Schlüssel wäre ein zweiter Satz mit demselben Inhalt und liefe beim ersten
       Redigieren auseinander.
     -->
-    <section id="modus-bereich" class="modus-bereich">
+    <section id="modus-dialog" class="karte modus-dialog" role="dialog"
+             aria-labelledby="modus-titel" hidden>
       <h2 id="modus-titel" class="modus-titel" data-i18n="modus_titel">Wie selbständig soll ich arbeiten?</h2>
-      <!-- Die Modus-Zeile trägt zwei Dinge nebeneinander: die radiogroup mit
-           den drei Stufen und den Beibringen-Knopf. Der Knopf steht bewusst
-           AUSSERHALB der Gruppe und ohne role="radio": Er ist kein Modus, er
-           öffnet einen Dialog — ein vierter „Radio" wäre eine Lüge über die
-           Gruppe, und die Pfeiltastenwahl des Umschalters liefe hinein.
-
-           Sein Wort kommt über zusatztexteUebersetzen (panel.js) aus
-           demselben Schlüssel wie der Dialogtitel (werkbank_beibringen_titel):
-           EIN Wort, zwei Ansichten. Ein data-i18n hier wäre derselbe
-           Schlüssel zweimal im HTML, und Prüfsatz I1 verlangt zu Recht, dass
-           jeder Schlüssel dort nur einmal steht.
-
-           Läuft eine Aufnahme, zeigt der Knopf sie selbst: roter Punkt UND
-           Wortlaut im Feld daneben (beibringenStandZeigen) — auch bei
-           geschlossenem Dialog ist Farbe nie das einzige Signal (WCAG 1.4.1).
-           Das Feld ist KEINE Vorlesezone: gesprochen wird über die Ansage
-           und die Zustandszeile im offenen Dialog, eine dritte Zone wäre der
-           Sprechblasen-Fund (F7) in neuer Gestalt. -->
-      <div class="modus-zeile">
-        <div id="modus-wahl" class="segmentwahl" role="radiogroup" aria-labelledby="modus-titel">
-          <button id="modus-manual" class="segment" type="button" role="radio" aria-checked="false"
-                  tabindex="-1" data-i18n="modus_manual">Jeder Schritt einzeln</button>
-          <button id="modus-assist" class="segment" type="button" role="radio" aria-checked="true"
-                  tabindex="0" data-i18n="modus_assist">Mitdenken</button>
-          <button id="modus-auto" class="segment" type="button" role="radio" aria-checked="false"
-                  tabindex="-1" data-i18n="modus_auto">Selbständig</button>
-        </div>
-        <button id="beibringen-knopf" class="segment beibringen-knopf" type="button"
-                aria-haspopup="dialog" aria-expanded="false" aria-controls="beibringen-dialog">
-          <span class="beibringen-punkt" aria-hidden="true"></span>
-          <span id="beibringen-knopf-wort">Beibringen</span>
-          <span id="beibringen-knopf-stand" class="beibringen-knopf-stand" hidden></span>
-        </button>
+      <div id="modus-wahl" class="segmentwahl" role="radiogroup" aria-labelledby="modus-titel">
+        <button id="modus-manual" class="segment" type="button" role="radio" aria-checked="false"
+                tabindex="-1" data-i18n="modus_manual">Jeder Schritt einzeln</button>
+        <button id="modus-assist" class="segment" type="button" role="radio" aria-checked="true"
+                tabindex="0" data-i18n="modus_assist">Mitdenken</button>
+        <button id="modus-auto" class="segment" type="button" role="radio" aria-checked="false"
+                tabindex="-1" data-i18n="modus_auto">Selbständig</button>
       </div>
       <p id="modus-auskunft" class="modus-auskunft" data-i18n="modus_assist_auskunft"></p>
       <p id="modus-riegel" class="modus-riegel" data-i18n="modus_riegel"></p>
-    </section>
+    </section><!-- /#modus-dialog -->
 
     <!--
       Beibringen — der Teach-Modus als Popup-Dialog (Vertrag §7.2).
 
       Befund Inhaber 15.08.2026 abends: Die Karte der 0.6.1 stand ständig im
       Hauptlayout und machte die Leiste voll — das Gespräch war kaum noch zu
-      finden. Der Einstieg ist jetzt der Knopf in der Modus-Zeile; dieser
-      Dialog trägt den Inhalt der Karte unverändert und öffnet sich nur auf
-      Wunsch (beibringenDialogOeffnen in panel.js, Fokusführung wie am Menü).
+      finden. Der Einstieg ist seit 0.6.3 der Beibringen-Knopf unten an der
+      Eingabekarte, neben der Modus-Pille; dieser Dialog trägt den Inhalt der
+      Karte unverändert und öffnet sich nur auf Wunsch (beibringenDialogOeffnen
+      in panel.js, Fokusführung wie am Menü).
 
       Er ist weiterhin eine ZWEITE ANSICHT derselben Bedienung, keine zweite
       Logik (F4): Die Knöpfe rufen über werkbankGriffHolen() in panel.js
@@ -234,8 +223,8 @@
 
       Der Aufnahmezustand steht als Punkt UND Wortlaut da (WCAG 1.4.1): Farbe
       ist nie das einzige Signal. aria-live="polite" nur an der Zustandszeile
-      HIER: Ist der Dialog zu, ist die Zeile aus dem Baum, und der Knopf in
-      der Modus-Zeile zeigt den Stand sichtbar, aber stumm. Öffnet die
+      HIER: Ist der Dialog zu, ist die Zeile aus dem Baum, und der Knopf an
+      der Eingabekarte zeigt den Stand sichtbar, aber stumm. Öffnet die
       Werkbank, geht der Dialog zu (setzeZustand): zwei sichtbare
       aria-live-Zonen mit demselben Satz wären der Sprechblasen-Fund (F7)
       in neuer Gestalt.
@@ -524,10 +513,38 @@
       <label for="eingabe" class="sr" data-i18n="kopf_eingabe_marke">Nachricht an Niemand</label>
       <textarea id="eingabe" rows="1" placeholder="Schreib Niemand, was du brauchst …"></textarea>
       <div class="werkzeugzeile">
-        <!-- Ohne Schlüssel: panel.js setzt diesen Chip aus MODUS_TEXT, also aus
-             derselben Quelle wie die drei Knöpfe darüber. Ein zweiter Schlüssel
-             mit demselben Wort wäre ein zweiter Ort zum Redigieren. -->
-        <span class="modus-chip" id="modus-chip">Mitdenken</span>
+        <!-- Die Modus-Pille: seit 0.6.3 das EINZIGE Bedienelement für den
+             Betriebsmodus (Befund Inhaber 15.08.2026: oben eine Sektion und
+             unten eine Anzeige waren zwei Orte für eine Sache, und die
+             Sektion drückte das Chatfeld unter den Bildschirmrand). Sie zeigt
+             den Modus als Wortlaut und öffnet das Popup #modus-dialog.
+             Ohne Schlüssel: panel.js setzt Wortlaut und zugänglichen Namen
+             aus MODUS_TEXT und modus_titel (modusSpiegeln), also aus
+             derselben Quelle wie die drei Knöpfe im Popup. Ein zweiter
+             Schlüssel mit demselben Wort wäre ein zweiter Ort zum
+             Redigieren. -->
+        <button id="modus-chip" class="modus-chip" type="button"
+                aria-haspopup="dialog" aria-expanded="false" aria-controls="modus-dialog">Mitdenken</button>
+        <!-- Der Beibringen-Knopf, in derselben Pillen-Optik daneben. Er ist
+             KEIN Modus und trägt kein role="radio": Er öffnet seinen Dialog
+             aus 0.6.2, unverändert. Sein Wort kommt über
+             zusatztexteUebersetzen (panel.js) aus demselben Schlüssel wie
+             der Dialogtitel (werkbank_beibringen_titel): EIN Wort, zwei
+             Ansichten — ein data-i18n hier wäre derselbe Schlüssel zweimal
+             im HTML (Prüfsatz I1).
+
+             Läuft eine Aufnahme, zeigt der Knopf sie selbst: roter Punkt UND
+             Wortlaut im Feld daneben (beibringenStandZeigen) — auch bei
+             geschlossenem Dialog ist Farbe nie das einzige Signal
+             (WCAG 1.4.1). Das Feld ist KEINE Vorlesezone: gesprochen wird
+             über die Ansage und die Zustandszeile im offenen Dialog, eine
+             dritte Zone wäre der Sprechblasen-Fund (F7) in neuer Gestalt. -->
+        <button id="beibringen-knopf" class="modus-chip beibringen-knopf" type="button"
+                aria-haspopup="dialog" aria-expanded="false" aria-controls="beibringen-dialog">
+          <span class="beibringen-punkt" aria-hidden="true"></span>
+          <span id="beibringen-knopf-wort">Beibringen</span>
+          <span id="beibringen-knopf-stand" class="beibringen-knopf-stand" hidden></span>
+        </button>
         <!-- Antwortmodus des Gesprächs. Zwei Modi, beide Produktnamen der
              Cloud — hier steht nie ein Modellname, und es gibt nichts
              Ausgegrautes. Produktnamen werden nicht übersetzt und tragen
