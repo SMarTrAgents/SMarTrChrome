@@ -1534,7 +1534,16 @@
     return {
       ok: true,
       rolle: rolleVon(el),
-      name: nameVon(el).slice(0, 200),
+      /* UNGEKÜRZT — dieser Name ist ein MESSEINGANG, kein Anzeigetext.
+         Befund der Nachabnahme vom 15.08.2026 (AUTOMODUS-2, zurückgekehrt):
+         Hier stand `.slice(0, 200)`. Der Ausführer reicht genau dieses Feld
+         als `messeingang(…)` an den Klassifizierer (§3.1) — ein Knopf, dessen
+         barrierefreier Name das harte Wort erst nach Zeichen 200 trägt,
+         verlor damit seine Pflichtrückfrage: Die besuchte Seite konnte eine
+         als „nie abschaltbar" zugesagte Schranke über die LÄNGE ihres Namens
+         abschalten. Gekürzt wird nur an der ANZEIGE, und das tut der
+         Ausführer dort selbst (`anzeigename`, `saeubern`). */
+      name: nameVon(el),
       rect: { left: r.left, top: r.top, width: r.width, height: r.height },
       mitte: { x: r.left + r.width / 2, y: r.top + r.height / 2 },
       ...bauformVon(el),
@@ -1652,18 +1661,28 @@
 
   /* Der Name, den F3 vergleicht. Er wird bewusst NICHT mit `nameVon` gebildet:
      `nameVon` baut den Namen für den Textbaum, `beschreibungVon` den für den
-     Ablauf, und verglichen wird gegen `schritt.beschreibung` aus dem Ablauf. */
+     Ablauf, und verglichen wird gegen `schritt.beschreibung` aus dem Ablauf.
+
+     UNGEKÜRZT — Befund der Nachabnahme vom 15.08.2026: Hier stand
+     `.slice(0, 200)`, die aufgezeichnete `schritt.beschreibung` hält aber die
+     Grenze von `beschreibungVon` selbst (400, dieselbe wie beim Aufzeichnen
+     in `rekorder.js`). Zwei Bildungen desselben Namens mit verschiedenen
+     Grenzen melden einen Unterschied, wo keiner ist: Ab dem 201. Zeichen
+     brach jede Wiedergabe mit `kaskade_falsches_ziel` ab, obwohl das Element
+     identisch und unverändert war — genau die Fehlerklasse, die Festlegung
+     F3 verbietet. Die Grenze trägt `beschreibungVon` in sich; eine zweite
+     Zahl hier wäre eine zweite Fassung derselben Regel (F4). */
   const kaskadeName = (el) => {
     const G = geheimQuelle();
     if (G && typeof G.beschreibungVon === "function") {
       try {
-        return String(G.beschreibungVon(el) || "").slice(0, 200);
+        return String(G.beschreibungVon(el) || "");
       } catch (_) {
         /* dann der Weg des Textbaums */
       }
     }
     try {
-      return nameVon(el).slice(0, 200);
+      return nameVon(el);
     } catch (_) {
       return "";
     }

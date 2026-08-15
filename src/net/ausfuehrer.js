@@ -90,6 +90,25 @@ import { istGesperrterUrsprung } from "./rechte.js";
    der Stelle, an der jeder Schritt einzeln vorgelesen wird. Vier Eintritts-
    punkte waren gedeckt, dieser fünfte nicht. */
 import { entmarken } from "./chat.js";
+/*
+ * Die Brücke als ganzes Modul — für den Freigaberuf (Befund RUF-1 vom
+ * 15.08.2026). Bis dahin sendete `menschRufen` eine Nachricht
+ * `link:freigabe-wartet` per `chrome.runtime.sendMessage` und hoffte, dass
+ * `link.js` sie hört. Das kann baulich nie funktionieren: Beide Dateien laufen
+ * im SELBEN Dienstarbeiter, und `sendMessage` erreicht den eigenen Kontext
+ * nicht — die Nachricht hatte im ganzen Baum keinen einzigen Empfänger, das
+ * Fragezeichen am Symbol erschien nie, `freigabeOffen` blieb für immer false.
+ * Ein Ruf-Zeichen ohne Empfänger ist exakt die 0.5.3-Fehlerklasse: gebaut,
+ * grün gemessen, im ausgelieferten Weg von niemandem gerufen.
+ *
+ * Deshalb wird `link.freigabeRufen` jetzt DIREKT gerufen. Als Modulobjekt und
+ * nicht mit benannten Feldern, aus demselben Grund, aus dem `link.js` es
+ * umgekehrt mit dieser Datei hält: Die beiden importieren einander, und ein
+ * benannter Import auf ein Feld, das im Lademoment noch nicht initialisiert
+ * ist, wäre ein Ladefehler der ganzen Datei — eine Brücke, die nicht lädt,
+ * ruft auch niemanden.
+ */
+import * as link from "./link.js";
 
 /* --------------------------------------------------------------------- *
  * Zustand des Ausführers. Alles im Modul, nichts auf Platte: Stirbt der
@@ -852,13 +871,17 @@ async function freigabeFragen({ frage, quelle, cmd, id, frist, signal = null }) 
   const rufen = async () => {
     const erste = await stellen();
     if (erste !== "keine_stelle") return erste;
-    menschRufen(cmd);
+    const ruf = menschRufen({ frage, cmd, id });
     await schlafen(RUF_NACHFRIST_MS, signal && signal.abbruch);
     const zweite = await stellen();
-    /* Auch beim zweiten Mal niemand da: Das ist eine eigene Lage und bekommt
-       einen eigenen Namen. „Es war kein Fenster offen" wäre jetzt falsch —
-       gerufen wurde, und niemand kam. */
-    return zweite === "keine_stelle" ? "unerreichbar" : zweite;
+    if (zweite !== "keine_stelle") return zweite;
+    /* Auch beim zweiten Mal niemand da: Das sind ZWEI Lagen mit zwei Namen.
+       „unerreichbar" heißt: gerufen wurde (Systemmeldung, Abzeichen), und in
+       der Nachfrist kam niemand. „unzustellbar" heißt: Auch der Ruf selbst
+       hatte keinen Weg zum Menschen — keine Systemmeldung möglich, kein
+       Abzeichen. Welcher Absagecode daraus wird, entscheidet Schritt 10 der
+       Schleife, an genau EINER Stelle (Festlegung F4). */
+    return ruf && ruf.erreicht === true ? "unerreichbar" : "unzustellbar";
   };
 
   try {
@@ -873,10 +896,16 @@ async function freigabeFragen({ frage, quelle, cmd, id, frist, signal = null }) 
     melden({ typ: "link:freigabe-zurueckziehen", id });
     /* Und das Fragezeichen am Symbol geht mit der Frage weg. Ein Zeichen, das
        stehenbleibt, nachdem es nichts mehr zu beantworten gibt, ist beim
-       dritten Mal keines mehr. */
+       dritten Mal keines mehr. Direkt bei `link.js` und nicht per Nachricht —
+       der Weg über `sendMessage` erreichte den eigenen Dienstarbeiter nie
+       (Befund RUF-1). */
     if (gerufen) {
       gerufen = false;
-      melden({ typ: "link:freigabe-wartet", an: false });
+      try {
+        link.freigabeRufAus();
+      } catch (_) {
+        /* Ein Zeichen, das sich nicht wegräumen lässt, hält keine Antwort auf. */
+      }
     }
   }
 }
@@ -894,7 +923,8 @@ const RUF_NACHFRIST_MS = 1200;
 let gerufen = false;
 
 /**
- * Den Menschen rufen, der gerade nicht zusieht (§8.4, Befund BRUECKE-3).
+ * Den Menschen rufen, der gerade nicht zusieht (§8.4, Befund BRUECKE-3,
+ * verdrahtet mit Befund RUF-1 vom 15.08.2026).
  *
  * Zwei Zeichen, und sie tun Verschiedenes: Die Systemmeldung ist der
  * Augenblick („dein Browser wartet gerade auf dich"), das Abzeichen ist der
@@ -902,22 +932,27 @@ let gerufen = false;
  * eine Bedingung — ein Schutz, der an einer fehlenden Berechtigung stürzte,
  * wäre schlimmer als einer, der leise ist.
  *
- * Das Abzeichen selbst wird hier NICHT gesetzt. `chrome.action` ist global,
- * und `link.js` führt es bereits über den Verbindungszustand; zwei Stellen,
- * die dasselbe Zeichen setzen, sind die Bauform, die Festlegung F4 verbietet.
- * Diese Datei sagt nur Bescheid. Hört dort heute niemand zu, bleibt die
- * Systemmeldung — und das ist gemeldeter Fremdbedarf, keine stille Lücke.
+ * Gesetzt wird beides von `link.freigabeRufen`, und NUR von dort: Das Symbol
+ * gehört `link.js`, und zwei Stellen, die dasselbe Zeichen setzen, sind die
+ * Bauform, die Festlegung F4 verbietet. Bis zum 15.08.2026 sagte diese Datei
+ * per `sendMessage` „nur Bescheid" — an einen Empfänger, den es baulich nie
+ * geben konnte, denn `link.js` läuft im selben Dienstarbeiter. Die
+ * Systemmeldung entstand hier als zweite, flüchtige Fassung daneben. Jetzt
+ * gibt es EINE Fassung des Rufs, die aus `link.js`, mit `requireInteraction`
+ * und dem Fragezeichen am Symbol.
+ *
+ * @returns {{erreicht:boolean, wege:string[]}} `erreicht:false` heißt: Kein
+ *   Weg hat den Menschen erreicht — Stufe 3, die benannte Absage.
  */
-function menschRufen(cmd) {
+function menschRufen({ frage = "", cmd = "", id = "" } = {}) {
   gerufen = true;
-  melden({ typ: "link:freigabe-wartet", an: true, cmd });
-  systemmeldung(
-    katalog("freigabe_ruf_titel", "SMarTrChrome wartet auf deine Freigabe"),
-    katalog(
-      "freigabe_ruf_text",
-      "Ein Schritt braucht deine Zustimmung, und es ist gerade keine Seitenleiste offen. Öffne SMarTrChrome, dann zeige ich dir, worum es geht."
-    )
-  );
+  try {
+    return link.freigabeRufen({ frage, cmd, id });
+  } catch (_) {
+    /* Ein Ruf, der stürzt, hat niemanden erreicht — das ist die ehrliche
+       Antwort, und sie fällt in die strengere Richtung. */
+    return { erreicht: false, wege: [] };
+  }
 }
 
 /* --------------------------------------------------------------------- *
@@ -2651,6 +2686,57 @@ async function nachDemWechsel(lage, fristMs) {
     };
   }
 
+  /*
+   * Und die Agentenmatrix für den Wirt, auf dem der Tab WIRKLICH steht
+   * (Befund AUTOMODUS-8 vom 15.08.2026).
+   *
+   * Die Vorprüfung (Schritt 9c der Schleife) misst Herkunft und ANGEKÜNDIGTES
+   * Ziel — eine Weiterleitung kann daraus einen Wirt machen, für den die
+   * Matrix diesem Agenten nichts erlaubt. Gemessen: Sitzung im Modus
+   * `domains` mit zwei freigegebenen Wirten, Matrix erlaubt dem Agenten nur
+   * den ersten; `navigate` auf den ersten mit Weiterleitung auf den zweiten
+   * lieferte dessen vollen Snapshot, obwohl `agentDarf` dort für jede Klasse
+   * false sagt. Der Bereich ist die Freigabe des MENSCHEN für die Sitzung —
+   * die Matrix ist seine Ansage, was DIESER Agent wo darf, und die gilt auch
+   * hinter einer Weiterleitung. AUTOMODUS-6 hat die harten Klassen
+   * nachgezogen, die Matrix blieb stehen.
+   *
+   * Gemessen werden die Klassen, über die in diesem Schritt entschieden wurde
+   * (`lage.klassen`), UND die der neuen Adresse: Der Snapshot am Ende ist
+   * eine Wahrnehmung des neuen Wirts. Fällt die Prüfung, geht KEIN
+   * Seiteninhalt in die Antwort — und die Absage nennt die Adresse nicht
+   * (dieselbe Zusage wie bei `WACHE_ABGEWANDERT`: Wer sagt, WO der Tab jetzt
+   * steht, ist selbst das Leck).
+   */
+  if (lage.agent) {
+    const zuPruefen = new Set([
+      ...(Array.isArray(lage.klassen) ? lage.klassen : []),
+      ...neueKlassen.klassen,
+    ]);
+    for (const klasse of zuPruefen) {
+      let erlaubt = false;
+      try {
+        erlaubt = (await agentDarf(lage.agent, adresse, klasse)) === true;
+      } catch (_) {
+        /* Eine Matrix, die sich nicht lesen lässt, erteilt keine Erlaubnis —
+           dieselbe strengere Richtung wie in `wirtGesperrt`. */
+        erlaubt = false;
+      }
+      if (erlaubt) continue;
+      protokoll("Der Tab steht nach dem Wechsel auf einem Wirt, der für diesen Agenten nicht freigeschaltet ist. Ich lese hier nicht.", {
+        cmd: lage.cmd,
+        ergebnis: "agent_not_permitted",
+      });
+      return {
+        ok: false,
+        code: "agent_not_permitted",
+        satz: `Dieser Wechsel ist woanders gelandet als angekündigt, und dort ist für ${saeubern(lage.agent, 40)} nicht freigeschaltet, was dieser Schritt tut. Ich lese die neue Seite nicht.`,
+        hinweis: "Den Nutzer bitten, das in den Einstellungen der Erweiterung für diesen Agenten und diese Seite freizuschalten.",
+        retryable: false,
+      };
+    }
+  }
+
   const overlay = await overlaySicherstellen(lage.tabId, { signal: lage.abbruch });
   if (!overlay.ok) {
     return {
@@ -3297,7 +3383,10 @@ async function tuRunWorkflow(rahmen, lage) {
         cmd: lage.cmd,
         id: `${lage.id}.${nr}`,
         frist: Math.max(GRENZEN.bedenkzeitMs, lage.restfrist() - AUSFUEHRUNG_RESERVE_MS),
-        signal: lage.signal,
+        /* Am Signal des ABLAUFS, nicht nur am Not-Aus (WFRIST-1): Läuft die
+           äußere Uhr ab, während diese Frage offen steht, wird sie
+           zurückgezogen statt später beantwortet. */
+        signal: lage.schrittsignal || lage.signal,
       });
       if (antwort !== "ja") {
         return workflowSchrittAbsage(lage, nr, schritt, {
@@ -3478,6 +3567,11 @@ async function schrittSchicken(lage, rahmen, cmd) {
     begonnen,
     meineGeneration: lage.generation,
     notiz,
+    /* Der Schritt hängt am Signal des ABLAUFS, nicht nur am Modul-Not-Aus
+       (Befund WFRIST-1): Läuft die äußere Uhr von `run_workflow` ab, bricht
+       dieses Signal — und damit auch ein Schritt, der gerade auf eine
+       Freigabe oder eine langsame Seite wartet. */
+    schrittsignal: lage.schrittsignal || null,
   }).catch((fehler) =>
     misslungen(id, cmd, "client_fehler",
       "In der Erweiterung ist beim Abspielen etwas schiefgegangen.",
@@ -3490,11 +3584,15 @@ async function schrittSchicken(lage, rahmen, cmd) {
   return buchFuehren(rahmen, antwort, notiz);
 }
 
-async function einzeln(rahmen, sitzung, { id, cmd, begonnen, meineGeneration, notiz = null }) {
+async function einzeln(rahmen, sitzung, { id, cmd, begonnen, meineGeneration, notiz = null, schrittsignal = null }) {
   const tabId = sitzung && Number.isInteger(sitzung.tabId) ? sitzung.tabId : null;
   const m = (zusatz) => meta(begonnen, tabId, zusatz);
-  /* Das Not-Aus-Signal, das bei DIESEM Befehl galt. Siehe `laufAbbrechen`. */
-  const meinSignal = abbruchSignal;
+  /* Das Not-Aus-Signal, das bei DIESEM Befehl galt. Siehe `laufAbbrechen`.
+     Ein Schritt aus einem Ablauf bekommt stattdessen das Signal des Ablaufs
+     (`schrittsignal`, Befund WFRIST-1): Es bricht mit dem Not-Aus UND mit dem
+     äußeren Riegel von `run_workflow` — sonst liefe der Schritt weiter,
+     nachdem die äußere Uhr längst geantwortet hat. */
+  const meinSignal = schrittsignal || abbruchSignal;
   const buch = notiz || { adresse: "", klassen: [] };
 
   /* Die Uhr, an der die AUSFÜHRUNG hängt. Sie beginnt beim Eintreffen des
@@ -4005,6 +4103,22 @@ async function einzeln(rahmen, sitzung, { id, cmd, begonnen, meineGeneration, no
         { hint: "Das ist kein Fehler. Plane anders oder frage den Nutzer, was er stattdessen möchte.", m: m() });
     }
     if (antwort !== "ja") {
+      /* Die EINE Stelle, an der entschieden wird, welcher Code fällt
+         (Festlegung F4, Befund RUF-1): `grant_required` heißt „gefragt und
+         keine Zustimmung bekommen" — auch dann, wenn der Mensch gerufen wurde
+         und in der Nachfrist niemand kam. `grant_unreachable` heißt „ich
+         konnte niemanden fragen": Die Seitenleiste war zu, UND der Ruf selbst
+         hatte keinen Weg (keine Systemmeldung möglich, kein Abzeichen). Code
+         und Satz dafür kommen aus `link.js` und nur von dort — eine zweite
+         Fassung hier wäre die Doppelfassung, die F4 verbietet. */
+      if (antwort === "unzustellbar") {
+        protokoll(`Ohne Antwort geblieben: ${eintrag.tut}`, { cmd, ergebnis: link.FREIGABE_UNERREICHBAR });
+        return misslungen(id, cmd, link.FREIGABE_UNERREICHBAR, link.FREIGABE_UNERREICHBAR_TEXT, {
+          retryable: true,
+          hint: "Den Nutzer auf einem anderen Weg bitten, die Seitenleiste zu öffnen, und den Schritt danach noch einmal senden.",
+          m: m(),
+        });
+      }
       protokoll(`Ohne Antwort geblieben: ${eintrag.tut}`, { cmd, ergebnis: "grant_required" });
       const saetze = {
         keine_stelle: "Es war kein Fenster offen, in dem der Nutzer hätte zustimmen können.",
@@ -4013,7 +4127,7 @@ async function einzeln(rahmen, sitzung, { id, cmd, begonnen, meineGeneration, no
         /* Eigene Lage, eigener Satz (BRUECKE-2): Es war nicht nur niemand da,
            es wurde auch gerufen. Der Agent soll den Unterschied hören, denn
            beim zweiten Versuch stehen die Chancen anders. */
-        unerreichbar: "Es sieht gerade niemand zu. Ich habe den Nutzer über eine Systemmeldung gerufen, und in der Zeit hat niemand geantwortet.",
+        unerreichbar: "Es sieht gerade niemand zu. Ich habe den Nutzer gerufen, und in der Zeit hat niemand geantwortet.",
       };
       const hinweise = {
         unerreichbar: "Der Nutzer wurde benachrichtigt. Den Schritt in einem Augenblick noch einmal senden, oder den Auftrag zusammenfassen und auf ihn warten.",
@@ -4085,6 +4199,30 @@ async function einzeln(rahmen, sitzung, { id, cmd, begonnen, meineGeneration, no
    */
   const riegel = riegelBinden(meinSignal);
 
+  /*
+   * Das Signal, unter dem die SCHRITTE eines Ablaufs laufen (Befund WFRIST-1
+   * vom 15.08.2026). Bis dahin liefen sie am MODUL-Not-Aus-Signal: Der äußere
+   * Wecker von `run_workflow` schloss im `finally` nur den äußeren Riegel,
+   * und der in-flight-Schritt hing daran gar nicht — gemessen wurde ein
+   * `tabs.update`, das NACH der settle_timeout-Antwort noch die Seite
+   * wechselte, weil die verspätete Freigabe des Menschen den Schritt noch
+   * auslöste. Ein Riegel, an dem die Schritte nicht hängen, kappt nichts.
+   *
+   * Dieses Signal bricht mit dem äußeren Riegel, also beim Not-Aus UND beim
+   * Ablauf der äußeren Uhr — kooperativ, wie der Not-Aus selbst: Die Sitzung
+   * bleibt stehen, gekappt wird der Ablauf, nicht die Verbindung.
+   */
+  let ablaufSignal = null;
+  if (cmd === "run_workflow") {
+    ablaufSignal = {
+      abbruch: riegel.signal,
+      versprechen: new Promise((fertig) => {
+        if (riegel.signal.aborted) fertig(ABBRUCH);
+        else riegel.signal.addEventListener("abort", () => fertig(ABBRUCH), { once: true });
+      }),
+    };
+  }
+
   const lage = {
     id,
     cmd,
@@ -4102,6 +4240,9 @@ async function einzeln(rahmen, sitzung, { id, cmd, begonnen, meineGeneration, no
     agent,
     generation: meineGeneration,
     signal: meinSignal,
+    /* Das Signal für die Schritte eines Ablaufs (WFRIST-1): Not-Aus ODER
+       äußere Uhr, beides kappt. Nur `run_workflow` trägt es. */
+    schrittsignal: ablaufSignal,
     /* Das Abbruchsignal für ALLES, was diesen Schritt verlässt (F1). */
     abbruch: riegel.signal,
     /* Die Wirte, über die der Mensch für diesen Schritt entschieden hat (B2). */
@@ -4181,12 +4322,56 @@ async function einzeln(rahmen, sitzung, { id, cmd, begonnen, meineGeneration, no
   }
   if (ergebnis) return einschleusungAnhaengen(ergebnis, lage);
 
+  /*
+   * Die Uhr hat gewonnen — und für einen ABLAUF ist das eine eigene Lage
+   * (Befund WFRIST-1 vom 15.08.2026). Der Riegel ist im `finally` schon
+   * geschlossen, und die Schritte hängen seit WFRIST-1 wirklich daran; jetzt
+   * wird gewartet, bis nichts mehr läuft, und ERST DANN geantwortet. Eine
+   * Antwort „hat nicht stattgefunden" über einem Schritt, der noch läuft, ist
+   * die schlimmste Sorte Falschaussage (siehe die GRENZEN in befehle.js).
+   *
+   * Und `retryable` ist die Absage in KEINEM Fall: `run_workflow` beginnt
+   * immer bei Schritt 1, einen Wiederaufsetzpunkt gibt es nicht — die
+   * Schritte vor dem Ablauf der Uhr haben die Seite womöglich schon
+   * verändert, und ein erneuter Versuch wäre eine Doppelausführung, keine
+   * Wiederholung. Meldet sich der gekappte Läufer im Nachlauf nicht, gilt
+   * erst recht: Solange nicht sicher ist, dass nichts mehr läuft, wird nichts
+   * zur Wiederholung eingeladen.
+   */
+  if (cmd === "run_workflow") {
+    const ruhe = await Promise.race([
+      arbeit.then(() => true, () => true),
+      schlafen(ABLAUF_NACHLAUF_MS),
+    ]);
+    const steht = ruhe === true;
+    return misslungen(id, cmd, "settle_timeout",
+      steht
+        ? "Der Ablauf hat seine Frist überschritten. Ich habe ihn angehalten; die Schritte davor können die Seite schon verändert haben."
+        : "Der Ablauf hat seine Frist überschritten, und ein Schritt hat auf das Anhalten noch nicht geantwortet. Ich kann nicht zusichern, dass nichts mehr läuft.",
+      {
+        retryable: false,
+        hint: "Den Ablauf nicht einfach neu starten, sonst laufen schon erledigte Schritte doppelt. Erst mit einer Wahrnehmung nachsehen, wo die Seite steht, und den Nutzer entscheiden lassen.",
+        m: m(),
+      });
+  }
+
   /* Unsere Uhr läuft vor der des Relays ab. Damit bekommt der Agent eine
      Aussage statt eines nackten „keine Antwort vom Browser" (spec-01 §3.9). */
   return misslungen(id, cmd, "settle_timeout",
     "Die Seite ist in der Frist nicht fertig geworden.",
     { retryable: true, hint: "Kurz warten und noch einmal versuchen.", m: m() });
 }
+
+/*
+ * Wie lange nach dem Ablauf der äußeren Uhr auf den gekappten Läufer gewartet
+ * wird, bevor geantwortet werden muss (WFRIST-1). Kurz und begründet: Das
+ * Kappen ist kooperativ und greift am nächsten `await`, im Regelfall in
+ * Millisekunden. Die Grenze existiert nur, damit ein Läufer, der in einer
+ * hängenden Browser-API steht, die Antwort an den Relay nicht ganz
+ * verschluckt — dann sagt die Absage ehrlich, dass Stille nicht zugesichert
+ * werden kann, und lädt NICHT zur Wiederholung ein.
+ */
+const ABLAUF_NACHLAUF_MS = 1000;
 
 /* Wie lange dieser Befehl insgesamt haben darf — gerechnet ab seinem Eintreffen,
    nicht ab dem Beginn der Ausführung. Wartezeit in der Schlange ist Zeit, die

@@ -182,6 +182,15 @@
      „14 08 2026" sind drei Zahlen, und „12 34" sind zwei. */
   const GRUPPE_MINDEST = 3;
 
+  /* Nachtrag 15.08.2026 (Nachabnahme 0.6.0): An Leerzeichen und Bindestrich
+     fusionieren wie bisher schon ZWEI Gruppen („849 271" ist der Einmalcode,
+     wie ihn jede 2FA-Seite anzeigt). Jeder ANDERE Trenner braucht drei —
+     sonst würde aus „100.000 Euro" und „100,000" im Fliesstext ein Code, und
+     eine Wache, die jeden zweiten Preis frisst, wird abgeschaltet statt
+     gelesen. Eine Kartennummer hat vier Gruppen, ein gegliederter Einmalcode
+     mindestens drei; beide liegen über dieser Schwelle. */
+  const GRUPPE_FREMDTRENNER_MINDEST = 3;
+
   /* Wie lang ein Merkmal höchstens sein darf, damit es noch eine BEZEICHNUNG
      ist und nicht ein Satz. Befund TEACH-3 vom 14.08.2026: „Wir haben dir
      eine E-Mail geschickt, trag die sechs Ziffern hier ein" enthält „mail"
@@ -706,9 +715,89 @@
     return summe % 10 === 0;
   }
 
+  /* Spiegel der Unsichtbaren-Tabelle aus `src/gemeinsam/messform.js`,
+     erweitert um die echten Steuerzeichen (C0/C1) — OHNE die
+     Weissraum-Zeichen \t \n \v \f \r: Die bedeuten eine sichtbare Lücke und
+     bleiben Weissraum; alles andere hier hat keine Breite und fällt
+     ersatzlos weg. Die Tabelle steht hier ein zweites Mal, weil der
+     Teach-Modus `geheim.js` OHNE `messform.js` einspielt (REKORDER_DATEIEN
+     in `worker.js`): Eine Gestaltprüfung, die dort nach `SMARTR_MESSFORM`
+     griffe, griffe genau im Teach-Modus ins Leere — die Bauform vom
+     11.08.2026, grün geprüft und im Betrieb tot. Der Prüfsatz
+     `geheim-gestalt.test.mjs` hält beide Tabellen gegeneinander: Fehlt hier
+     ein Zeichen, das `messform.js` als unsichtbar führt, wird er rot. */
+  const GESTALT_UNSICHTBAR = new RegExp(
+    "[\\u0000-\\u0008\\u000e-\\u001f\\u007f-\\u009f\\u00ad\\u034f\\u061c" +
+      "\\u115f\\u1160\\u17b4\\u17b5\\u180b-\\u180e\\u200b-\\u200f\\u202a-\\u202e" +
+      "\\u2060-\\u2064\\u2066-\\u206f\\u3164\\ufe00-\\ufe0f\\ufeff\\ufff9-\\ufffb\\uffa0]" +
+      "|[\\u{e0000}-\\u{e0fff}]",
+    "gu"
+  );
+
+  /* Die Vollbreiten-Ziffern von Hand statt allein über NFKC: `normalize`
+     kann eine fremde Seite überschrieben haben, und die belegten Umgehungen
+     der Nachabnahme 0.6.0 hängen an genau dieser Faltung. Der Abstand ist
+     im Standard fest: U+FF10 „０“ liegt 0xFEE0 über U+0030 „0“. */
+  const VOLLBREIT_ZIFFER = /[\uff10-\uff19]/g;
+
+  /**
+   * Die Form, in der eine GESTALT gemessen wird.
+   *
+   * Nachtrag 15.08.2026 (Nachabnahme 0.6.0): Jede Formprüfung dieser Datei
+   * lief gegen den ROHEN Text, und die Seite durfte sich ihre Schreibweise
+   * aussuchen — Vollbreiten-Ziffern („８４９２７１“), nullbreit getrennte
+   * Ziffern und Formatzeichen liefen an `kernVon` und `ziffernketten` vorbei
+   * in den gespeicherten Ablauf. Dieselbe Fehlerklasse wie AUTOMODUS-1: Es
+   * wird gemessen, ohne vorher zu normalisieren.
+   *
+   * Deshalb läuft ab hier ALLES, was eine Gestalt misst, zuerst durch diese
+   * Form: Vollbreiten-Ziffern auf ASCII, NFKC für den Rest der
+   * Kompatibilitätszeichen, Format- und Nullbreiten-Zeichen ersatzlos weg.
+   * Sie ersetzt ausdrücklich NICHT die Wortmessung aus `messform.js` — dort
+   * geht es um WÖRTER (Kleinschreibung, Umlautersatz, sichtgleiche
+   * Buchstaben), hier um ZIFFERNGESTALTEN, und der Teach-Modus spielt diese
+   * Datei ohne `messform.js` ein.
+   *
+   * @param {string} roh
+   * @returns {string}
+   */
+  function gestaltform(roh) {
+    let s = String(roh == null ? "" : roh);
+    if (!s) return "";
+    s = s.replace(VOLLBREIT_ZIFFER, (z) => String.fromCharCode(z.charCodeAt(0) - 0xfee0));
+    try {
+      if (typeof s.normalize === "function") s = s.normalize("NFKC");
+    } catch (_) {
+      /* Ohne Faltung weitermessen: weniger gefaltet ist schlechter als
+         gefaltet, aber die Ziffern oben sind schon gefaltet, und die Trenner
+         unten fallen trotzdem. */
+    }
+    return s.replace(GESTALT_UNSICHTBAR, "");
+  }
+
   /* Trenner, die eine Kartennummer oder einen Code lesbar machen sollen. Sie
-     gehören nicht zum Wert, also fallen sie vor der Messung heraus. */
-  const kernVon = (roh) => String(roh == null ? "" : roh).replace(/[\s.\-/ ]/g, "");
+     gehören nicht zum Wert, also fallen sie vor der Messung heraus.
+
+     Nachtrag 15.08.2026 (Nachabnahme 0.6.0): Hier standen nur Weissraum,
+     Punkt, Bindestrich und Schrägstrich — und belegt durchgerutscht sind
+     der Unterstrich („4111_1111_1111_1111“), das Komma, der Mittelpunkt
+     U+00B7 und der geschützte Bindestrich U+2011. Ab jetzt steht die
+     FAMILIE: alles, womit ein Mensch oder eine Seite eine Nummer gliedert —
+     Weissraum, Punkt, Komma, Unterstrich, Schrägstrich, die Apostrophe
+     (Schweizer Tausendergliederung), Aufzählungs- und Mittelpunkte und die
+     Bindestrich-Familie U+2010–U+2015 samt Minus U+2212.
+
+     Bewusst NICHT dabei: der Doppelpunkt („12:45“ ist eine Uhrzeit, und ein
+     Fahrplan besteht aus Uhrzeiten) und die Klammern („(030) 1234“ ist eine
+     Telefonnummer). Wer sie als Trenner missbraucht, läuft in die
+     Gruppenregel von `ziffernketten`: Drei und mehr gleich lange Gruppen
+     fusionieren dort an JEDEM Zeichen. */
+  const NUMMERN_TRENNER = new RegExp(
+    "[\\s.,\\-/_'\u2018\u2019\u0060\u00b4\u00b7\u2022\u2027\u2219\u22c5\u2010-\u2015\u2212]",
+    "g"
+  );
+
+  const kernVon = (roh) => gestaltform(roh).replace(NUMMERN_TRENNER, "");
 
   /**
    * Alle Ziffernketten eines Textes, in der Lesart, in der ein Mensch sie
@@ -724,11 +813,29 @@
    */
   function ziffernketten(text) {
     const raus = [];
-    const gruppen = String(text == null ? "" : text).match(/[0-9]+(?:[ \-][0-9]+)*/g) || [];
+    /* Nachtrag 15.08.2026 (Nachabnahme 0.6.0): Zusammengezogen wird an JEDEM
+       einzelnen Nicht-Ziffern-Zeichen, nicht mehr nur an Leerzeichen und
+       Bindestrich — „4111,1111,1111,1111“ ist dieselbe Kartennummer. Die
+       Trennerwahl liegt sonst bei der Seite, und eine Wache, deren
+       Zeichenliste der Angreifer aussucht, ist keine. Zwei Deckel halten den
+       Alltag drin: Gruppen UNGLEICHER Länge bleiben getrennt (das Datum
+       „14.08.2026“, der Preis „1.234,56“), und bei jedem Trenner ausser
+       Leerzeichen und Bindestrich braucht es DREI gleiche Gruppen
+       (`GRUPPE_FREMDTRENNER_MINDEST`), damit „100.000 Euro“ ein Preis
+       bleibt. Ein Zeichen ausserhalb der Grundebene (ein Emoji als Zierde)
+       zählt über sein Ersatzpaar ebenfalls als EIN Trenner. */
+    const gruppen =
+      gestaltform(text).match(
+        /[0-9]+(?:(?:[\ud800-\udbff][\udc00-\udfff]|[^0-9A-Za-zÄÖÜäöüß])[0-9]+)*/g
+      ) || [];
     for (const gruppe of gruppen) {
-      const teile = gruppe.split(/[ \-]/).filter(Boolean);
+      const teile = gruppe.split(/[^0-9]+/).filter(Boolean);
       const gleichLang = teile.every((t) => t.length === teile[0].length);
-      if (teile.length > 1 && gleichLang && teile[0].length >= GRUPPE_MINDEST) {
+      /* Nur Ziffern, Leerzeichen und Bindestrich: die Gliederung des
+         Alltags — dort genügen wie bisher zwei Gruppen. */
+      const alltag = !/[^0-9 \-]/.test(gruppe);
+      const mindestGruppen = alltag ? 2 : GRUPPE_FREMDTRENNER_MINDEST;
+      if (teile.length >= mindestGruppen && gleichLang && teile[0].length >= GRUPPE_MINDEST) {
         raus.push(teile.join(""));
         continue;
       }
@@ -886,7 +993,7 @@
    * sobald jemand eine Maske dieser Art misst.
    */
   function gruppenkette(text) {
-    const teile = String(text == null ? "" : text).trim().split(/[\s\-]+/).filter(Boolean);
+    const teile = gestaltform(text).trim().split(/[\s\-]+/).filter(Boolean);
     if (teile.length < GRUPPENKETTE_MINDEST) return false;
     if (!teile.every((t) => /^[A-Za-z0-9]{3,8}$/.test(t))) return false;
     if (!teile.every((t) => t.length === teile[0].length)) return false;
@@ -1177,6 +1284,7 @@
     wertGestalt,
     ziffernketten,
     tokenGestalt,
+    gestaltform,
     bezeichnungGeheim,
     bezeichnungTaugt,
     luhnGueltig,

@@ -22,6 +22,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
+/* Der ECHTE Klassifizierer, nicht eine Attrappe: Die Nachabnahme vom
+   15.08.2026 hat gezeigt, dass `gattung.test.mjs` die Kürzung in
+   `overlay:nachschlagen` nie sah, weil dort eine Attrappe mit ungekürztem
+   Namen antwortete. Hier läuft der Name deshalb den ganzen Weg — aus dem
+   echten Overlay heraus und in die echte Klassenbestimmung hinein. */
+import { klassenBestimmen, freigabeNoetig } from "../net/befehle.js";
 
 const QUELLE = new URL("../content/overlay.js", import.meta.url);
 const WACHE_QUELLE = new URL("../content/klickwache.js", import.meta.url);
@@ -4250,4 +4256,97 @@ test("Messform: fehlt sie, wird über Text gar nichts mehr gefunden — statt in
     typ: "overlay:auswaehlen", ref: refVon(baum, "Versandart"), epoche: baum.epoche, wert: "exp",
   });
   assert.equal(ueberWert.ok, true, "der Weg über den Wert bleibt");
+});
+
+/* ================================================================== *
+ * Nachabnahme 15.08.2026 — Messeingänge verlassen die Seite UNGEKÜRZT
+ *
+ * Die Zusage lautet: Gekürzt wird nur der Anzeigename an der Anzeige, nie
+ * ein Wert, der in eine Wache oder einen Klassifizierer geht. Beide Funde
+ * der Nachabnahme waren dieselbe Bauform an zwei Stellen von `overlay.js`:
+ *
+ *   - `nachschlagen()` kappte den Namen auf 200 Zeichen, BEVOR der
+ *     Klassifizierer ihn sah (AUTOMODUS-2, zurückgekehrt): Eine Seite, die
+ *     das harte Wort hinter Zeichen 200 stellt, schaltete die als „nie
+ *     abschaltbar" zugesagte Pflichtrückfrage ab.
+ *   - `kaskadeName()` kappte auf 200, die aufgezeichnete Beschreibung hält
+ *     400: Die Identitätswache meldete für das IDENTISCHE Element
+ *     `anderes_ziel`, jede Wiedergabe brach ab (Verstoß gegen F3).
+ *
+ * Beide Prüfsätze gehen den ganzen Weg über die Nachrichten des Ausführers
+ * und die ECHTEN Nachbarmodule — keine Attrappe formt den Namen um.
+ * ================================================================== */
+
+test("Nachschlagen: der Name verlässt die Seite ungekürzt — die harte Klasse hängt nicht am 200. Zeichen", async () => {
+  /* Das harte Wort steht erst NACH Zeichen 200. Vor der Reparatur kam beim
+     Ausführer `'a'.repeat(200)` an, `kaufen` war weggeschnitten, und der
+     Klick lief im Modus `auto` ohne die Pflichtrückfrage durch. */
+  const langerName = "a".repeat(210) + " Jetzt kaufen";
+  const knopf = knoten("button", { attrs: { "aria-label": langerName }, text: "Kaufen" });
+  const { fragen } = await overlayStarten([knopf]);
+
+  const baum = fragen({ typ: "overlay:baum" });
+  const ref = (baum.knoten.find((k) => k.art === "element") || {}).ref;
+  assert.ok(ref, "der Knopf muss im Textbaum stehen");
+
+  const a = fragen({ typ: "overlay:nachschlagen", ref, epoche: baum.epoche });
+  assert.equal(a.ok, true, JSON.stringify(a));
+  assert.equal(
+    a.name,
+    langerName,
+    "der Messeingang trägt den GANZEN Namen — kürzen darf nur die Anzeige, und das tut der Ausführer dort selbst"
+  );
+
+  /* Und mit diesem Namen sieht der echte Klassifizierer die harte Klasse —
+     dieselbe Zielform, die der Ausführer aus genau dieser Antwort baut. */
+  const ziel = {
+    name: a.name,
+    rolle: a.rolle,
+    marke: a.marke,
+    typ: a.feldtyp,
+    formularGeheim: a.formularGeheim === true,
+  };
+  const befund = klassenBestimmen("click", {}, ziel, { url: "https://beispiel-shop.de/produkt" });
+  assert.equal(befund.hart, "zahlung", "das harte Wort hinter Zeichen 200 muss die harte Klasse auslösen");
+  const frage = freigabeNoetig("auto", befund, { gesperrt: false, frei: [] });
+  assert.equal(frage.fragen, true, "und die Pflichtrückfrage fällt auch in der Automatik");
+  assert.equal(frage.code, "guardrail_blocked");
+
+  /* Die Schärfe der Messung: Mit der alten 200er-Kappung wäre genau diese
+     Schranke gefallen — das ist der Befund, nicht eine Vermutung. */
+  const gekappt = klassenBestimmen("click", {}, { ...ziel, name: langerName.slice(0, 200) }, { url: "https://beispiel-shop.de/produkt" });
+  assert.equal(gekappt.hart, null, "die Kappung hätte die Schranke abgeschaltet — deshalb darf sie nie zurückkehren");
+});
+
+test("Kaskade: ein Name über 200 Zeichen bleibt derselbe wie die aufgezeichnete Beschreibung — die Identitätswache erkennt das identische Ziel", async () => {
+  /* Aufnahme und Wiedergabe rufen dieselbe Funktion `beschreibungVon` —
+     kürzen sie verschieden (400 gegen 200), meldet `gleicherText` einen
+     Unterschied, wo keiner ist, und die Wiedergabe bricht für dieses Element
+     dauerhaft mit `kaskade_falsches_ziel` ab. */
+  let langerName = "";
+  while (langerName.length < 301) langerName += "Diesen Artikel in den Warenkorb legen und weiter einkaufen ";
+  langerName = langerName.trim();
+
+  const knopf = knoten("button", { attrs: { "aria-label": langerName }, text: "Warenkorb" });
+  const { fragen, sandbox } = await mitSelektor([knopf]);
+
+  /* AUFNAHME: exakt die Bildung aus `rekorder.js` (Grenze 400). */
+  const aufgezeichnet = sandbox.SMARTR_GEHEIM.beschreibungVon(knopf, 400);
+  assert.ok(aufgezeichnet.length > 200, "der Prüfsatz muss den Fall jenseits von Zeichen 200 wirklich messen");
+
+  /* WIEDERGABE: der Name aus der Kaskadenantwort der Seite. */
+  const a = fragen({ typ: "overlay:kaskade", kaskade: ['[aria-label]'] });
+  assert.equal(a.ok, true, JSON.stringify(a));
+  assert.equal(
+    a.name,
+    aufgezeichnet,
+    "beide Seiten müssen den Namen nach DERSELBEN Regel mit DERSELBEN Grenze bilden (F3)"
+  );
+
+  /* Und der Vergleich der Identitätswache erkennt das identische Ziel. */
+  assert.equal(
+    sandbox.SMARTR_MESSFORM.gleicherText(a.name, aufgezeichnet),
+    true,
+    "ein identisches, unverändertes Element darf nie als anderes_ziel enden"
+  );
 });

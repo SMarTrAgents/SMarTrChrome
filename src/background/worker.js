@@ -311,12 +311,14 @@ async function aufzeichnungLaeuft() {
  * In WELCHEM Tab die laufende Aufzeichnung begonnen hat.
  *
  * Warum dafür ein eigener Schlüssel nötig ist: `sa_rekorder` trägt Schritte und
- * Bildnummer, aber keinen Tab — und `content/rekorder.js` nimmt eine gemerkte
- * Aufzeichnung in JEDEM Dokument wieder auf, in das es eingespielt wird. Ohne
- * diese Zeile würde die Neueinspielung aus H6 in jedem Tab greifen, in dem
- * gerade eine Seite lädt. Aus einer Reparatur würde ein Mitschnitt, und der
- * Mensch hätte in seinem Ablauf Schritte von Seiten, die er nebenbei geöffnet
- * hat.
+ * Bildnummer, aber keinen Tab. Ohne diese Zeile würde die Neueinspielung aus
+ * H6 in jedem Tab greifen, in dem gerade eine Seite lädt. Aus einer Reparatur
+ * würde ein Mitschnitt, und der Mensch hätte in seinem Ablauf Schritte von
+ * Seiten, die er nebenbei geöffnet hat. Seit dem 15.08.2026 fragt zusätzlich
+ * `content/rekorder.js` vor jeder Wiederaufnahme über `rekorder:gehoert?` hier
+ * nach, ob die gemerkte Aufzeichnung zu seinem Tab gehört — zwei Wachen für
+ * dieselbe Zusage, weil der Stopp-Weg den Aufzeichner auch in einen Tab
+ * einspielen kann, den `tabs.onUpdated` nie gemeldet hat.
  *
  * `session` und nicht `local`: Eine Tabnummer bedeutet nur etwas, solange
  * dieser Browser läuft. Nach einem Neustart sind die Nummern neu vergeben, und
@@ -350,6 +352,25 @@ async function aufnahmeTab() {
     const daten = await chrome.storage.session.get(REKORDER_TAB_ABLAGE);
     const tabId = daten && daten[REKORDER_TAB_ABLAGE];
     return Number.isInteger(tabId) ? tabId : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/*
+ * Die Schritte der gemerkten Aufzeichnung — oder `null`, wenn keine läuft.
+ *
+ * `null` und nicht `[]`, der Unterschied trägt eine Aussage: Ein leeres Feld
+ * heisst „es lief eine Aufnahme, aufgezeichnet wurde noch nichts", `null`
+ * heisst „es lief gar keine". Nur im ersten Fall darf der Stopp-Weg unten die
+ * Aufnahme im Namen des Aufzeichners beenden und die Schritte retten.
+ */
+async function aufnahmeSchritteLesen() {
+  try {
+    const daten = await chrome.storage.local.get(REKORDER_ABLAGE);
+    const stand = daten && daten[REKORDER_ABLAGE];
+    if (!stand || stand.laeuft !== true || !Array.isArray(stand.schritte)) return null;
+    return stand.schritte;
   } catch (_) {
     return null;
   }
@@ -832,10 +853,10 @@ chrome.runtime.onMessage.addListener((n, absender, antwort) => {
    * Die Nachrichten aus Vertrag v3.5 §6
    *
    * Jede einzelne davon durchläuft `ausEigenerOberflaeche()`. Ohne Ausnahme:
-   * `notbremse` und `rekorder:stand` sind die beiden, die aus einem Tab kommen
-   * dürfen, und sie stehen an ihrer eigenen Stelle. Alles Übrige stellt etwas
-   * ein, spielt etwas ab oder gibt etwas heraus — eine besuchte Seite darf
-   * nichts davon.
+   * `notbremse`, `rekorder:stand`, `rekorder:bild` und `rekorder:gehoert?`
+   * sind die vier, die aus einem Tab kommen dürfen, und sie stehen an ihrer
+   * eigenen Stelle. Alles Übrige stellt etwas ein, spielt etwas ab oder gibt
+   * etwas heraus — eine besuchte Seite darf nichts davon.
    *
    * Warum das eine Positivliste ist und keine Aufzählung des Verbotenen: Ein
    * Inhaltsskript läuft in einer fremden Seite. Was von dort kommt, wird
@@ -892,59 +913,141 @@ chrome.runtime.onMessage.addListener((n, absender, antwort) => {
       antwort(ABSAGE_ABSENDER);
       return false;
     }
-    rekorderSenden(n.tabId, { typ: n.typ, tabId: n.tabId })
-      .then(async (lage) => {
-        /* Wer aufzeichnet, zeichnet in EINEM Tab auf. Gemerkt wird er hier,
-           weil hier der Mensch gedrückt hat; ohne diese Notiz wüsste die
-           Neueinspielung nach einem Seitenwechsel nicht, wohin sie gehört
-           (Befund H6). Vergessen wird er beim Beenden, und zwar auch dann,
-           wenn das Beenden selbst nicht mehr durchkam: Ein gemerkter Tab ohne
-           laufende Aufzeichnung wäre die Notiz, an der die nächste Navigation
-           doch wieder etwas nachzieht. */
-        if (lage.ok && n.typ === "rekorder:start") await aufnahmeTabMerken(n.tabId);
-        if (n.typ === "rekorder:stop") await aufnahmeTabVergessen();
-        /*
-         * Der Bildvorrat gehört zu GENAU EINER Aufzeichnung (Befund M3 vom
-         * 14.08.2026). Bis hierher wurde `sa_rekorder_bilder` nur bei
-         * `onStartup` und `onInstalled` geleert; wer den Browser tagelang
-         * offen lässt, sammelte die Bilder mehrerer Aufnahmen an, bis zu 60
-         * JPEGs des ganzen sichtbaren Tabs und 4 MiB. `content/rekorder.js`
-         * räumt seine eigene Ablage `sa_rekorder` in `stoppen()` längst weg,
-         * nur die Bilder blieben liegen.
-         *
-         * Beim START ebenso, und das ist die wichtigere Hälfte: Eine neue
-         * Aufnahme, die Bilder der vorigen erbt, schriebe sie als `s1.webp`
-         * in einen Ablauf, in dem sie nie aufgenommen wurden. Der Vorrat
-         * beginnt leer, damit die Bildnummern zu den Schritten passen.
-         */
-        await ausfuehrer.rekorderBilderLeeren().catch(() => {});
+    (async () => {
+      /*
+       * Beendet wird die Aufnahme in dem Tab, in dem sie LÄUFT — nicht in dem,
+       * der gerade vorn steht (Befund vom 15.08.2026). Die Seitenleiste sendet
+       * als tabId ihren aktiven Tab; wer während der Aufnahme in einen anderen
+       * Tab gewechselt hat, drückt „Aufnahme beenden" also mit einer fremden
+       * Tabnummer. Bis hierher ging der Stopp dorthin: `rekorderSenden`
+       * spielte den Aufzeichner bei Nichtantwort in die fremde Seite ein, und
+       * die Wiederaufnahme schrieb deren Adresse als `navigate`-Schritt in den
+       * Ablauf — eine Seite, die nie zum Aufzeichnen bestimmt war. Der
+       * gemerkte Aufnahmetab (`sa_rekorder_tab`, Befund H6) ist die Wahrheit
+       * darüber, wo die Aufnahme läuft; die Tabnummer aus der Nachricht bleibt
+       * Rückfallwert für den Fall, dass die Notiz verloren ging.
+       */
+      let ziel = Number.isInteger(n.tabId) ? n.tabId : null;
+      /* Was die Ablage an Schritten trägt, BEVOR gestoppt wird. Das ist das
+         Netz für die zwei Ausgänge weiter unten, in denen der Aufzeichner
+         selbst nicht mehr antworten kann. */
+      let rest = null;
+      if (n.typ === "rekorder:stop") {
+        const gemerkt = await aufnahmeTab();
+        if (Number.isInteger(gemerkt)) ziel = gemerkt;
+        rest = await aufnahmeSchritteLesen();
+      }
+      const lage = await rekorderSenden(ziel, { typ: n.typ, tabId: ziel });
+      /* Wer aufzeichnet, zeichnet in EINEM Tab auf. Gemerkt wird er hier,
+         weil hier der Mensch gedrückt hat; ohne diese Notiz wüsste die
+         Neueinspielung nach einem Seitenwechsel nicht, wohin sie gehört
+         (Befund H6). Vergessen wird er beim Beenden, und zwar auch dann,
+         wenn das Beenden selbst nicht mehr durchkam: Ein gemerkter Tab ohne
+         laufende Aufzeichnung wäre die Notiz, an der die nächste Navigation
+         doch wieder etwas nachzieht. */
+      if (lage.ok && n.typ === "rekorder:start") await aufnahmeTabMerken(ziel);
+      if (n.typ === "rekorder:stop") {
+        /* Nach einem fehlgeschlagenen Stopp kann die Ablage NEUERE Schritte
+           tragen als der Stand von eben — der Aufzeichner sichert nach jedem
+           Schritt. Deshalb wird noch einmal gelesen, bevor aufgeräumt wird. */
         if (!lage.ok) {
+          const frisch = await aufnahmeSchritteLesen();
+          if (frisch !== null) rest = frisch;
+        }
+        await aufnahmeTabVergessen();
+        /*
+         * Und die Ablage selbst (Befund vom 15.08.2026): Bis hierher räumte
+         * dieser Zweig nur Tabnotiz und Bilder. Schlug der Stopp fehl — der
+         * Aufnahmetab geschlossen, die Seite nicht bespielbar —, blieb
+         * `sa_rekorder` mit `laeuft:true` in `storage.local` liegen, und die
+         * nächste Aufnahme in einem beliebigen Tab erbte die alten Schritte
+         * samt fremder Adressen; aufgeräumt wurde sonst erst beim
+         * Browserstart oder über den Not-Aus. Beendet ist beendet: Nach dem
+         * Druck auf „Beenden" bleibt hier kein Zustand zurück, egal wie es
+         * der Seite ergangen ist. Verloren geht dabei nichts — die Schritte
+         * stehen in `rest` und gehen unten hinaus.
+         */
+        try {
+          await chrome.storage.local.remove(REKORDER_ABLAGE);
+        } catch (_) {
+          /* Ohne lesbare Ablage liegt auch kein Rest, der stehen bliebe. */
+        }
+      }
+      /*
+       * Der Bildvorrat gehört zu GENAU EINER Aufzeichnung (Befund M3 vom
+       * 14.08.2026). Bis hierher wurde `sa_rekorder_bilder` nur bei
+       * `onStartup` und `onInstalled` geleert; wer den Browser tagelang
+       * offen lässt, sammelte die Bilder mehrerer Aufnahmen an, bis zu 60
+       * JPEGs des ganzen sichtbaren Tabs und 4 MiB. `content/rekorder.js`
+       * räumt seine eigene Ablage `sa_rekorder` in `stoppen()` längst weg,
+       * nur die Bilder blieben liegen.
+       *
+       * Beim START ebenso, und das ist die wichtigere Hälfte: Eine neue
+       * Aufnahme, die Bilder der vorigen erbt, schriebe sie als `s1.webp`
+       * in einen Ablauf, in dem sie nie aufgenommen wurden. Der Vorrat
+       * beginnt leer, damit die Bildnummern zu den Schritten passen.
+       */
+      await ausfuehrer.rekorderBilderLeeren().catch(() => {});
+      /*
+       * Zwei Ausgänge, in denen die aufgezeichneten Schritte sonst
+       * stillschweigend verlören (Befund vom 15.08.2026):
+       *
+       *  1. Der Stopp hat den Aufzeichner nie erreicht — Tab zu, Seite nicht
+       *     bespielbar. Bis hierher endete das in einer Absage, und die
+       *     Schritte blieben als Zombie in der Ablage liegen.
+       *  2. Der Stopp hat einen FRISCH eingespielten Aufzeichner erreicht,
+       *     der die gemerkte Aufzeichnung (noch) nicht übernommen hatte. Er
+       *     antwortet ehrlich mit null Schritten und räumt die Ablage — die
+       *     wirklichen Schritte stünden nirgends mehr.
+       *
+       * In beiden Fällen steht die Wahrheit im Stand von eben (`rest`): Die
+       * Aufnahme wird hier beendet, und die Schritte gehen als gewöhnliches
+       * Stopp-Ergebnis an die Seitenleiste, die daraus wie immer einen
+       * Ablauf-Entwurf speichert. Gerettet statt verworfen — und wenn nichts
+       * da ist, sagt der Satz auch das.
+       */
+      if (n.typ === "rekorder:stop" && Array.isArray(rest)) {
+        const zurueck = lage.ok && lage.antwort ? lage.antwort : {};
+        const kam = Array.isArray(zurueck.schritte) ? zurueck.schritte : [];
+        if (!lage.ok || (!kam.length && rest.length)) {
           antwort({
-            ok: false,
-            kennung: lage.fehler || "kein_empfaenger",
-            klartext:
-              "Auf dieser Seite kann ich nicht aufzeichnen. Öffne bitte eine gewöhnliche Webseite und versuche es dort.",
+            ok: true,
+            laeuft: false,
+            anzahl: rest.length,
+            schritte: rest,
+            satz: rest.length
+              ? "Der Aufnahme-Tab war nicht mehr erreichbar. Die Aufnahme ist trotzdem beendet, und die bis dahin aufgezeichneten Schritte sind gerettet."
+              : "Die Aufnahme ist beendet, aufgezeichnet wurde nichts.",
           });
           return;
         }
-        antwort({ ok: true, ...(lage.antwort || {}) });
-      })
-      .catch(() =>
+      }
+      if (!lage.ok) {
         antwort({
           ok: false,
-          kennung: "unerwartet",
-          klartext: "In der Erweiterung ist etwas schiefgegangen. Die Aufzeichnung läuft nicht, das liegt an uns.",
-        })
-      );
+          kennung: lage.fehler || "kein_empfaenger",
+          klartext:
+            "Auf dieser Seite kann ich nicht aufzeichnen. Öffne bitte eine gewöhnliche Webseite und versuche es dort.",
+        });
+        return;
+      }
+      antwort({ ok: true, ...(lage.antwort || {}) });
+    })().catch(() =>
+      antwort({
+        ok: false,
+        kennung: "unerwartet",
+        klartext: "In der Erweiterung ist etwas schiefgegangen. Die Aufzeichnung läuft nicht, das liegt an uns.",
+      })
+    );
     return true;
   }
 
   /* Das Miniaturbild zu einem aufgezeichneten Schritt (§7.2).
    *
-   * Sie ist die DRITTE Nachricht, die aus einem Tab kommen darf, neben
-   * `notbremse` und `rekorder:stand`. Sie darf es, weil sie nichts einstellt
-   * und nichts auslöst: Der Rekorder nennt Name, Nummer und Rechteck, die
-   * Aufnahme macht der Ausführer.
+   * Sie ist eine der vier Nachrichten, die aus einem Tab kommen dürfen, neben
+   * `notbremse`, `rekorder:stand` und `rekorder:gehoert?`. Sie darf es, weil
+   * sie nichts einstellt und nichts auslöst: Der Rekorder nennt Name, Nummer
+   * und Rechteck, die Aufnahme macht der Ausführer.
    *
    * Der Tab kommt von Chrome (`absender.tab.id`) und ausdrücklich NICHT aus
    * der Nutzlast. Sonst könnte ein Inhaltsskript im Hintergrund die Seite
@@ -1005,10 +1108,10 @@ chrome.runtime.onMessage.addListener((n, absender, antwort) => {
   }
 
   /* Der Zählerstand der Aufzeichnung kommt AUS dem Tab und gehört in die
-     Seitenleiste. Er ist neben `notbremse` und `rekorder:bild` die einzige
-     Nachricht, die ein Inhaltsskript absetzen darf: Sie stellt nichts ein und
-     löst nichts aus, sie sagt nur, wie viele Schritte bisher aufgezeichnet
-     wurden. */
+     Seitenleiste. Er ist neben `notbremse`, `rekorder:bild` und
+     `rekorder:gehoert?` eine der wenigen Nachrichten, die ein Inhaltsskript
+     absetzen darf: Sie stellt nichts ein und löst nichts aus, sie sagt nur,
+     wie viele Schritte bisher aufgezeichnet wurden. */
   if (n.typ === "rekorder:stand") {
     chrome.runtime
       .sendMessage({
@@ -1020,6 +1123,41 @@ chrome.runtime.onMessage.addListener((n, absender, antwort) => {
       })
       .catch(() => {});
     antwort({ ok: true });
+    return true;
+  }
+
+  /*
+   * Gehört die gemerkte Aufzeichnung zu dem Tab, der fragt? (Befund vom
+   * 15.08.2026)
+   *
+   * `content/rekorder.js` nahm eine gemerkte Aufzeichnung bis hierher in
+   * JEDEM Dokument wieder auf, in das es eingespielt wurde — auch in einem
+   * Tab, der nie zum Aufzeichnen bestimmt war. Das Inhaltsskript kann seine
+   * eigene Tabnummer nicht wissen; dieser Dienstarbeiter kennt sie, denn
+   * Chrome setzt `absender.tab` selbst, aus der Seite heraus ist das nicht
+   * fälschbar. Also wird hier gemessen und nicht geglaubt: Die Wiederaufnahme
+   * fragt, und nur der Aufnahmetab bekommt ein Ja.
+   *
+   * Die Nachricht darf aus einem Tab kommen (neben `notbremse`,
+   * `rekorder:stand` und `rekorder:bild`), weil sie nichts einstellt und
+   * nichts auslöst: Sie beantwortet eine Ja-Nein-Frage, deren Antwort das
+   * fragende Dokument ohnehin sähe, sobald dort aufgezeichnet würde.
+   * Fail-closed in jeder Richtung: ohne Tab, ohne laufende Aufzeichnung,
+   * ohne Tabnotiz oder bei einem Fehler lautet die Antwort Nein — dann
+   * unterbleibt die Wiederaufnahme, nicht der Schutz.
+   */
+  if (n.typ === "rekorder:gehoert?") {
+    const ausTab = absender && absender.tab ? absender.tab.id : null;
+    if (!Number.isInteger(ausTab)) {
+      /* Aus der Seitenleiste kommt keine Wiederaufnahme: Dort läuft kein
+         Dokument, das eine Aufzeichnung fortsetzen könnte. */
+      antwort({ ok: false, gehoert: false });
+      return false;
+    }
+    (async () => {
+      const gehoert = (await aufzeichnungLaeuft()) && (await aufnahmeTab()) === ausTab;
+      antwort({ ok: true, gehoert });
+    })().catch(() => antwort({ ok: false, gehoert: false }));
     return true;
   }
 

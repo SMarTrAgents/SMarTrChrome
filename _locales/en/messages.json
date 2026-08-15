@@ -446,9 +446,6 @@
   "freigabe_ruf_titel": {
     "message": "SMarTrChrome is waiting for your approval"
   },
-  "freigabe_ruf_text": {
-    "message": "A step needs your approval, and no side panel is open right now. Open SMarTrChrome and I will show you what it is about."
-  },
   "einschleusung_meldung_titel": {
     "message": "SMarTrChrome has paused the automatic mode"
   },
@@ -550,6 +547,12 @@
   },
   "kopf_nichts_vorzulesen": {
     "message": "There is nothing to read aloud yet."
+  },
+  "kopf_platzhalter_gespraech": {
+    "message": "Tell Nobody what you need …"
+  },
+  "kopf_platzhalter_tab": {
+    "message": "Tell Nobody what to do in this tab …"
   },
   "kopf_protokoll_titel": {
     "message": "What the agent is doing"

@@ -33,6 +33,7 @@ import { workflowPruefen } from "../net/werkstatt.js";
 const GEHEIM_QUELLE = new URL("../content/geheim.js", import.meta.url);
 const SELEKTOR_QUELLE = new URL("../content/selektor.js", import.meta.url);
 const REKORDER_QUELLE = new URL("../content/rekorder.js", import.meta.url);
+const WORKER_QUELLE = new URL("../background/worker.js", import.meta.url);
 
 /* ------------------------------------------------------------------ *
  * Ein kleiner, echter Seitenbaum
@@ -505,6 +506,15 @@ async function quellenLesen() {
  * @param {boolean} angaben.ohneGeheim `geheim.js` NICHT einspielen (F4)
  * @param {object} angaben.ablageLocal Startinhalt von chrome.storage.local
  * @param {boolean} angaben.panelHoert ob die Seitenleiste offen ist
+ * @param {boolean} angaben.gehoertHierher was der Dienstarbeiter auf
+ *   `rekorder:gehoert?` antwortet — ob die gemerkte Aufzeichnung zu diesem
+ *   Tab gehört (Befund vom 15.08.2026). Die Attrappe spielt hier den Worker:
+ *   In echtem Chrome beantwortet er die Frage aus `sa_rekorder_tab` und
+ *   `absender.tab`, gemessen in W3.
+ * @param {?function} angaben.workerAntwortet ersetzt die Standardantwort der
+ *   Gegenstelle ganz — für Prüfungen, in denen die Antwort selbst etwas tun
+ *   muss (R48: die Ablage räumen, während die Frage unterwegs ist). Bekommt
+ *   `(nachricht, chrome)`.
  */
 async function starten(bauplan, angaben = {}) {
   const {
@@ -512,15 +522,28 @@ async function starten(bauplan, angaben = {}) {
     ohneGeheim = false,
     ablageLocal = {},
     panelHoert = true,
+    gehoertHierher = true,
+    workerAntwortet = null,
     url = "https://www.ebay.de/verkaufen",
   } = angaben;
 
   const seite = seiteBauen(bauplan);
   const uhr = uhrBauen();
+  /* Die Gegenstelle wird VOR `attrappeSetzen` gebaut und greift über diese
+     Schachtel auf die fertige Attrappe zu — die Antwortfunktion läuft erst,
+     wenn die Skripte laufen, also lange nach der Zuweisung unten. */
+  const griff = { chrome: null };
+  const gegenstelle = (nachricht) => {
+    if (typeof workerAntwortet === "function") return workerAntwortet(nachricht, griff.chrome);
+    return nachricht && nachricht.typ === "rekorder:gehoert?"
+      ? { ok: true, gehoert: gehoertHierher === true }
+      : { ok: true };
+  };
   const { chrome, spur } = attrappeSetzen({
     ablageLocal,
-    panelAntwortet: panelHoert ? () => ({ ok: true }) : null,
+    panelAntwortet: panelHoert || typeof workerAntwortet === "function" ? gegenstelle : null,
   });
+  griff.chrome = chrome;
 
   const hoerer = [];
   const beobachter = [];
@@ -1933,4 +1956,283 @@ test("R45: jede Gestaltregel trägt einen Namen und wird einzeln gehalten", asyn
   assert.equal(G.wertGestalt("a1b2c-3d4e5"), "mischcode");
   assert.equal(G.wertGestalt("abcd efgh ijkl mnop"), "gruppenkette");
   assert.equal(G.wertGestalt("Haus Baum Ball Wald"), null, "vier Wörter sind kein Schlüssel");
+});
+
+/* ------------------------------------------------------------------ *
+ * R46 bis R48 — die Wiederaufnahme gehört zu genau einem Tab
+ * (Befund vom 15.08.2026)
+ *
+ * Der Stopp-Weg des Dienstarbeiters konnte den Aufzeichner in den gerade
+ * aktiven Tab einspielen, und `wiederaufnehmen()` setzte die gemerkte
+ * Aufzeichnung dort fort — mit der Adresse der fremden Seite als
+ * `navigate`-Schritt im Ablauf. Seitdem fragt die Wiederaufnahme zuerst den
+ * Dienstarbeiter (`rekorder:gehoert?`), ob die Aufzeichnung zu diesem Tab
+ * gehört. Die Gegenstelle spielt hier die Attrappe (`gehoertHierher`); dass
+ * der echte Dienstarbeiter die Frage richtig beantwortet, misst W3.
+ * ------------------------------------------------------------------ */
+
+const GEMERKTE_SCHRITTE = () => [
+  { type: "navigate", url: "https://www.ebay.de/verkaufen" },
+  { type: "click", selector_cascade: ["[data-testid='relist']"], beschreibung: "Erneut einstellen" },
+];
+
+const gemerkteAufnahme = () => ({
+  sa_rekorder: { version: 1, laeuft: true, bildNr: 0, schritte: GEMERKTE_SCHRITTE() },
+});
+
+/* Alle Zwischenschritte der Wiederaufnahme sind Versprechen, keine Uhren —
+   ein Umlauf durch die Warteschlange lässt sie alle fertig werden. */
+const ausschwingen = () => new Promise((f) => setTimeout(f, 0));
+
+test("R46: in einem fremden Dokument wird die gemerkte Aufzeichnung NICHT fortgesetzt", async () => {
+  const u = await starten(verkaufsseite(), {
+    ablageLocal: gemerkteAufnahme(),
+    gehoertHierher: false,
+    url: "https://bank.example/konto",
+  });
+  await ausschwingen();
+
+  /* Gefragt wird wirklich — eine Wiederaufnahme, die nie fragt, wäre der
+     alte Zustand mit einem grünen Prüfsatz darüber. */
+  assert.ok(
+    u.anDasPanel("rekorder:gehoert?").length >= 1,
+    "die Wiederaufnahme muss den Dienstarbeiter fragen, bevor sie fortsetzt"
+  );
+
+  const stand = u.fragen({ typ: "rekorder:stand" });
+  assert.equal(stand.laeuft, false, "in einem fremden Tab läuft nichts an");
+  assert.equal(stand.anzahl, 0);
+  assert.equal(u.wirt(), null, "und es steht auch kein Aufnahmezeichen da");
+
+  /* Die Ablage bleibt unangetastet: kein `navigate` mit der fremden Adresse,
+     keine geänderte Schrittzahl. Genau das war der Befund. */
+  const danach = await u.chrome.storage.local.get("sa_rekorder");
+  assert.equal(danach.sa_rekorder.laeuft, true);
+  assert.deepEqual(
+    danach.sa_rekorder.schritte.map((s) => s.type),
+    ["navigate", "click"],
+    "die fremde Adresse darf nicht als navigate-Schritt im Ablauf landen"
+  );
+
+  const erg = u.fragen({ typ: "rekorder:stop" });
+  assert.equal(erg.schritte.length, 0, "dieses Dokument hat nichts, was es herausgeben dürfte");
+});
+
+test("R47: antwortet niemand auf die Frage, unterbleibt die Wiederaufnahme (fail-closed)", async () => {
+  const u = await starten(verkaufsseite(), {
+    ablageLocal: gemerkteAufnahme(),
+    panelHoert: false, // chrome.runtime.sendMessage lehnt ab wie in Chrome
+    url: "https://www.ebay.de/verkaufen",
+  });
+  await ausschwingen();
+
+  const stand = u.fragen({ typ: "rekorder:stand" });
+  assert.equal(stand.laeuft, false, "ohne Ja vom Dienstarbeiter wird nicht fortgesetzt");
+  assert.equal(u.wirt(), null);
+});
+
+test("R48: wird die Ablage zwischen Frage und Antwort geräumt, setzt nichts wieder auf", async () => {
+  /* Das ist das Stopp-Rennen: Während die Frage unterwegs ist, beendet der
+     Dienstarbeiter die Aufnahme und räumt `sa_rekorder`. Eine Wiederaufnahme
+     aus dem VERALTETEN ersten Lesen wäre genau der Zombie aus dem Befund —
+     deshalb liest sie nach dem Ja noch einmal frisch. */
+  const u = await starten(verkaufsseite(), {
+    ablageLocal: gemerkteAufnahme(),
+    url: "https://www.ebay.de/verkaufen",
+    workerAntwortet: (nachricht, chrome) => {
+      if (nachricht && nachricht.typ === "rekorder:gehoert?") {
+        chrome.storage.local.remove("sa_rekorder");
+        return { ok: true, gehoert: true };
+      }
+      return { ok: true };
+    },
+  });
+  await ausschwingen();
+
+  const stand = u.fragen({ typ: "rekorder:stand" });
+  assert.equal(stand.laeuft, false, "aus einem veralteten Stand wird nichts wiederbelebt");
+  assert.equal(u.wirt(), null);
+  const danach = await u.chrome.storage.local.get("sa_rekorder");
+  assert.deepEqual(danach, {}, "und die geräumte Ablage bleibt geräumt");
+});
+
+/* ------------------------------------------------------------------ *
+ * W1 bis W3 — der Stopp-Weg des Dienstarbeiters (Befund vom 15.08.2026)
+ *
+ * Diese Prüfsätze fahren den ECHTEN `src/background/worker.js` über die
+ * Chrome-Attrappe, dieselbe Bauart wie in `bruecke.test.mjs`. Sie stehen
+ * hier und nicht dort, weil sie dieselbe Zusage messen wie R46 bis R48 —
+ * die zwei Hälften eines Befundes gehören in eine Datei, sonst prüft jede
+ * Hälfte grün und die Naht dazwischen niemand (das 0.5.3-Muster).
+ *
+ * Der Worker wird EINMAL je Prozess geladen; seine Hörer schlagen `chrome`
+ * bei jedem Aufruf neu unter `globalThis` nach, deshalb dürfen die Prüfsätze
+ * je eine eigene Attrappenwelt stellen.
+ * ------------------------------------------------------------------ */
+
+let workerHoerer = null;
+
+async function workerWelt(einstellungen) {
+  const welt = attrappeSetzen(einstellungen);
+  welt.chrome.runtime.getURL = (pfad) =>
+    `chrome-extension://${welt.chrome.runtime.id}/${String(pfad || "").replace(/^\/+/, "")}`;
+  if (!workerHoerer) {
+    await import(WORKER_QUELLE.href);
+    workerHoerer = welt.chrome.runtime.onMessage._zuhoerer.slice();
+    assert.ok(workerHoerer.length >= 1, "der Worker muss einen Nachrichtenhörer anmelden");
+  }
+  return welt;
+}
+
+/* Fragen wie Chrome: alle Hörer der Reihe nach, die erste Antwort gewinnt.
+   Hält keiner den Kanal offen und antwortet keiner, gibt es `undefined` —
+   auch das ist ein messbares Ergebnis. */
+function anWorker(nachricht, absender = { id: "abcdefghijklmnopabcdefghijklmnop" }) {
+  return new Promise((fertig) => {
+    let beantwortet = false;
+    const antwort = (w) => {
+      if (!beantwortet) {
+        beantwortet = true;
+        fertig(w);
+      }
+    };
+    let offen = false;
+    for (const hoerer of workerHoerer) {
+      if (hoerer(nachricht, absender, antwort) === true) offen = true;
+    }
+    if (!offen && !beantwortet) fertig(undefined);
+  });
+}
+
+test("W1: Aufnahme beenden geht an den Aufnahmetab, nicht an den aktiven", async () => {
+  /* Die Aufzeichnung läuft in Tab 7 und der ist erreichbar; die Seitenleiste
+     schickt aber die Nummer des gerade AKTIVEN Tabs 9 mit — der Mensch hat
+     während der Aufnahme den Tab gewechselt. */
+  const welt = await workerWelt({
+    tab: { id: 7, url: "https://www.ebay.de/verkaufen", title: "Verkaufen", active: false, status: "complete", windowId: 3 },
+    seiteAntwortet: (nachricht) =>
+      nachricht && nachricht.typ === "rekorder:stop"
+        ? { ok: true, laeuft: false, anzahl: 2, schritte: GEMERKTE_SCHRITTE() }
+        : { ok: true },
+    ablageLocal: gemerkteAufnahme(),
+    ablageSession: { sa_rekorder_tab: 7 },
+  });
+
+  const antwort = await anWorker({ typ: "rekorder:stop", tabId: 9 });
+
+  const seiten = welt.spur.filter((e) => e.wohin === "seite");
+  const einspielungen = welt.spur.filter((e) => e.wohin === "executeScript");
+  assert.ok(
+    seiten.some((e) => e.tabId === 7 && e.nachricht.typ === "rekorder:stop"),
+    "der Stopp muss den gemerkten Aufnahmetab 7 erreichen"
+  );
+  assert.ok(
+    seiten.every((e) => e.tabId === 7),
+    "an den aktiven Tab 9 geht keine einzige Nachricht"
+  );
+  assert.equal(einspielungen.length, 0, "und eingespielt wird in gar keinen Tab");
+
+  assert.equal(antwort.ok, true);
+  assert.equal(antwort.schritte.length, 2, "die Schritte kommen aus dem Aufnahmetab zurück");
+
+  /* Nach dem Beenden bleibt kein Zustand zurück. */
+  assert.deepEqual(await welt.chrome.storage.local.get("sa_rekorder"), {});
+  assert.deepEqual(await welt.chrome.storage.session.get("sa_rekorder_tab"), {});
+});
+
+test("W2: schlägt der Stopp fehl, wird die Ablage geräumt und kein Schritt geht verloren", async () => {
+  /* Der Aufnahmetab 7 ist zu; vorn steht Tab 9. Der Stopp erreicht niemanden
+     mehr — bis zum 15.08.2026 blieb `sa_rekorder` dann mit `laeuft:true`
+     liegen, und die nächste Aufnahme erbte die alten Schritte. */
+  const welt = await workerWelt({
+    tab: { id: 9, url: "https://bank.example/konto", title: "Konto", active: true, status: "complete", windowId: 3 },
+    seiteAntwortet: () => {
+      throw new Error("kein Empfänger");
+    },
+    ablageLocal: gemerkteAufnahme(),
+    ablageSession: { sa_rekorder_tab: 7 },
+  });
+
+  const antwort = await anWorker({ typ: "rekorder:stop", tabId: 9 });
+
+  /* Kein Weg führt in den aktiven Tab 9: weder eine Nachricht noch eine
+     Einspielung — genau die Tür, durch die der Aufzeichner vorher in fremde
+     Seiten kam. */
+  assert.ok(
+    welt.spur.filter((e) => e.wohin === "seite").every((e) => e.tabId === 7),
+    "Nachrichten gehen höchstens an den Aufnahmetab 7"
+  );
+  assert.ok(
+    welt.spur
+      .filter((e) => e.wohin === "executeScript")
+      .every((e) => e.auftrag.target.tabId === 7),
+    "eingespielt wird höchstens in den Aufnahmetab 7, nie in den aktiven"
+  );
+
+  /* Die Schritte sind gerettet statt stillschweigend verworfen: Sie gehen als
+     gewöhnliches Stopp-Ergebnis hinaus, die Seitenleiste speichert daraus wie
+     immer den Ablauf-Entwurf. */
+  assert.equal(antwort.ok, true);
+  assert.deepEqual(antwort.schritte, GEMERKTE_SCHRITTE());
+  assert.ok(antwort.satz && antwort.satz.includes("gerettet"), "der Satz benennt die Rettung");
+
+  /* Und der Zombie ist weg: Ablage, Tabnotiz — nichts bleibt liegen. */
+  assert.deepEqual(await welt.chrome.storage.local.get("sa_rekorder"), {});
+  assert.deepEqual(await welt.chrome.storage.session.get("sa_rekorder_tab"), {});
+});
+
+test("W2b: antwortet ein frisch eingespielter Aufzeichner mit null Schritten, gilt die Ablage", async () => {
+  /* Das Stopp-Rennen aus R48, von der Worker-Seite: Der Stopp trifft einen
+     Aufzeichner, der die gemerkte Aufzeichnung (noch) nicht übernommen hat.
+     Er antwortet ehrlich mit null Schritten — die wirklichen stehen in der
+     Ablage, und die dürfen dabei nicht verschwinden. */
+  const welt = await workerWelt({
+    tab: { id: 7, url: "https://www.ebay.de/verkaufen", title: "Verkaufen", active: true, status: "complete", windowId: 3 },
+    seiteAntwortet: (nachricht) =>
+      nachricht && nachricht.typ === "rekorder:stop"
+        ? { ok: true, laeuft: false, anzahl: 0, schritte: [], satz: "Es lief keine Aufnahme, aufgezeichnet wurde nichts." }
+        : { ok: true },
+    ablageLocal: gemerkteAufnahme(),
+    ablageSession: { sa_rekorder_tab: 7 },
+  });
+
+  const antwort = await anWorker({ typ: "rekorder:stop", tabId: 7 });
+  assert.equal(antwort.ok, true);
+  assert.deepEqual(
+    antwort.schritte,
+    GEMERKTE_SCHRITTE(),
+    "die Schritte kommen aus der Ablage, nicht aus der leeren Antwort"
+  );
+  assert.deepEqual(await welt.chrome.storage.local.get("sa_rekorder"), {});
+});
+
+test("W3: rekorder:gehoert? sagt nur dem Aufnahmetab Ja", async () => {
+  const kennung = "abcdefghijklmnopabcdefghijklmnop";
+
+  /* Der Aufnahmetab selbst bekommt ein Ja. */
+  const laufend = await workerWelt({
+    ablageLocal: gemerkteAufnahme(),
+    ablageSession: { sa_rekorder_tab: 7 },
+  });
+  assert.deepEqual(
+    await anWorker({ typ: "rekorder:gehoert?" }, { id: kennung, tab: { id: 7 } }),
+    { ok: true, gehoert: true }
+  );
+
+  /* Ein anderer Tab bekommt ein Nein — dieselbe Welt, derselbe Zustand. */
+  assert.deepEqual(
+    await anWorker({ typ: "rekorder:gehoert?" }, { id: kennung, tab: { id: 9 } }),
+    { ok: true, gehoert: false }
+  );
+
+  /* Ohne Tab (Seitenleiste) gibt es nichts fortzusetzen. */
+  const ohneTab = await anWorker({ typ: "rekorder:gehoert?" }, { id: kennung });
+  assert.equal(ohneTab.gehoert, false);
+
+  /* Und ohne laufende Aufzeichnung ist auch der gemerkte Tab keiner. */
+  attrappeSetzen({ ablageSession: { sa_rekorder_tab: 7 } });
+  assert.deepEqual(
+    await anWorker({ typ: "rekorder:gehoert?" }, { id: kennung, tab: { id: 7 } }),
+    { ok: true, gehoert: false }
+  );
 });

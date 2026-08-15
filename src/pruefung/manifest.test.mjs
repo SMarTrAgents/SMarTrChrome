@@ -10,6 +10,10 @@
  *     Die Einreichung scheitert daran, bevor überhaupt ein Prüfsatz läuft.
  *  2. "activeTab" fehlte in den Rechten. chrome.tabs.captureVisibleTab wirft
  *     ohne dieses Recht auf JEDER Seite, der Befehl screenshot war damit tot.
+ *     (Stand 15.08.2026: Der Bildweg holt sein Seitenrecht inzwischen vor der
+ *     Sitzung über chrome.permissions.request, siehe net/rechte.js. "activeTab"
+ *     flog deshalb als unbenutzt wieder aus dem Manifest — die beiden
+ *     Prüfsätze zu den Rechten messen seitdem BEIDE Richtungen.)
  *
  * Warum kein bestehender Prüfsatz das finden konnte: Die Chrome-Attrappe
  * (chrome-attrappe.mjs) liefert captureVisibleTab immer ein Bild, egal was im
@@ -288,10 +292,19 @@ test("jede benutzte chrome-Schnittstelle hat ihr Recht im Manifest", () => {
   );
 });
 
-test("captureVisibleTab im Quelltext verlangt activeTab im Manifest", () => {
-  /* Der teuerste Fehler dieses Projekts: Das Recht fehlte, und der Befehl
-     screenshot war auf JEDER Seite tot. Die Attrappe merkt davon nichts, weil
-     sie immer ein Bild liefert. */
+test("captureVisibleTab im Quelltext verlangt einen Weg zum Seitenrecht im Manifest", () => {
+  /* Der teuerste Fehler dieses Projekts: Es gab keinen Weg zum Recht, und der
+     Befehl screenshot war auf JEDER Seite tot. Die Attrappe merkt davon
+     nichts, weil sie immer ein Bild liefert.
+
+     Bis zum 15.08.2026 verlangte dieser Prüfsatz "activeTab". Die Nachabnahme
+     der 0.6.0 hat gemessen, dass kein Codeweg activeTab braucht: Jede Aufnahme
+     und jedes Einspielen läuft über das Seitenrecht, das die Sitzung vorher
+     per chrome.permissions.request holt (net/rechte.js, gerufen aus der
+     Seitenleiste). Dafür müssen die breiten Muster unter
+     optional_host_permissions stehen UND der Holer im Quelltext liegen —
+     eines allein nimmt keine Seite auf. "activeTab" bliebe ein gültiger
+     dritter Weg, aber nur mit Begründung, siehe den Prüfsatz darunter. */
   const nutzer = [...QUELLTEXT]
     .filter(([, code]) => /chrome\.tabs\s*\.\s*captureVisibleTab/.test(code))
     .map(([pfad]) => kurz(pfad));
@@ -303,12 +316,53 @@ test("captureVisibleTab im Quelltext verlangt activeTab im Manifest", () => {
 
   const rechte = new Set(manifest.permissions || []);
   const gastgeber = new Set(manifest.host_permissions || []);
-  assert.ok(
-    rechte.has("activeTab") || gastgeber.has("<all_urls>"),
-    `${nutzer.join(", ")} ruft chrome.tabs.captureVisibleTab, im Manifest steht aber weder ` +
-      `"activeTab" unter permissions noch "<all_urls>" unter host_permissions. ` +
-      `Der Befehl screenshot scheitert damit auf jeder Seite.`,
+  const wahlweise = new Set(manifest.optional_host_permissions || []);
+  const musterBreit =
+    wahlweise.has("<all_urls>") ||
+    (wahlweise.has("https://*/*") && wahlweise.has("http://*/*"));
+  const holerDa = [...QUELLTEXT.values()].some((code) =>
+    /chrome\.permissions\s*\.\s*request/.test(code),
   );
+  assert.ok(
+    rechte.has("activeTab") || gastgeber.has("<all_urls>") || (musterBreit && holerDa),
+    `${nutzer.join(", ")} ruft chrome.tabs.captureVisibleTab, das Manifest bietet aber keinen ` +
+      `Weg zum Seitenrecht: weder "activeTab" unter permissions noch "<all_urls>" unter ` +
+      `host_permissions noch die breiten Muster unter optional_host_permissions samt ` +
+      `chrome.permissions.request im Quelltext. Der Befehl screenshot scheitert damit auf jeder Seite.`,
+  );
+});
+
+test("kein Recht im Manifest, das kein Quelltext benutzt", () => {
+  /* Die Gegenrichtung zur Ableitung oben, Nachabnahme 0.6.0 vom 15.08.2026:
+     "activeTab" stand unter permissions, und kein einziger Codeweg brauchte
+     es — Bild und Einspielen laufen über das vorher erteilte Seitenrecht
+     (net/rechte.js). Der Web Store verlangt im Dashboard für JEDES Recht eine
+     Begründung, und für ein unbenutztes gibt es keine. Die eigene
+     Least-Privilege-Linie (auf "downloads" wird ausdrücklich verzichtet)
+     gilt in beide Richtungen.
+
+     Manche Rechte tauchen nie als chrome.<name> im Quelltext auf, weil sie
+     nur das Verhalten des Browsers ändern (activeTab, background, …). Wer so
+     eines einträgt, trägt es HIER mit Begründung und Fundstelle ein — sonst
+     schlägt der Prüfsatz an, und genau das soll er. */
+  const WIRKT_OHNE_AUFRUF = new Map([
+    /* derzeit leer */
+  ]);
+  const unbenutzt = (manifest.permissions || [])
+    .filter((recht) => !WIRKT_OHNE_AUFRUF.has(recht) && !BENUTZT.has(recht))
+    .sort();
+  assert.deepEqual(
+    unbenutzt,
+    [],
+    `Diese Rechte stehen im Manifest, aber kein Quelltext benutzt sie. Entweder streichen ` +
+      `oder mit Begründung in die Ausnahmeliste dieses Prüfsatzes aufnehmen: ${unbenutzt.join(", ")}`,
+  );
+  /* Und der Beweis, dass die Messung greift: Ein untergeschobenes, unbenutztes
+     Recht muss auffallen, sonst ist der Prüfsatz ein leeres Versprechen. */
+  const probe = ["activeTab", ...(manifest.permissions || [])].filter(
+    (recht) => !WIRKT_OHNE_AUFRUF.has(recht) && !BENUTZT.has(recht),
+  );
+  assert.deepEqual(probe, ["activeTab"], "die Erkennung unbenutzter Rechte greift nicht");
 });
 
 test("chrome.action und chrome.commands haben ihren Manifest-Schlüssel", () => {

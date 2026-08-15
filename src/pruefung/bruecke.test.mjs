@@ -786,6 +786,55 @@ test("Freigabe ohne Seitenleiste: der Not-Aus nimmt die offene Frage mit", async
   assert.equal(abzeichen.at(-1).text, "", "Und am Ende steht dort nichts mehr.");
 });
 
+test("Freigabe ohne Seitenleiste: der Ruf läuft am PRODUKTIVWEG — Befehl über den Draht, Fragezeichen am Symbol, benannte Absage danach", async () => {
+  /*
+   * Befund RUF-1 vom 15.08.2026, die Lehre von 0.5.3 in ihrer reinsten Form:
+   * `freigabeRufen` war gebaut und grün gemessen — aber nur im Direktaufruf.
+   * Der Ausführer sendete stattdessen `link:freigabe-wartet` per
+   * `chrome.runtime.sendMessage`, eine Nachricht, auf die im ganzen Baum
+   * niemand hörte und die den eigenen Dienstarbeiter baulich nie erreichen
+   * kann. Am ausgelieferten Weg gab es darum NIE ein Fragezeichen und nie
+   * `freigabeOffen=true`; die Systemmeldung war eine flüchtige Zweitfassung
+   * ohne `requireInteraction`.
+   *
+   * Deshalb misst dieser Satz die CHANGELOG-Zusage („wird der Mensch gerufen:
+   * Systemmeldung und Abzeichen, erst danach die benannte Absage") dort, wo
+   * sie gilt: ein echter Befehl über den echten Draht, Einzelfreigabe,
+   * Seitenleiste zu.
+   */
+  weltNeu();
+  const draht = await sitzungAufbauen({ agent: null, code: "s-ruf-produktiv", tabId: 7 });
+  const ab = welt.spur.length;
+  await draht.empfangen({ id: "c1", cmd: "get_state", reason: "Ich sehe nach." });
+
+  const teil = welt.spur.slice(ab);
+  const badges = teil.filter((e) => e.wohin === "action.setBadgeText").map((e) => e.text);
+  assert.ok(badges.includes("?"),
+    `Das Fragezeichen aus §8.4 stand nie am Symbol: ${JSON.stringify(badges)}`);
+  assert.notEqual(badges.at(-1), "?",
+    "Nach der Absage bleibt das Fragezeichen stehen — eine Frage, die niemand mehr beantworten kann.");
+
+  const meldungen = teil.filter((e) => e.wohin === "notifications.create");
+  assert.equal(meldungen.length, 1, "Es gibt genau eine Systemmeldung zum Ruf.");
+  assert.equal(meldungen[0].id, "smartrlink-freigabe-c1",
+    "Sie trägt die Kennung der Frage — das ist die EINE Fassung aus link.freigabeRufen.");
+  assert.equal(meldungen[0].angaben.requireInteraction, true,
+    "Sie ist flüchtig — das wäre die alte Zweitfassung des Ausführers.");
+  assert.ok(
+    teil.some((e) => e.wohin === "notifications.clear" && e.id === "smartrlink-freigabe-c1"),
+    "Und sie wird nach der Absage weggeräumt.",
+  );
+
+  /* Erst danach die benannte Absage — `grant_required`, nicht still. */
+  const antworten = draht.gesendet.filter((r) => r.type === "result" && r.id === "c1");
+  assert.equal(antworten.length, 1, "Der Agent bekommt genau eine Antwort.");
+  assert.equal(antworten[0].success, false);
+  assert.equal(antworten[0].error.code, "grant_required");
+  assert.ok(antworten[0].error.message.includes("gerufen"),
+    `Die Absage sagt nicht, dass gerufen wurde: ${antworten[0].error.message}`);
+  assert.equal(link.freigabeSteht(), false, "Im Modulzustand steht keine offene Frage mehr.");
+});
+
 /* ================================================================== *
  * 2. Not-Aus (§5)
  * ================================================================== */
@@ -1308,7 +1357,17 @@ test("Not-Aus im Schreiben der Sitzung: der Handschlag nimmt sie wieder zurück"
   weltNeu();
   globalThis.WebSocket = DrahtAttrappe;
   const laeuft = link.verbinden({ ticket: "einweg-ticket", ausweis: "ausweis", tabId: 7 });
-  laeuft.catch(() => {});
+  /* Die Settlement-Frage wird MITGEMESSEN (Befund NOTAUS-3 vom 15.08.2026):
+     Hier stand `laeuft.catch(() => {})`, und genau damit hängte sich dieser
+     Prüfsatz von der Frage ab, ob `verbinden()` überhaupt noch antwortet.
+     Tat es nicht — `erledigt` war schon true, `beenden` ein No-op, und die
+     Seitenleiste wartete auf `link:verbinden` bis zum Tod des
+     Dienstarbeiters. */
+  let ausgang = null;
+  laeuft.then(
+    () => { ausgang = { gelungen: true }; },
+    (fehler) => { ausgang = { gelungen: false, kennung: fehler && fehler.kennung }; },
+  );
   const draht = DrahtAttrappe.letzte;
   draht.oeffnen();
 
@@ -1354,6 +1413,61 @@ test("Not-Aus im Schreiben der Sitzung: der Handschlag nimmt sie wieder zurück"
     nachher.error && nachher.error.code,
     "session_beendet",
     "Es wird nichts mehr ausgeführt — `zaehlerNeu()` hat `aktiv` nicht wieder eingeschaltet.",
+  );
+
+  /* Und die zweite Hälfte von NOTAUS-3: `verbinden()` ANTWORTET. Ein sauber
+     weggeräumter Aufbau, dessen Versprechen nie settelt, ist für die
+     Seitenleiste ein hängender Dialog. */
+  assert.ok(ausgang, "NOTAUS-3: `verbinden()` hat nie geantwortet — link:verbinden hinge für immer.");
+  assert.equal(ausgang.gelungen, false, "Und die Antwort ist eine Absage, kein Erfolg.");
+  assert.equal(ausgang.kennung, "gekappt", "Mit dem benannten Code der gekappten Verbindung.");
+});
+
+test("Not-Aus im Schreiben der Verlängerung: link:verlaengern bekommt seine Antwort, und die alte Leitung wird lokal geschlossen", async () => {
+  /*
+   * Der zweite Ausgang desselben Befundes NOTAUS-3: `verlaengernMit` hängt in
+   * `await verbinden(...)`. Settelt das nie, läuft der Fehlerpfad ab
+   * `alterDraht.close` nie — die stummgeschaltete alte Leitung bleibt lokal
+   * offen, `sitzungBeenden("verloren", …)` läuft nie, und `link:verlaengern`
+   * bleibt unbeantwortet.
+   */
+  weltNeu();
+  const alterDraht = await sitzungAufbauen({ agent: "SMarTrCEO", code: "s-verl-alt", tabId: 7 });
+  notausBeimSchreiben("link_sitzung", () => anWorker({ typ: "link:notaus", grund: "seitenleiste" }));
+
+  let ausgang = null;
+  const laeuft = link.verlaengernMit({ ticket: "einweg-ticket-2", ausweis: "ausweis" });
+  laeuft.then(
+    () => { ausgang = { gelungen: true }; },
+    (fehler) => { ausgang = { gelungen: false, kennung: fehler && fehler.kennung }; },
+  );
+  await runden(5);
+  const neuerDraht = DrahtAttrappe.letzte;
+  assert.notEqual(neuerDraht, alterDraht, "Vorbedingung: Der Tausch hat eine neue Leitung begonnen.");
+  neuerDraht.oeffnen();
+  await neuerDraht.empfangen({
+    type: "auth_ok",
+    code: "s-verl-neu",
+    access: "write",
+    allow: ["geizhals.de"],
+    mode: "tab",
+    step_mode: "confirm_each",
+    expiry: 1800,
+    agent: "SMarTrCEO",
+  });
+  await runden(30);
+
+  assert.ok(ausgang, "NOTAUS-3: `verlaengernMit` hat nie geantwortet — link:verlaengern hinge für immer.");
+  assert.equal(ausgang.gelungen, false, "Die Verlängerung nach dem Not-Aus ist eine Absage.");
+  assert.equal(ausgang.kennung, "gekappt", "Mit dem benannten Code der gekappten Verbindung.");
+  assert.ok(
+    alterDraht.geschlossen,
+    "Die stummgeschaltete alte Leitung wird lokal geschlossen — sonst bleibt ein WebSocket ohne Handler offen.",
+  );
+  assert.deepEqual(
+    await welt.chrome.storage.session.get("link_sitzung"),
+    {},
+    "Es bleibt keine Sitzung in der Ablage.",
   );
 });
 

@@ -446,9 +446,6 @@
   "freigabe_ruf_titel": {
     "message": "SMarTrChrome wartet auf deine Freigabe"
   },
-  "freigabe_ruf_text": {
-    "message": "Ein Schritt braucht deine Zustimmung, und es ist gerade keine Seitenleiste offen. Öffne SMarTrChrome, dann zeige ich dir, worum es geht."
-  },
   "einschleusung_meldung_titel": {
     "message": "SMarTrChrome hat die Automatik angehalten"
   },
@@ -550,6 +547,12 @@
   },
   "kopf_nichts_vorzulesen": {
     "message": "Es gibt noch nichts vorzulesen."
+  },
+  "kopf_platzhalter_gespraech": {
+    "message": "Schreib Niemand, was du brauchst …"
+  },
+  "kopf_platzhalter_tab": {
+    "message": "Sag Niemand, was er in diesem Tab tun soll …"
   },
   "kopf_protokoll_titel": {
     "message": "Was der Agent tut"

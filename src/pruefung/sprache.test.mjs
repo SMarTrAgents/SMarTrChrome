@@ -233,6 +233,38 @@ function paareAusJs(rohquelle) {
   return gefunden;
 }
 
+/*
+ * Benannte Katalogrufe, deren Notfalltext KEIN Literal ist: `t("k", KONSTANTE)`.
+ *
+ * Befund der Nachabnahme 0.6.0 vom 15.08.2026: `panel.js` ruft
+ * t("kopf_platzhalter_tab", PLATZHALTER_TAB) und
+ * t("kopf_platzhalter_gespraech", PLATZHALTER_GESPRAECH) — der Notfalltext ist
+ * eine Konstante, kein Literal. `literalLesen` gibt für einen Bezeichner null
+ * zurück, `paareAusJs` überspringt den Treffer, und beide Schlüssel fehlten in
+ * BEIDEN Katalogen: Der Platzhalter des Haupteingabefelds blieb in der
+ * englischen Oberfläche deutsch, und 931 grüne Prüfsätze haben es nicht
+ * bemerkt.
+ *
+ * Deshalb zählt hier der RUF und nicht das Paar: Wer über t( oder spr( in den
+ * Katalog geht, wird gefunden, ganz gleich, welche Form sein Notfalltext hat.
+ * Der Text bleibt null, wenn er kein Literal ist — L4 vergleicht dann nichts,
+ * denn die Konstante redigiert ein Mensch an ihrer eigenen Stelle.
+ */
+function benannteRufeAusJs(rohquelle) {
+  const quelle = ohneKommentare(rohquelle);
+  const gefunden = [];
+  const muster = /\b(?:t|spr)\(\s*"([a-z][a-z0-9_]*)"\s*,/g;
+  let treffer;
+  while ((treffer = muster.exec(quelle)) !== null) {
+    if (!SCHLUESSELFORM.test(treffer[1])) continue;
+    gefunden.push({
+      schluessel: treffer[1],
+      text: literalLesen(quelle, treffer.index + treffer[0].length),
+    });
+  }
+  return gefunden;
+}
+
 /**
  * Alle `data-i18n`-Schlüssel samt sichtbarem Text aus dem HTML.
  *
@@ -300,6 +332,9 @@ function verwendungen() {
   for (const pfad of OBERFLAECHE_JS) {
     const quelle = QUELLE.get(pfad);
     for (const p of paareAusJs(quelle)) nimm(p.schluessel, p.text, pfad);
+    /* Auch die Rufe mit Konstante als Notfalltext zählen als Verwendung —
+       sonst meldet L3 die zugehörigen Katalogeinträge als tot. */
+    for (const p of benannteRufeAusJs(quelle)) nimm(p.schluessel, p.text, pfad);
     for (const s of merkmalsSchluessel(quelle)) nimm(s, null, pfad);
   }
   for (const pfad of NUR_KATALOGRUFE) {
@@ -331,6 +366,7 @@ test("L0a — Die Ableitung liest wirklich Quelltext und findet die bekannten Ba
     ["werkbank_loeschen", "src/panel/werkbank.js"],      // knopfBauen(...)
     ["overlay_notaus", "src/content/overlay.js"],        // spr(...) im Inhaltsskript
     ["kopf_menue", "src/panel/panel.js"],                // Merkmalstabelle
+    ["kopf_platzhalter_tab", "src/panel/panel.js"],      // t(...) mit Konstante als Notfalltext
     ["ext_beschreibung", "manifest.json"],               // __MSG_…__
   ]) {
     assert.ok(VERWENDET.has(schluessel), `„${schluessel}" wird nicht gefunden, die Ableitung ist kaputt`);
@@ -427,6 +463,47 @@ test("L2 — Jede Verwendung im Quelltext hat einen Schlüssel im Katalog", () =
     [],
     `Diese Schlüssel benutzt die Oberfläche, im Katalog stehen sie nicht. In Chrome ist das ` +
       `eine leere Stelle und kein Fehler: ${fehlend.join(" | ")}`,
+  );
+});
+
+test("L2b — Jeder benannte Katalogruf hat seinen Schlüssel in BEIDEN Katalogen, auch mit Konstante als Notfalltext", () => {
+  /* Die Fundklasse der Nachabnahme 0.6.0 vom 15.08.2026, baulich geschlossen:
+     `paareAusJs` sieht nur Paare mit Literal, und genau deshalb kamen
+     kopf_platzhalter_tab und kopf_platzhalter_gespraech durch 931 grüne
+     Prüfsätze, während der Platzhalter des Haupteingabefelds in der englischen
+     Oberfläche deutsch blieb. Hier zählt der RUF: Jeder Schlüssel, der über
+     t(, spr( oder katalog( in den Katalog geht, muss in JEDER Sprache stehen,
+     ganz gleich, welche Form sein Notfalltext hat. */
+
+  /* Erst der Beweis, dass die Bauform überhaupt gefunden wird — sonst wäre
+     der Rest ein leeres Versprechen. */
+  const probe = benannteRufeAusJs('t("probe_konstante", KONSTANTE); spr("probe_literal", "Text");');
+  assert.deepEqual(
+    probe.map((p) => p.schluessel),
+    ["probe_konstante", "probe_literal"],
+    "der Abtaster für benannte Katalogrufe greift nicht",
+  );
+
+  const fehlend = new Set();
+  const pruefen = (schluessel, pfad) => {
+    for (const sprache of SPRACHEN) {
+      if (!Object.hasOwn(KATALOG.get(sprache), schluessel)) {
+        fehlend.add(`${schluessel} fehlt in ${sprache} (${pfad})`);
+      }
+    }
+  };
+  for (const pfad of OBERFLAECHE_JS) {
+    for (const { schluessel } of benannteRufeAusJs(QUELLE.get(pfad))) pruefen(schluessel, pfad);
+  }
+  for (const pfad of NUR_KATALOGRUFE) {
+    for (const { schluessel } of katalogRufeAusJs(QUELLE.get(pfad))) pruefen(schluessel, pfad);
+  }
+  assert.deepEqual(
+    [...fehlend].sort(),
+    [],
+    `Diese Schlüssel gehen durch den Katalog, stehen dort aber nicht. In Chrome ist das eine ` +
+      `leere Stelle, und der deutsche Notfalltext erscheint auch in der englischen Oberfläche: ` +
+      `${[...fehlend].sort().join(" | ")}`,
   );
 });
 

@@ -10,9 +10,14 @@ Fassung ist **Was nicht geht**. Er steht hier und nicht in der Ankündigung.
 Die Fassung, die aus einem Assistenten mit Einzelfreigabe ein Werkzeug macht,
 das der Mensch einstellen kann. Gebaut nach `docs/VERTRAG-v3.5.md`.
 
-**Stand der Auslieferung: nichts ist ausgeliefert.** Der Arbeitsstand liegt
-lokal, der Relay ist lokal geändert und nicht neu gestartet. Siehe
-`docs/OFFEN-v3.5.md`.
+**Stand der Auslieferung, nachgeführt am 15.08.2026:** Der Relay v3.5 läuft
+in Helsinki (`smartr-connect:v35-20260814`, Rücknahme über das Image
+`20260728-cutover`). Über der Runde 2 lief eine adversarische Nachabnahme
+(sieben Gebiete, jeder Fund von einem Skeptiker gegengeprüft): 11 Funde
+bestätigt, davon 3 Blocker, alle repariert und einzeln nachgemessen, siehe
+„Reparatur Runde 3". Danach stehen 953 Prüfsätze grün, und die
+Verdeckungswache ist erstmals im echten (kopflosen) Chrome gemessen. Diese
+Fassung ist als v0.6.0 veröffentlicht. Siehe `docs/OFFEN-v3.5.md`.
 
 ### Neu
 
@@ -67,7 +72,8 @@ lokal, der Relay ist lokal geändert und nicht neu gestartet. Siehe
 - **Ein Klick zur Verbindung.** Der Knopf „Mit diesem Tab verbinden" steht ganz
   oben und führt in einem einzigen Klick zur aktiven Verbindung mit dem offenen
   Tab. Darunter steht eine Tabliste als Weg in ein anderes Fenster.
-- **Zwei Sprachen.** Deutsch und Englisch, je 329 Schlüssel, ohne Lücke.
+- **Zwei Sprachen.** Deutsch und Englisch, je 342 Schlüssel, ohne Lücke, und
+  ein Prüfsatz misst die Deckung zwischen Quelltext und beiden Katalogen.
   `default_locale` ist Deutsch.
 - **Neue Fehlercodes an den Agenten:** `element_covered`, `guardrail_blocked`,
   `step_limit`, `loop_detected`, `agent_not_permitted`, `workflow_not_found`,
@@ -135,70 +141,167 @@ lokal, der Relay ist lokal geändert und nicht neu gestartet. Siehe
 Der wichtigste Abschnitt. Vollständig mit Datum und Ursache in
 `docs/OFFEN-v3.5.md`.
 
-1. **Nichts ist ausgeliefert und nichts ist commitet.** Der Arbeitsstand liegt
-   uncommitted in `/home/tongie/SMarTrChrome`.
-2. **Der Relay ist nur lokal geändert.** Solange er alt steht, fällt
-   `run_workflow` dort auf die Stufe `full` und wird abgewiesen, `params` fällt
-   aus dem Rahmen, und `agent` kommt nie an. Der Relay muss vor der Erweiterung
-   stehen, umgekehrt entstehen lauter Absagen.
-3. **Der mittlere Modus ist über die Leitung heute unerreichbar.** Die
+1. **Der mittlere Modus ist über die Leitung heute unerreichbar.** Die
    Ticketausgabe kennt `assist` nicht und stellt entweder Einzelfreigabe oder
    Vollzugriff aus. Bei einer Einzelfreigabe-Sitzung gilt deshalb „jeder Schritt
    einzeln", ganz gleich, was der Schalter zeigt. Erst bei Vollzugriff
    entscheidet der Schalter wirklich.
-4. **Die Agentenmatrix hat heute nichts zu prüfen.** Das Bridge-Token trägt
+2. **Die Agentenmatrix hat heute nichts zu prüfen.** Das Bridge-Token trägt
    keinen Anspruch `agent`, das Feld bleibt leer, und ein Rahmen ohne `agent`
    läuft bewusst weiter, damit der Mensch selbst nicht ausgesperrt wird.
-5. **Kein Agent kann `run_workflow` bauen.** Die Werkzeugtabelle der
+3. **Kein Agent kann `run_workflow` bauen.** Die Werkzeugtabelle der
    Agentenseite kennt den Befehl nicht.
-6. **Zwei Schritttypen bleiben beim Abspielen stehen.** Für `key` (Enter, Tab)
-   und `dblclick` gibt es keinen Befehl. Der Ablauf hält dort mit einer
-   benannten Absage an, statt stillschweigend etwas anderes zu tun.
-7. **Ein Ablauf mit mehr als dreissig Schritten läuft in die Minutenbremse**
+4. **Zwei Schritttypen bleiben beim Abspielen stehen.** Für `key` (Enter, Tab)
+   und `dblclick` gibt es beim Abspielen keinen Befehl; der Rekorder zeichnet
+   beide auf. Der Ablauf hält dort mit einer benannten Absage an, statt
+   stillschweigend etwas anderes zu tun.
+5. **Ein Ablauf mit mehr als dreissig Schritten läuft in die Minutenbremse**
    und endet mit `workflow_step_failed` und `budget_exceeded`. Der Relay bucht
    ausserdem 50 Schritte je Ablauf, zwei Abläufe in derselben Minute sind damit
    nicht möglich.
-8. **Die Selbstheilung ist halb.** Bricht die ganze Kaskade, bekommt der Agent
+6. **Die Selbstheilung ist halb.** Bricht die ganze Kaskade, bekommt der Agent
    Beschreibung, Anker und Textbaum und kann ein neues Ziel benennen. Das
    Zurückschreiben der neuen Kaskade in den Ablauf fehlt, dafür braucht es einen
    eigenen Befehl auf dem Draht.
-9. **Miniaturbilder werden aufgenommen und gespeichert, aber nirgends
+7. **Miniaturbilder werden aufgenommen und gespeichert, aber nirgends
    angezeigt.** Die Werkbank zeigt zu einem Ablauf noch kein Bild.
-10. **Das Schrittlimit hat keinen Knopf.** Der Weg ist gebaut und gedeckelt, die
-    Seitenleiste sendet aber nur den Modus und nie eine Grenze.
-11. **Nur der oberste Rahmen wird aufgezeichnet.** Klicks in einem eingebetteten
-    Rahmen entstehen nicht als Schritt, und ein Bildlauf innerhalb eines
-    rollbaren Behälters wird nicht aufgezeichnet.
-12. **Nichts davon ist im echten Chrome nachgemessen.** Offen bleiben
-    ausdrücklich: Verdeckung in geschlossenen Schattenbäumen und in fremden
-    Rahmen, das Aussehen des Modusrahmens, die Klickbarkeit des Stoppknopfes
-    unter einem fremden Überzug, der Befund F-2 (ein `*{display:none!important}`
-    der Seite löscht das Zeichen, ohne dass die Sitzung endet), Layout und
-    Vorlesen der Seitenleiste, und der Teach-Modus an echten Anmeldemasken.
-13. **Die englische Fassung ist nicht gegengelesen,** und siebzehn Absagesätze
+8. **Das Schrittlimit hat keinen Knopf.** Der Weg ist gebaut und gedeckelt, die
+   Seitenleiste sendet aber nur den Modus und nie eine Grenze.
+9. **Nur der oberste Rahmen wird aufgezeichnet.** Klicks in einem eingebetteten
+   Rahmen entstehen nicht als Schritt, und ein Bildlauf innerhalb eines
+   rollbaren Behälters wird nicht aufgezeichnet.
+10. **Am Gerät ist erst die Verdeckungswache nachgemessen.** Sechs Messungen im
+    echten (kopflosen) Chrome: freier Knopf klickt, deckender Überzug und
+    verdeckter Knopf im offenen Schattenbaum werden mit `element_covered`
+    abgesagt, `pointer-events:none` lässt durch, halbdurchsichtige und
+    unsichtbare Überzüge werden abgesagt. Offen bleiben ausdrücklich:
+    Verdeckung in geschlossenen Schattenbäumen und in fremden Rahmen, das
+    Aussehen des Modusrahmens, die Klickbarkeit des Stoppknopfes unter einem
+    fremden Überzug, der Befund F-2 (ein `*{display:none!important}` der Seite
+    löscht das Zeichen, ohne dass die Sitzung endet), Layout und Vorlesen der
+    Seitenleiste, und der Teach-Modus an echten Anmeldemasken.
+11. **Die englische Fassung ist nicht gegengelesen,** und siebzehn Absagesätze
     aus der Werkbank und dem Rekorder bleiben deutsch.
-14. **Das Ausgeben schreibt keine Datei.** Der Text landet in einem Feld zum
+12. **Das Ausgeben schreibt keine Datei.** Der Text landet in einem Feld zum
     Kopieren, weil die Erweiterung ohne die Berechtigung `downloads` auskommt.
+
+### Reparatur Runde 2, 14.08.2026 abends
+
+Die Nachabnahme über der Runde 1 fand 36 Funde, davon 11 Blocker und 35 NEU —
+das Muster: Runde 1 hatte die gemeldeten Stellen geschlossen, nicht die
+Klassen. Runde 2 repariert deshalb Klassen:
+
+- **Eine Quelle für die Messform** (`src/gemeinsam/messform.js`, auf beiden
+  Seiten geladen): Zeichen ohne eigene Breite fallen ersatzlos weg, NFKC
+  faltet Breitzeichen, Kapitälchen und sichtgleiche Fremdbuchstaben, Adressen
+  werden wiederholt prozentdekodiert und mit Pfad, Suche UND Fragment
+  gemessen, und gekürzt wird in einer Messung nie. Beide Lesarten eines
+  unsichtbaren Zeichens werden gemessen, damit es weder trennen noch kleben
+  kann. Die zweite Abschrift von `saeubern` in der Klickwache ist abgeschafft.
+- **Gattungsprüfsätze** (`src/pruefung/gattung.test.mjs`): eine Matrix aus
+  Verschleierungen mal harten Klassen über den Produktivweg, dazu
+  Positivlisten als Quelltextsuche. Eine neue Kürzung, ein neues
+  `new URL().pathname`, ein neues `toLowerCase()` an Seitentext wird rot,
+  statt unbemerkt zu entstehen.
+- **Messeingänge ungekürzt**, gekürzt wird nur noch `anzeigename`; dazu
+  `kuerzungsspur` als Laufzeitwache gegen jede künftige Kürzungsstelle.
+- **Die Agentenmatrix misst Herkunft UND Ziel** (`agentDarfBeides`), wie die
+  Sperrliste seit Runde 1.
+- **Der Not-Aus überlebt jeden Wiedereintritt nach `await`**: `chat.js` baut
+  den Botengang nicht mehr wieder auf, der `auth_ok`-Zweig von `link.js` macht
+  das Kappen nicht mehr rückgängig, und der Arbeitszeiger läuft nach
+  `overlay:gestoppt` keinen Takt mehr weiter.
+- **Die Identitätswache verlangt Gleichheit als Ganzes** (`gleicherText`) und
+  hält bei fehlendem Beleg an, statt durchzulassen; `beschreibungVon` liest
+  `label[for]` und das umschliessende `<label>` und sagt es, wenn nur der
+  Elementname übrig bleibt.
+- **Geheimniserkennung als Teilkette**: eingebettete Einmalcodes,
+  Kartennummern und kleingeschriebene Wiederherstellungsschlüssel werden auch
+  mitten im Satz erkannt; ein einzelnes harmloses Wort in der Beschriftung
+  gibt keinen Wert mehr frei.
+- **`run_workflow` wird vor dem ersten Schritt vorklassifiziert** und trägt
+  die Vereinigung der Klassen seiner Schritte — ein weicher Ablauf läuft im
+  Hintergrund ohne Rückfrage durch, die Vorklassifizierung ist aber
+  Untergrenze und kein Freibrief: jeder Schritt geht bei der Ausführung
+  trotzdem durch den vollen Klassifizierer. Braucht ein Schritt eine Freigabe
+  und niemand sieht zu, wird der Mensch gerufen (Systemmeldung und Abzeichen),
+  und erst wenn auch das nicht hilft, gibt es die benannte Absage
+  `unerreichbar`.
+
+### Reparatur Runde 3 (Nachabnahme), 15.08.2026
+
+Die adversarische Nachabnahme über den 931 grünen Prüfsätzen der Runde 2:
+sieben Gebiete, jeder Fund von einem eigenen Skeptiker mit Widerlegungsauftrag
+gegengeprüft. 11 Funde bestätigt, davon 3 Blocker, kein einziger widerlegt,
+und keiner war rot geworden. Alle 11 sind repariert, jede Reparatur wurde am
+ursprünglichen Fehlszenario einzeln nachgemessen:
+
+- **Die Seitenseite kürzte den Messeingang.** `overlay.js` kappte den
+  barrierefreien Namen auf 200 Zeichen, BEVOR der Klassifizierer ihn sah — ein
+  hartes Wort nach Zeichen 200 löste keine Rückfrage mehr aus, und die
+  Identitätswache verglich eine 200er-Kappung mit einer 400er-Aufzeichnung.
+  Beide Kappungen sind raus, Messeingänge verlassen die Seite jetzt wirklich
+  ungekürzt, gekürzt wird nur noch an der Anzeige.
+- **Die Geheimniserkennung normalisiert jetzt vor der Gestaltprüfung.**
+  Kartennummern und Einmalcodes mit Unterstrich, Komma, Mittelpunkt,
+  geschütztem Bindestrich, Vollbreiten- oder nullbreit getrennten Ziffern
+  rutschten am Muster vorbei in den gespeicherten Ablauf. Jetzt wird NFKC
+  gefaltet, Formatzeichen fallen weg, und Ziffernketten werden an jedem
+  Trennzeichen zusammengezogen.
+- **Ein Zeitablauf von `run_workflow` kappt jetzt den Lauf.** Vorher kam nach
+  120 Sekunden eine als wiederholbar gekennzeichnete Absage, während der
+  laufende Schritt die Seite weiter veränderte — eine Einladung zur
+  Doppelausführung. Jetzt wird kooperativ gekappt, geantwortet wird erst, wenn
+  nichts mehr läuft.
+- **Der Ruf nach dem abwesenden Menschen ist verdrahtet.** `freigabeRufen` mit
+  Fragezeichen-Abzeichen und stehender Systemmeldung war gebaut und grün
+  geprüft, aber im Produktivweg rief es niemand — dieselbe Fehlerklasse, an
+  der 0.5.3 gescheitert ist, gefunden von der Nachabnahme in drei Gebieten
+  unabhängig. Der Ausführer ruft die Gegenstelle jetzt direkt, und die Zusage
+  „Systemmeldung UND Abzeichen, erst dann `unerreichbar`" ist am Produktivweg
+  gemessen.
+- **`navigate` misst jetzt auch die Ankunft.** Nach einer Weiterleitung wird
+  die tatsächlich erreichte Adresse gegen Agentenmatrix und Sperrliste
+  gehalten, bevor Seiteninhalt in die Antwort geht.
+- **Aufnahme beenden trifft jetzt die Aufnahme.** Der Stopp ging an den gerade
+  aktiven Tab statt an den Aufnahmetab; ein fremder Tab bekam den Rekorder
+  eingespielt und seine Adresse landete als Schritt im Ablauf, und nach einem
+  fehlgeschlagenen Stopp blieb die Aufzeichnung als Zombie liegen. Jetzt
+  zielt der Stopp auf den gemerkten Aufnahmetab, ein Fehlschlag räumt vollständig
+  auf und rettet die Schritte als Ablauf-Entwurf, und die Wiederaufnahme prüft,
+  ob sie zum Tab gehört.
+- **Nach einem Not-Aus bekommen `link:verbinden` und `link:verlaengern` immer
+  eine Antwort.** Vorher konnte das Versprechen der Seitenleiste für immer
+  offen hängen.
+- **Zwei fehlende Katalogschlüssel ergänzt** (der Platzhalter des
+  Haupteingabefeldes blieb englischen Nutzern deutsch), ein verwaister
+  entfernt, und die Berechtigung `activeTab` ist aus dem Manifest gestrichen —
+  kein Codeweg nutzte sie.
 
 ### Prüfung
 
-809 Prüfsätze, 809 grün, gemessen am 14.08.2026 mit
+953 Prüfsätze, 953 grün, gemessen am 15.08.2026 mit
 `cd src && node --test "pruefung/*.test.mjs"`. Die 372 Prüfsätze der Vorfassung
 bleiben grün; die Erwartungen, die nachgezogen wurden, tragen ihre Begründung
 an Ort und Stelle.
 
 Zur Zahl gehört eine Einordnung, sonst ist sie eine Beruhigung statt einer
 Aussage: Am Vormittag des 14.08.2026 standen hier 733 grüne Prüfsätze, und eine
-Gegenlesung fand danach 31 Befunde, davon neun Blocker. Keiner davon war rot
-geworden. Die Naht zwischen den Gebieten war nirgends gemessen — jedes Gebiet
+Gegenlesung fand danach 31 Befunde, davon neun Blocker. Über den 809 grünen der
+Runde 1 fand dieselbe Abnahme 36 Funde, über den 931 grünen der Runde 2 noch
+einmal 11 — dreimal in Folge hat eine grüne Zahl nicht gereicht, deshalb wurde
+vor dieser Veröffentlichung nachabgenommen statt gezählt. Keiner der Befunde
+war vorher rot geworden. Die Naht zwischen den Gebieten war nirgends gemessen — jedes Gebiet
 prüfte sich selbst gegen eine Attrappe des Nachbarn. Die Datei
 `src/pruefung/verzahnung.test.mjs` ist die Antwort darauf: Sie lässt die echten
 Inhaltsskripte, den echten Nachrichtenhörer des Dienstarbeiters und die echte
 Ablage miteinander laufen. Eine Zahl grüner Prüfsätze sagt nichts darüber, ob
 sie das Richtige messen.
 
-Der Relay hat seine eigene Prüfung, `server/test_connect.py`, dort sind 366 von
-366 grün, davon 43 neu. Er liegt in einem anderen Baum und läuft nicht mit.
+Der Relay hat seine eigene Prüfung, `server/test_connect.py`: lokal 366 von
+366 grün, davon 43 neu; im ausgelieferten Abbild 356 von 356 lauffähigen (die
+zehn übersprungenen vergleichen mit Dateien, die im Abbild nicht liegen, und
+messen den Relay nicht). Er liegt in einem anderen Baum und läuft nicht mit.
 
 ---
 

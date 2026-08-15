@@ -1,20 +1,45 @@
 # Offene Punkte v3.5
 
-**Stand 14.08.2026, nach der Bauarbeit von zehn Gebieten. Zusammengetragen aus
-den Berichten der Bau-Agenten, jeder Punkt mit Ursache und Ort.**
+**Stand 15.08.2026, nach der Bauarbeit von zehn Gebieten, zwei
+Reparaturrunden und der Nachabnahme samt Reparatur Runde 3. Zusammengetragen
+aus den Berichten der Bau-Agenten, jeder Punkt mit Ursache und Ort.**
 
 Was hier steht, steht nicht in der Ankündigung. Diese Liste ist die Antwort auf
 den Befund vom 11.08.2026: An dem Tag lagen 18 grüne Prüfsätze über einer Wache,
 die im ausgelieferten Klickweg niemand rief. Grün heisst gemessen, nicht
 eingebaut, und der Unterschied gehört aufgeschrieben.
 
-**Der Stand in einem Satz:** 809 Prüfsätze sind grün, und nichts davon ist
-ausgeliefert.
+**Der Stand in einem Satz:** 953 Prüfsätze sind grün, der Relay läuft in
+Helsinki, die Nachabnahme der Runde 2 ist durch (11 Funde, alle repariert und
+einzeln nachgemessen), die Verdeckungswache ist im echten kopflosen Chrome
+gemessen, und diese Fassung ist als v0.6.0 veröffentlicht.
 
 **Nachtrag 14.08.2026, nachmittags.** Über den 733 grünen Prüfsätzen des
 Vormittags fand eine Gegenlesung 31 Befunde, davon neun Blocker, und keiner
 davon war rot geworden. Vier Gebiete haben repariert, danach war die
 Verzahnungsprüfung an drei Stellen rot — an genau den Nähten zwischen ihnen.
+
+**Nachtrag 14.08.2026, abends, Reparatur Runde 2.** Dieselbe Abnahme fand über
+den 809 grünen Prüfsätzen der Runde 1 danach 36 Funde, davon 11 Blocker und
+35 NEU. Das Muster: Runde 1 hatte die gemeldeten STELLEN geschlossen, nicht
+die KLASSEN. Runde 2 hat deshalb die sechs Fehlerklassen repariert — eine
+gemeinsame Messform (`src/gemeinsam/messform.js`), Gattungsprüfsätze
+(`src/pruefung/gattung.test.mjs`), ungekürzte Messeingänge, Herkunft UND Ziel
+an jeder Wache, Wiedereintritt nach `await` in `chat.js` und `link.js`,
+Rückfälle die im Zweifel schliessen, und die Vorklassifizierung von
+`run_workflow` samt Ruf nach dem abwesenden Menschen. 931 Prüfsätze grün.
+
+**Nachtrag 15.08.2026, Nachabnahme und Reparatur Runde 3.** Die in §1.1
+geforderte adversarische Nachabnahme der Runde 2 lief am 15.08.: sieben
+Gebiete (Klickweg, Messform, Geheimnisse, Werkstatt, Lebenszyklus, Store,
+Geräteprobe über CDP), jeder Fund von einem eigenen Skeptiker mit
+Widerlegungsauftrag gegengeprüft. Ergebnis: 11 Funde bestätigt, davon 3
+Blocker, 0 widerlegt, dazu 9 niedrige. Darunter zum dritten Mal die
+0.5.3-Klasse „gebaut, grün gemessen, von niemandem gerufen": der
+Freigabe-Ruf mit Fragezeichen-Abzeichen. Alle 11 wurden in fünf Clustern
+repariert und jede Reparatur am ursprünglichen Fehlszenario einzeln
+nachgemessen, Details in `CHANGELOG.md` unter „Reparatur Runde 3". Danach
+953 Prüfsätze grün.
 Was seither geschlossen ist, steht in `CHANGELOG.md`; was hier steht, ist
 weiterhin offen.
 
@@ -22,25 +47,34 @@ weiterhin offen.
 
 ## 1. Auslieferung
 
-### 1.1 Nichts ist commitet, nichts ist gepusht
-Der ganze Arbeitsstand liegt uncommitted in `/home/tongie/SMarTrChrome`:
-17 geänderte und 29 neue Dateien. Gemeldet von A-VERZAHNUNG, nachgezählt am
-14.08.2026.
+### 1.1 Veröffentlicht am 15.08.2026 ✅
+Der Stand vom 11.08. („nichts ist commitet, nichts ist gepusht") ist überholt:
+Der Arbeitsstand liegt in fünf Commits auf `master` (Vorbereitung, Bau,
+Reparatur Runde 1, Runde 2, Nachabnahme samt Reparatur Runde 3), gepusht und
+als v0.6.0 veröffentlicht. Die Bedingung „gepusht wird erst nach der
+adversarischen Nachabnahme" wurde eingehalten: Die Nachabnahme lief am 15.08.,
+ihre 11 Funde sind repariert und einzeln nachgemessen, siehe Nachtrag oben.
 
-### 1.2 Der Relay ist nur lokal geändert
-`/home/tongie/smartrbrowser/server/app.py` wächst rein additiv von 1723 auf 1877
-Zeilen, `test_connect.py` um 43 Prüfsätze, 366 von 366 grün. **Kein ssh, kein
-scp, kein docker, kein Neustart**, wie beauftragt. Die Änderungsliste mit der
-bindenden Reihenfolge liegt im Bericht von A-RELAY: erst die Konstanten, dann
-die Tabellen, dann die Rechenwege, zuletzt die Aufrufstellen. Die untere Stelle
-liest die obere Konstante, ein halb kopierter Stand fällt erst beim ersten
-Befehl auf und nicht beim Start.
+### 1.2 Der Relay läuft in Helsinki ✅
+Seit dem 14.08.2026 abends: Image `smartr-connect:v35-20260814`, Container
+`smartr-connect` unverändert benannt (Caddy routet auf den Namen),
+`connect.smartragents.ai/health` antwortet von aussen. 356 von 356 im Abbild
+lauffähigen Prüfsätzen grün; die zehn übersprungenen vergleichen mit Dateien,
+die im Abbild nicht liegen, und messen den Relay nicht. Vor dem Tausch
+WAL-sicher gesichert (13 Verbindungen, 56 Prüfzeilen, `integrity=ok`) nach
+`/root/relay-v35-20260814/sicherung/`. Rücknahme: altes Image
+`20260728-cutover`, gleicher Name, neu starten.
 
-### 1.3 Der Relay muss vor der Erweiterung stehen
-Relay neu und Erweiterung alt ist folgenlos. Umgekehrt entstehen lauter
-Absagen: `run_workflow` fällt am alten `REQUIRED` auf `full` und wird mit
-`stufe_zu_niedrig` abgewiesen, `params` fällt aus dem Rahmen, `agent` fehlt,
-`assist` kommt nie an. Keine falschen Erfolge, aber auch keine Abläufe.
+**Dabei gefunden, und es betrifft die Backup-Kette:** `connect.db` ist 24 KB
+und seit dem 29.07. nicht mehr eingecheckt — die Daten leben in der 939-KB-Datei
+`connect.db-wal` daneben. Ein Backup, das nur die `.db` kopiert, verliert von
+diesem Relay fast alles. Sichern nur über `sqlite3 .backup` oder nach einem
+Checkpoint.
+
+### 1.3 Die Reihenfolge ist eingehalten
+Relay vor Erweiterung, gemessen und begründet in der Fassung vom 11.08.: Neuer
+Relay mit alter Erweiterung ist folgenlos, umgekehrt entstünden lauter
+Absagen. Der Relay steht, die Erweiterung kann folgen.
 
 ## 2. Gebaut und gemessen, aber ohne Wirkung, bis draussen etwas nachzieht
 
@@ -93,7 +127,9 @@ pflegt, zieht §13 nach.
 ### 3.1 Zwei Schritttypen ohne Befehl
 Der Rekorder zeichnet für Enter und Tab einen Schritt vom Typ `key` auf
 (`src/content/rekorder.js:783`), und `BEFEHLE` hat dafür keinen Eintrag.
-`dblclick` steht in `SCHRITT_TYPEN`, wird aber von keinem Ereignisweg erzeugt.
+`dblclick` wird vom Rekorder ebenfalls aufgezeichnet (die frühere Behauptung
+hier, kein Ereignisweg erzeuge es, war falsch, korrigiert 15.08. nach der
+Nachabnahme), hat beim Abspielen aber genauso keinen Befehl.
 Beide bleiben beim Abspielen mit einer benannten Absage stehen, ausdrücklich
 nicht stillschweigend als Klick. **Empfohlene Reihenfolge der Prüfung:** (a) Der
 Rekorder faltet ein Enter in den vorangehenden `input`-Schritt als `submit: true`,
@@ -165,11 +201,11 @@ tarnen. Genau so ist `overlay:kaskade` durch 733 grüne Prüfsätze gekommen.
 - Eine Seite, die ständig selbst arbeitet, zum Beispiel eine Uhr im Sekundentakt,
   erreicht die DOM-Ruhe nie. Dann entsteht kein Warteschritt.
 
-### 3.8 Der Klassifizierer sieht bei `navigate` die falsche Adresse
-`klassenBestimmen` bekommt als Kopf die Adresse, auf der der Tab **jetzt** steht,
-nicht das Ziel. Ein `navigate` nach `/checkout` wird deshalb nicht als `zahlung`
-erkannt. Die Zieladresse steht dem Menschen in der Frage, eine Guardrail-Frage
-löst sie nicht aus. Eine strengere Lesart wäre möglich und gehört zu A-REGELN.
+### 3.8 ✅ GESCHLOSSEN (Runde 1 + 2): `navigate` misst Herkunft UND Ziel
+Der Kopf trägt seit Runde 1 ein zweites Feld `ziel`, `adressText` misst beide,
+und seit Runde 2 werden beide prozentdekodiert und mit Fragment gemessen
+(`messweg` in `src/gemeinsam/messform.js`). Gemessen in `gattung.test.mjs`
+über den Produktivweg, auch für Hash-Routen und doppelt kodierte Adressen.
 
 ### 3.9 Der Bildlaufstand der Schleifenmarke ist grob
 Er stammt aus `get_state` und `scroll`, also aus den zwei Befehlen, die ihn
@@ -192,6 +228,15 @@ Weder Protokollbuch noch Ablauf landen als Datei auf der Platte, der Text steht
 in einem Feld zum Kopieren. Wer eine echte Datei will, meldet `downloads` als
 neue Berechtigung an. Ein Dienst `ausgeben(text, dateiname)` kann das später
 übernehmen, die Stelle ist vorbereitet.
+
+### 3.13 Der Zustand „unbeaufsichtigt" kennt nur ein Fenster
+Aus der Nachabnahme vom 15.08., gemeldet und noch nicht gegengeprüft:
+`link:unbeaufsichtigt` ist ein einzelner boolescher Modulwert. Bei zwei
+Fenstern mit zwei Seitenleisten gewinnt der letzte Schreiber — schliesst der
+Mensch die Leiste in Fenster B, meldet der Zustand „niemand sieht zu", obwohl
+die Leiste in Fenster A offen ist, bis dort wieder eine Leiste geöffnet oder
+geschlossen wird. Folge ist ein falsches Auge am Symbol und eine unnötige
+Ruf-Meldung, keine fehlende Freigabe.
 
 ## 4. Sprache
 
@@ -222,12 +267,21 @@ aber ein und sind eigene Bereiche.
 
 ## 5. Was am Gerät nachzumessen bleibt
 
-Nichts davon ist im echten Chrome geprüft. Die Nachbildungen in den Prüfsätzen
-ersetzen das nicht und behaupten es auch nicht.
+**Nachgeholt am 15.08.2026 (Geräteprobe der Nachabnahme, kopfloses echtes
+Chrome über CDP, Inhaltsskripte per `Runtime.evaluate`):** Die
+Verdeckungswache ist am Gerät gemessen. Sechs Messungen, alle richtig: freier
+Knopf klickt; ganzseitiger deckender Überzug → `element_covered`, kein Klick;
+Überzug mit `pointer-events:none` → Klick geht durch; Knopf im offenen
+Schattenbaum unter Überzug → abgesagt, frei → geklickt; halbdurchsichtiger
+(opacity 0.3) und unsichtbarer (opacity 0) Überzug → abgesagt. Protokoll der
+Messungen im Nachabnahme-Bericht.
+
+Der Rest ist im echten Chrome weiterhin ungeprüft. Die Nachbildungen in den
+Prüfsätzen ersetzen das nicht und behaupten es auch nicht.
 
 - **Verdeckung in geschlossenen Schattenbäumen und in fremden Rahmen (iframes).**
-  Der Funktionstest 0.5.3 hat das offengelassen, weil ohne Einbau nichts
-  Prüfbares da war. Jetzt ist es da und gehört auf den Prüfstand.
+  Der Funktionstest 0.5.3 hat das offengelassen, die Geräteprobe vom 15.08.
+  hat nur offene Schattenbäume gemessen. Bleibt auf dem Prüfstand.
 - **Der Modusrahmen mit `border-image`:** Sieht er im echten Chrome so aus wie
   gedacht?
 - **Der Stoppknopf im Schild:** Bleibt er unter einem fremden Überzug wirklich

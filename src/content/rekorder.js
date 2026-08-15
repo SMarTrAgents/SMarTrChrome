@@ -1141,6 +1141,27 @@
    * Wiederaufnahme nach einem Seitenwechsel
    * ------------------------------------------------------------------ */
 
+  /*
+   * Gehört die gemerkte Aufzeichnung zu DIESEM Tab? Das weiss nur der
+   * Dienstarbeiter (Befund vom 15.08.2026): Ein Inhaltsskript kennt seine
+   * eigene Tabnummer nicht, und die Ablage trägt keine — der Dienstarbeiter
+   * führt den Aufnahmetab in `sa_rekorder_tab` und liest den Absender einer
+   * Nachricht aus `absender.tab`, das setzt Chrome selbst und keine Seite.
+   *
+   * Fail-closed: Keine Antwort, eine Ausnahme oder ein fehlendes Ja zählen
+   * als Nein. Dann unterbleibt die Wiederaufnahme — es fällt die Funktion,
+   * nicht der Schutz.
+   */
+  function gehoertNachfragen() {
+    try {
+      const zurueck = chrome.runtime.sendMessage({ typ: "rekorder:gehoert?" });
+      if (!zurueck || typeof zurueck.then !== "function") return Promise.resolve(false);
+      return zurueck.then((a) => !!(a && a.gehoert === true)).catch(() => false);
+    } catch (_) {
+      return Promise.resolve(false);
+    }
+  }
+
   function wiederaufnehmen() {
     try {
       if (!chrome || !chrome.storage || !chrome.storage.local) return;
@@ -1149,6 +1170,28 @@
       zurueck
         .then((daten) => {
           const gemerkt = daten && daten[ABLAGE];
+          if (!gemerkt || gemerkt.laeuft !== true || !Array.isArray(gemerkt.schritte)) return null;
+          /*
+           * Erst fragen, dann fortsetzen (Befund vom 15.08.2026): Bis hierher
+           * nahm dieses Skript eine gemerkte Aufzeichnung in JEDEM Dokument
+           * wieder auf, in das es eingespielt wurde. Der Stopp-Weg des
+           * Dienstarbeiters spielte es bei Nichtantwort auch in den gerade
+           * aktiven Tab ein — und die Wiederaufnahme schrieb dessen Adresse
+           * als `navigate`-Schritt in einen Ablauf, zu dem der Tab nie
+           * gehört hat.
+           */
+          return gehoertNachfragen().then((gehoert) => {
+            if (gehoert !== true) return null;
+            /* Frisch lesen, nicht den Stand von eben nehmen: Zwischen Frage
+               und Antwort kann ein Stopp die Ablage geräumt haben, und eine
+               Wiederaufnahme aus einem veralteten Stand wäre genau der
+               Zombie, um den es hier geht. */
+            return chrome.storage.local.get(ABLAGE);
+          });
+        })
+        .then((daten) => {
+          if (!daten) return;
+          const gemerkt = daten[ABLAGE];
           if (!gemerkt || gemerkt.laeuft !== true || !Array.isArray(gemerkt.schritte)) return;
           if (laeuft) return; // in diesem Dokument wurde schon gestartet
           laeuft = true;

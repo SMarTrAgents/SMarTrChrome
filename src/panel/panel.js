@@ -3109,8 +3109,16 @@ async function werkbankOeffnen() {
     spielen: (id, params) => anWorker({ typ: "werkbank:spielen", id, params: params || {} }),
     ausgeben: dateiAnbieten,
     /* Der Weg des Menschen in den Teach-Modus (§7.2). Der Tab kommt von hier
-       und nicht aus der Werkbank: Aufgezeichnet wird in dem Tab, den der
-       Mensch gerade vor sich hat, und welcher das ist, weiss die Leiste. */
+       und nicht aus der Werkbank: GESTARTET wird in dem Tab, den der Mensch
+       gerade vor sich hat, und welcher das ist, weiss die Leiste.
+
+       Beim BEENDEN ist dieselbe Tabnummer nur ein Rückfallwert (Befund vom
+       15.08.2026): Wer während der Aufnahme in einen anderen Tab gewechselt
+       hat, steht beim Druck auf „Beenden" vor einem Tab, in dem nie
+       aufgezeichnet wurde. Wohin die Aufnahme gehört, weiss der
+       Dienstarbeiter aus seiner Tabnotiz (`sa_rekorder_tab`); er nimmt sie
+       als Ziel und greift auf die Nummer von hier nur zurück, wenn die
+       Notiz verloren ging. */
     aufnahmeStart: () => anWorker({ typ: "rekorder:start", tabId: modusTabId() }),
     aufnahmeStop: () => anWorker({ typ: "rekorder:stop", tabId: modusTabId() }),
   });

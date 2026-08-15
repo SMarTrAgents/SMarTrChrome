@@ -1244,6 +1244,27 @@ export function verbinden({ ticket, ausweis, ursprungMuster = null, tabId = null
     const beenden = (fehler) => {
       abbrechen(fehler).catch(() => {});
     };
+    /*
+     * Das Ende NACH `erledigt` (Befund NOTAUS-3 vom 15.08.2026).
+     *
+     * `abbrechen` gehört dem AUFBAU: Es beginnt mit `if (erledigt) return` —
+     * richtig für jeden Weg, der schon eine Antwort hat. Die zweite und die
+     * dritte Prüfung des `auth_ok`-Zweigs stehen aber HINTER `erledigt = true`
+     * und riefen trotzdem `beenden`: ein Aufruf, der nichts tat. Das
+     * Versprechen von `verbinden()` settelte nie, die Seitenleiste bekam auf
+     * `link:verbinden` keine Antwort, und `verlaengernMit` hing für immer vor
+     * seinem Fehlerpfad — die stummgeschaltete alte Leitung blieb lokal offen.
+     *
+     * Aufgeräumt hat der Not-Aus selbst (`trennen` → `sitzungBeenden`), und
+     * die beiden Prüfungen räumen ihren eigenen Aufbau schon ab, bevor sie
+     * hier ankommen; ein zweiter Abbau daneben wäre die Doppelfassung, die
+     * Festlegung F4 verbietet. Was fehlte, ist allein die ANTWORT — genau die
+     * gibt dieser Weg, und sonst nichts. Ein Promise verträgt nur ein
+     * Settlement, ein zweiter Aufruf ist deshalb baulich folgenlos.
+     */
+    const gekapptMelden = (fehler) => {
+      fehlgeschlagen(fehler);
+    };
 
     let ws;
     try {
@@ -1462,7 +1483,10 @@ export function verbinden({ ticket, ausweis, ursprungMuster = null, tabId = null
         if (!angelegt || !markeGilt(meineMarke)) {
           senden({ type: "disconnect", reason: "user_revoked" });
           if (neuerCode) serverWiderruf(neuerCode, ausweis).catch(() => {});
-          beenden(
+          /* `gekapptMelden`, nicht `beenden`: `erledigt` ist seit ein paar
+             Zeilen true, und `abbrechen` täte hier nichts mehr — das
+             Versprechen hinge für immer (NOTAUS-3). */
+          gekapptMelden(
             new NetzFehler(
               "gekappt",
               "Die Verbindung wurde beendet, während ich sie aufgebaut habe. Ich habe nichts aufgebaut."
@@ -1503,7 +1527,9 @@ export function verbinden({ ticket, ausweis, ursprungMuster = null, tabId = null
           await sitzungSchreiben(null);
           senden({ type: "disconnect", reason: "user_revoked" });
           if (neuerCode) serverWiderruf(neuerCode, ausweis).catch(() => {});
-          beenden(
+          /* Auch hier `gekapptMelden` statt `beenden` (NOTAUS-3): Der Weg
+             muss antworten, nicht noch einmal aufräumen. */
+          gekapptMelden(
             new NetzFehler(
               "gekappt",
               "Die Verbindung wurde beendet, während ich sie aufgebaut habe. Ich habe nichts aufgebaut."

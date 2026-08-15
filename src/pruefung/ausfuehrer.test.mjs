@@ -59,7 +59,12 @@ const {
 } = await import("../net/ausfuehrer.js");
 const { AGENTEN, MATRIX_ABLAGE } = await import("../net/matrix.js");
 const { BUCH_ABLAGE } = await import("../net/protokollbuch.js");
-const { schliessgrund } = await import("../net/link.js");
+/* `link.js` als ganzes Modul: Seit Befund RUF-1 ruft der Ausführer
+   `link.freigabeRufen` DIREKT — die Prüfsätze zum Freigaberuf messen deshalb
+   am echten Modulzustand (`freigabeSteht`) statt an einer Nachricht, die nie
+   einen Empfänger hatte. */
+const link = await import("../net/link.js");
+const { schliessgrund } = link;
 
 /* ------------------------------------------------------------------ *
  * Gemeinsames Gerüst
@@ -4784,18 +4789,38 @@ test("BRUECKE-2 — sieht niemand zu, wird der Mensch gerufen statt still abgesa
   assert.ok(ergebnis.error.message.includes("gerufen"),
     `die Absage sagt nicht, dass gerufen wurde: ${ergebnis.error.message}`);
 
+  /* Der Ruf ist seit RUF-1 die EINE Fassung aus `link.freigabeRufen` — direkt
+     gerufen, nicht per Nachricht erhofft. Zu erkennen an ihren Merkmalen: der
+     Kennung der Frage und `requireInteraction`, das die flüchtige Zweitfassung
+     des Ausführers nie trug. */
   const meldungen = spur.filter((e) => e.wohin === "notifications.create");
   assert.equal(meldungen.length, 1, "der Mensch wurde nicht gerufen");
+  assert.ok(String(meldungen[0].id).startsWith("smartrlink-freigabe-"),
+    `die Meldung kommt nicht aus link.freigabeRufen: ${JSON.stringify(meldungen[0].id)}`);
+  assert.equal(meldungen[0].angaben.requireInteraction, true,
+    "die Meldung ist flüchtig — das ist die alte Zweitfassung, nicht der Ruf aus link.js");
   assert.ok(meldungen[0].angaben.title.length > 0, "eine Meldung ohne Titel ist keine");
   assert.ok(meldungen[0].angaben.message.length > 0, "eine Meldung ohne Text ist keine");
 
-  /* Das Abzeichen gehört `link.js`; diese Datei bittet nur darum — und nimmt
-     die Bitte zurück, wenn die Frage vorbei ist. Ein Fragezeichen, das
-     stehenbleibt, ist beim dritten Mal keines mehr. */
-  const abzeichen = spur
-    .filter((e) => e.wohin === "panel" && e.nachricht.typ === "link:freigabe-wartet")
-    .map((e) => e.nachricht.an);
-  assert.deepEqual(abzeichen, [true, false], "die Bitte um das Abzeichen fehlt oder bleibt stehen");
+  /* Und der Ruf wird zurückgenommen, wenn die Frage vorbei ist: Die Meldung
+     wird weggeräumt, und im Modulzustand von `link.js` steht keine offene
+     Frage mehr. Ein Fragezeichen, das stehenbleibt, ist beim dritten Mal
+     keines mehr. */
+  assert.ok(
+    spur.some((e) => e.wohin === "notifications.clear" && e.id === meldungen[0].id),
+    "die Systemmeldung wird nach der Absage nicht weggeräumt"
+  );
+  assert.equal(link.freigabeSteht(), false,
+    "nach der Absage steht in link.js noch eine offene Frage");
+
+  /* Die tote Leitung ist weg (F4: EINE Fassung): Niemand sendet mehr
+     `link:freigabe-wartet` — eine Nachricht, auf die im ganzen Baum nie
+     jemand gehört hat. */
+  assert.equal(
+    spur.filter((e) => e.wohin === "panel" && e.nachricht.typ === "link:freigabe-wartet").length,
+    0,
+    "es wird weiter eine Nachricht ohne Empfänger gesendet"
+  );
 
   /* Die Gegenprobe: Ist die Seitenleiste offen, wird niemand angepiepst. Eine
      Systemmeldung bei jeder Frage wäre der schnellste Weg, sie abzuschalten. */
@@ -4910,4 +4935,157 @@ test("TEACH-8 — von einer Seite mit harter Klasse wird kein Bild aufgenommen",
   const gut = await rekorderBild(7, { name: "s2.webp", nr: 1, anlass: "user_request" });
   assert.equal(gut.ok, true, JSON.stringify(gut));
   assert.ok(spur.some((e) => e.wohin === "tabs.captureVisibleTab"), "es wurde gar nicht aufgenommen");
+});
+
+/* ------------------------------------------------------------------ *
+ * Nachabnahme vom 15.08.2026: RUF-1, WFRIST-1, AUTOMODUS-8
+ * ------------------------------------------------------------------ */
+
+test("RUF-1 — hat der Ruf selbst keinen Weg, heißt die Absage grant_unreachable", async () => {
+  /*
+   * Stufe 3 aus `link.js`, seit RUF-1 am Produktivweg erreichbar: Die
+   * Seitenleiste ist zu, UND der Ruf hat keinen Kanal — keine
+   * notifications-API, und ohne laufende Link-Sitzung auch kein Abzeichen.
+   * Vorher war dieser Code toter Bestand: `FREIGABE_UNERREICHBAR` hatte im
+   * ganzen Baum keinen Importeur, und der Agent bekam in beiden Lagen
+   * denselben Code. „Gefragt und keine Zustimmung" und „ich konnte niemanden
+   * fragen" sind zwei Aussagen (F4: entschieden an genau EINER Stelle).
+   */
+  const { chrome, spur } = attrappeSetzen({
+    tab: { ...TAB },
+    seiteAntwortet: seiteBedient,
+    panelAntwortet: null,
+    ablageLocal: { sa_workflows: [ABLAUF] },
+    ablageSession: modusAblage(7, "auto"),
+  });
+  delete chrome.notifications;
+  zaehlerNeu();
+  const ergebnis = await befehlAusfuehren(
+    { id: "ruf-3", cmd: "click", reason: "Ich klicke.", ...VOLLSTAENDIG.click },
+    AUTO
+  );
+  assert.equal(ergebnis.success, false);
+  assert.equal(ergebnis.error.code, link.FREIGABE_UNERREICHBAR,
+    `erwartet war der Code aus link.js: ${JSON.stringify(ergebnis.error)}`);
+  assert.equal(ergebnis.error.message, link.FREIGABE_UNERREICHBAR_TEXT,
+    "der Satz ist die EINE Fassung aus link.js, keine zweite daneben");
+  assert.equal(ergebnis.error.retryable, true, "die Absage bleibt heilbar: Seitenleiste öffnen, erneut senden");
+  assert.ok(!anDieSeite(spur).includes("overlay:klicken"), "es wurde trotzdem geklickt");
+});
+
+test("WFRIST-1 — läuft die Uhr des Ablaufs ab, wird gekappt, gewartet und nicht zur Wiederholung eingeladen", async () => {
+  /*
+   * Der gemessene Blocker: `run_workflow` antwortete nach seiner Frist mit
+   * `settle_timeout` und `retryable:true`, während der offene Schritt am
+   * MODUL-Not-Aus-Signal hing statt am äußeren Riegel — die verspätete
+   * Freigabe des Menschen führte ihn danach trotzdem aus, und `retryable`
+   * lud den Agenten ein, den ganzen Ablauf ab Schritt 1 noch einmal zu
+   * spielen (Doppelausführung nicht idempotenter Schritte).
+   *
+   * Die äußere Uhr wird für die Messung klein gedreht (3000 ms − 1500 ms
+   * Puffer = 1500 ms eigene Frist); die Mechanik ist dieselbe wie bei
+   * 120000 ms.
+   */
+  const alteFrist = BEFEHLE.run_workflow.frist;
+  BEFEHLE.run_workflow.frist = 3000;
+  try {
+    const wf = {
+      id: "wf_frist",
+      name: "Zwei Wechsel",
+      version: 1,
+      params: [],
+      steps: [
+        { type: "navigate", url: "https://geizhals.de/angebote", beschreibung: "die Angebote öffnen" },
+        { type: "navigate", url: "https://geizhals.de/deals", beschreibung: "die Deals öffnen" },
+      ],
+    };
+    let navFragen = 0;
+    const panel = (n) => {
+      if (n.typ !== "link:schritt-freigabe") return { ok: true };
+      if (n.cmd === "run_workflow") return { ja: true };
+      navFragen += 1;
+      if (navFragen === 1) return { ja: true };
+      /* Die zweite Freigabe kommt NACH der äußeren Uhr — der gemessene Fall:
+         Der Mensch bestätigt einen Schritt, dessen Ablauf längst beantwortet
+         ist. */
+      return new Promise((f) => setTimeout(() => f({ ja: true }), 2500));
+    };
+    const begonnen = Date.now();
+    const { ergebnis, spur } = await laufen(
+      { id: "wfrist-1", cmd: "run_workflow", reason: "Ich spiele den Ablauf ab.", workflowId: "wf_frist" },
+      {
+        sitzung: { ...SITZUNG, stufe: "write" },
+        ablageLocal: { sa_workflows: [wf] },
+        panel,
+      }
+    );
+    const updatesBeiAntwort = spur.filter((e) => e.wohin === "tabs.update").length;
+    assert.equal(ergebnis.success, false);
+    assert.equal(ergebnis.error.code, "settle_timeout", JSON.stringify(ergebnis.error || {}));
+    assert.notEqual(ergebnis.error.retryable, true,
+      "eine Wiederholung spielte den Ablauf ab Schritt 1 erneut — Doppelausführung");
+    assert.ok(Date.now() - begonnen < 3000,
+      "die Antwort kommt vor der Frist des Relays, nicht erst mit der verspäteten Freigabe");
+    assert.equal(updatesBeiAntwort, 1, "Vorbedingung: Schritt 1 lief, Schritt 2 stand noch offen");
+
+    /* Und jetzt die verspätete Freigabe: Der gekappte Schritt darf die Seite
+       danach NICHT mehr verändern. Vor der Reparatur stand hier ein zweites
+       `tabs.update`, ausgeführt NACH der settle_timeout-Antwort. */
+    await new Promise((f) => setTimeout(f, 3000));
+    const updatesDanach = spur.filter((e) => e.wohin === "tabs.update").length;
+    assert.equal(updatesDanach, updatesBeiAntwort,
+      "ein Schritt lief nach der Timeout-Antwort noch auf der Seite");
+  } finally {
+    BEFEHLE.run_workflow.frist = alteFrist;
+  }
+});
+
+test("AUTOMODUS-8 — die Agentenmatrix gilt auch für den Wirt, auf dem eine Weiterleitung landet", async () => {
+  /*
+   * Der Fund: `nachDemWechsel` prüfte Bereich, Sperrliste und harte Klassen
+   * der Landeadresse — die Agentenmatrix aber nicht. Die Vorprüfung misst nur
+   * die ANGEKÜNDIGTE Zieladresse. Gemessen: Sitzung im Modus `domains` mit
+   * {geizhals.de, fremd.de}, Matrix erlaubt dem Agenten nur geizhals.de;
+   * `navigate` auf geizhals.de mit Weiterleitung nach fremd.de lieferte den
+   * vollen Snapshot von fremd.de, obwohl `agentDarf` dort für jede Klasse
+   * false sagt.
+   */
+  const nurHier = matrixAblage({ agenten: { SMarTrCEO: { "geizhals.de": ["lesen", "navigieren"] } } });
+  const { ergebnis, spur } = await laufen(
+    { id: "a8-1", cmd: "navigate", url: "https://geizhals.de/angebote", reason: "Ich gehe dorthin.", agent: "SMarTrCEO" },
+    {
+      sitzung: ZWEI_WIRTE,
+      ablageSession: modusAblage(7, "auto"),
+      ablageLocal: { sa_workflows: [ABLAUF], ...nurHier },
+      umleitungNach: "https://fremd.de/seite",
+      panel: panelSagtJa,
+    }
+  );
+  assert.equal(ergebnis.success, false);
+  assert.equal(ergebnis.error.code, "agent_not_permitted", JSON.stringify(ergebnis.error || {}));
+  assert.equal(ergebnis.data, undefined, "die fremde Seite wurde trotzdem geliefert");
+  assert.ok(!anDieSeite(spur).includes("overlay:baum"), "die fremde Seite wurde trotzdem gelesen");
+  /* Und die Absage verrät die Adresse nicht — dieselbe Zusage wie bei der
+     Bereichswache: Wer sagt, WO der Tab jetzt steht, ist selbst das Leck. */
+  assert.ok(!JSON.stringify(ergebnis).includes("fremd"),
+    "die Absage nennt die Adresse, auf der der Tab gelandet ist");
+
+  /* Die Gegenprobe: Erlaubt die Matrix dem Agenten auch den Landewirt, läuft
+     dieselbe Weiterleitung durch. Ohne sie wäre der Satz auch über einer
+     Fassung grün, die nach jeder Weiterleitung grundsätzlich absagt. */
+  const beide = matrixAblage({
+    agenten: { SMarTrCEO: { "geizhals.de": ["lesen", "navigieren"], "fremd.de": ["lesen", "navigieren"] } },
+  });
+  const frei = await laufen(
+    { id: "a8-2", cmd: "navigate", url: "https://geizhals.de/angebote", reason: "Ich gehe dorthin.", agent: "SMarTrCEO" },
+    {
+      sitzung: ZWEI_WIRTE,
+      ablageSession: modusAblage(7, "auto"),
+      ablageLocal: { sa_workflows: [ABLAUF], ...beide },
+      umleitungNach: "https://fremd.de/seite",
+      panel: panelSagtJa,
+    }
+  );
+  assert.equal(frei.ergebnis.success, true, JSON.stringify(frei.ergebnis.error || {}));
+  assert.ok(frei.ergebnis.data.snapshot, "der freigeschaltete Wechsel liefert keine Wahrnehmung");
 });
