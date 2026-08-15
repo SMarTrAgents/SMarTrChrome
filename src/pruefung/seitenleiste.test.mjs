@@ -4461,37 +4461,91 @@ test("WB4 — Kommt kein Buch zurueck, gibt es eine Absage statt eines toten Kno
 });
 
 /* ------------------------------------------------------------------ *
- * BB — Beibringen: der Teach-Modus im Hauptlayout (15.08.2026)
+ * BB — Beibringen: Knopf in der Modus-Zeile, Inhalt im Popup-Dialog
+ * (15.08.2026, abends umgebaut nach Befund des Inhabers: die staendig
+ * sichtbare Karte der 0.6.1 machte die Leiste voll, das Gespraech war kaum
+ * noch zu finden)
  *
- * Der Auftrag des Inhabers: Aufzeichnen war nur ueber Menue und Werkbank
- * erreichbar; jetzt steht ein Einstieg unter dem Modus-Bereich. Die Zusagen,
- * die hier gemessen werden:
+ * Die Zusagen, die hier gemessen werden:
  *
- *  1. Der Einstieg ist WIRKLICH verdrahtet (die Lehre der 0.5.3: gebaut und
- *     nirgends eingebaut ist ein Blocker, keine Funktion).
- *  2. Keine zweite Logikfassung (Festlegung F4): Start und Ende laufen durch
+ *  1. Der Einstieg ist ein Knopf bei der Modus-Knopfreihe — AUSSERHALB der
+ *     radiogroup, denn er ist kein Modus — und WIRKLICH verdrahtet (die
+ *     Lehre der 0.5.3: gebaut und nirgends eingebaut ist ein Blocker).
+ *  2. Der Dialog traegt exakt den Inhalt der bisherigen Karte, mit den
+ *     Woertern und Schluesseln der Werkbank; staendig sichtbar ist er nicht.
+ *  3. Keine zweite Logikfassung (Festlegung F4): Start und Ende laufen durch
  *     die Funktionen der Werkbank, und `rekorder:start`/`rekorder:stop`
  *     stehen im ganzen panel.js an genau EINER Stelle.
- *  3. Beide Ansichten zeigen denselben Zustand aus derselben Quelle.
- *  4. Der Zustand steht als Wortlaut da, nicht nur als Farbe (WCAG 1.4.1).
- *  5. Waehrend einer laufenden Cloud-Sitzung gilt die Regel der Werkbank —
+ *  4. Alle Ansichten zeigen denselben Zustand aus derselben Quelle — auch
+ *     der Knopf selbst, wenn der Dialog zu ist (Punkt UND Wortlaut,
+ *     WCAG 1.4.1).
+ *  5. Fokusfuehrung wie am Menue; ein einzelnes Escape schliesst den Dialog,
+ *     ohne der Notbremse (Esc Esc) einen Schlag zu stehlen oder zu schenken.
+ *  6. Waehrend einer laufenden Cloud-Sitzung gilt die Regel der Werkbank —
  *     und die ist gemessen KEINE: werkbank.js, worker.js und rekorder.js
  *     halten den Rekorder nirgends an der Sitzung an, also tut es dieser
  *     Einstieg auch nicht.
  * ------------------------------------------------------------------ */
 
-test("BB1 — Der Einstieg steht im Hauptlayout, mit Zustand als Wortlaut und den Woertern der Werkbank", () => {
-  /* Unterhalb des Modus-Bereichs und VOR der Gespraechsflaeche — im
-     Hauptlayout, nicht in einer Karte, die erst jemand oeffnen muss. */
-  const modus = html.indexOf('id="modus-bereich"');
-  const beibringen = html.indexOf('id="beibringen-bereich"');
-  const flaeche = html.indexOf('id="flaeche"');
-  assert.ok(modus >= 0 && beibringen > modus, "der Einstieg steht unter dem Modus-Bereich");
-  assert.ok(beibringen < flaeche, "und vor der Gespraechsflaeche, also immer im Blick");
+test("BB1 — Der Einstieg ist ein Knopf in der Modus-Zeile, der Inhalt wohnt im Dialog und nicht mehr im Dauerlayout", () => {
+  /* Der Knopf steht IM Modus-Bereich, unmittelbar bei der Knopfreihe — aber
+     AUSSERHALB der radiogroup: Er ist kein Modus. Ein vierter role="radio"
+     waere eine Luege ueber die Gruppe, und die Pfeiltastenwahl des
+     Umschalters liefe in ihn hinein. */
+  const bereichAb = html.indexOf('<section id="modus-bereich"');
+  const bereichBis = html.indexOf("</section>", bereichAb);
+  const wahlAb = html.indexOf('id="modus-wahl"', bereichAb);
+  const wahlZu = html.indexOf("</div>", wahlAb);
+  const knopfAb = html.indexOf('id="beibringen-knopf"', bereichAb);
+  assert.ok(wahlAb > bereichAb && knopfAb > wahlAb && knopfAb < bereichBis,
+    "der Knopf steht im Modus-Bereich, unmittelbar bei der Knopfreihe");
+  assert.ok(wahlZu < knopfAb, "und AUSSERHALB der radiogroup, als eigener Knopf daneben");
+
+  const knopfTag = /<button id="beibringen-knopf"[^>]*>/.exec(html);
+  assert.ok(knopfTag, "der Einstieg ist ein echter <button>, keine Klickspanne");
+  assert.equal(TAG_IM_HTML.get("beibringen-knopf"), "button");
+  assert.ok(!/role=/.test(knopfTag[0]), "role=button bringt das Element selbst mit — und radio traegt er nie");
+  assert.match(knopfTag[0], /aria-haspopup="dialog"/, "der Knopf kuendigt den Dialog an");
+  assert.match(knopfTag[0], /aria-expanded="false"/, "und beginnt zu");
+  assert.match(knopfTag[0], /class="segment beibringen-knopf"/,
+    "dieselbe Optik und dieselbe 44-Pixel-Trefferflaeche wie die Segmentknoepfe (.segment)");
+
+  /* Der Knopf traegt seinen eigenen Zustand: Punkt (reine Zier) und ein Feld
+     fuer den Wortlaut — die Anzeige bei GESCHLOSSENEM Dialog (WCAG 1.4.1). */
+  const knopfBis = html.indexOf("</button>", knopfAb);
+  const knopfInnen = html.slice(knopfAb, knopfBis);
+  assert.match(knopfInnen, /class="beibringen-punkt" aria-hidden="true"/, "der Punkt am Knopf ist reine Zier");
+  assert.match(knopfInnen, /id="beibringen-knopf-stand"/, "und das Wortfeld ist da");
+  assert.ok(VERSTECKT_IM_HTML.has("beibringen-knopf-stand"), "es beginnt leer und verborgen");
+  /* Sein Wort kommt aus DEMSELBEN Schluessel wie der Dialogtitel, nur ueber
+     zusatztexteUebersetzen — ein data-i18n hier waere derselbe Schluessel
+     zweimal im HTML (Pruefsatz I1). */
+  assert.ok(!/id="beibringen-knopf-wort"[^>]*data-i18n/.test(html), "kein doppelter Schluessel im HTML");
+  const zusatz = abschnitt("function zusatztexteUebersetzen", "spracheAnwenden(document);");
+  assert.ok(zusatz.includes('t("werkbank_beibringen_titel", "Beibringen")'),
+    "der Knopf holt sein Wort aus dem Schluessel des Dialogtitels");
+
+  /* Die Karte der 0.6.1 steht nicht mehr staendig im Layout: Es gibt sie
+     nicht mehr, ihr Inhalt wohnt im Dialog — und der beginnt verborgen. */
+  assert.ok(!html.includes('id="beibringen-bereich"'), "die staendig sichtbare Karte ist weg");
+  assert.ok(VERSTECKT_IM_HTML.has("beibringen-dialog"), "der Dialog beginnt verborgen");
+  const dialogTag = /<section id="beibringen-dialog"[^>]*>/.exec(html);
+  assert.ok(dialogTag, "der Dialog fehlt");
+  assert.match(dialogTag[0], /role="dialog"/, "er sagt, was er ist");
+  assert.match(dialogTag[0], /aria-labelledby="beibringen-titel"/, "und traegt seinen Namen");
+
+  /* Der Dialog traegt EXAKT den Inhalt der bisherigen Karte: Titel,
+     Erklaersatz, Zustandszeile, beide Aufnahme-Knoepfe, Ergebniszeile, Weg
+     zur Werkbank — mit den Katalogschluesseln der Werkbank. */
+  const dialogAb = html.indexOf('<section id="beibringen-dialog"');
+  const dialogBis = html.indexOf("</section>", dialogAb);
+  const dialog = html.slice(dialogAb, dialogBis);
+  assert.match(dialog, /id="beibringen-titel"[^>]*data-i18n="werkbank_beibringen_titel"/, "der Titel");
+  assert.match(dialog, /data-i18n="werkbank_beibringen_hinweis"/, "der Erklaersatz");
 
   /* Der Aufnahmezustand ist Punkt UND Wortlaut (WCAG 1.4.1): Der Punkt ist
      fuer den Bildschirmleser unsichtbar, das Wort traegt die Aussage. */
-  const stand = /<p id="beibringen-stand"[^>]*>([\s\S]*?)<\/p>/.exec(html);
+  const stand = /<p id="beibringen-stand"[^>]*>([\s\S]*?)<\/p>/.exec(dialog);
   assert.ok(stand, "die Zustandszeile fehlt");
   assert.match(stand[1], /aria-hidden="true"/, "der Punkt ist reine Zier und als solche markiert");
   assert.match(stand[1], /id="beibringen-wort"[^>]*data-i18n="werkbank_aufnahme_aus"/,
@@ -4501,13 +4555,13 @@ test("BB1 — Der Einstieg steht im Hauptlayout, mit Zustand als Wortlaut und de
      ein Wortlaut. Und beide sind echte Knoepfe, keine Klickspannen. */
   assert.equal(TAG_IM_HTML.get("beibringen-start"), "button");
   assert.equal(TAG_IM_HTML.get("beibringen-stop"), "button");
-  assert.match(html, /id="beibringen-start"[^>]*data-i18n="werkbank_aufnahme_start"/);
-  assert.match(html, /id="beibringen-stop"[^>]*data-i18n="werkbank_aufnahme_stop"/);
+  assert.match(dialog, /id="beibringen-start"[^>]*data-i18n="werkbank_aufnahme_start"/);
+  assert.match(dialog, /id="beibringen-stop"[^>]*data-i18n="werkbank_aufnahme_stop"/);
 
   /* Die Ergebniszeile ist KEINE zweite Vorlesezone (F7): gesprochen wird ueber
      die Ansage. Und der Weg zur Werkbank erscheint erst, wenn dort wirklich
      ein Ablauf liegt — weggelassen, nicht ausgegraut. */
-  const ergebnis = /<p id="beibringen-ergebnis"[^>]*>/.exec(html);
+  const ergebnis = /<p id="beibringen-ergebnis"[^>]*>/.exec(dialog);
   assert.ok(ergebnis, "die Ergebniszeile fehlt");
   assert.ok(!/aria-live|role=/.test(ergebnis[0]), "keine zweite Vorlesezone neben der Ansage");
   assert.ok(VERSTECKT_IM_HTML.has("beibringen-ergebnis"), "die Ergebniszeile beginnt leer");
@@ -4525,6 +4579,9 @@ test("BB2 — Aufnahme starten laeuft durch die Werkbank, und beide Ansichten ze
   });
   t.after(p.aufraeumen);
 
+  /* Der Weg des Menschen: erst den Dialog oeffnen, dann starten. */
+  await p.klick("beibringen-knopf");
+  assert.equal(p.el("beibringen-dialog").hidden, false, "der Knopf oeffnet den Dialog");
   await p.klick("beibringen-start");
 
   /* Der Weg zum Dienst ist derselbe wie aus der Werkbank: dieselbe Nachricht,
@@ -4591,6 +4648,7 @@ test("BB3 — Aufnahme beenden speichert ueber die Werkbank, sagt wo der Ablauf 
   });
   t.after(p.aufraeumen);
 
+  await p.klick("beibringen-knopf");
   await p.klick("beibringen-start");
   await p.klick("beibringen-stop");
 
@@ -4620,13 +4678,13 @@ test("BB3 — Aufnahme beenden speichert ueber die Werkbank, sagt wo der Ablauf 
   await p.klick("beibringen-werkbank");
   assert.equal(p.el("app").dataset.state, "werkbank", "der Knopf oeffnet wirklich die Werkbank");
   assert.equal(p.el("werkbank").hidden, false);
-  /* In der Werkbank verschwindet der Einstieg: Dort stehen dieselben Knoepfe
-     mit demselben Zaehler, und zwei sichtbare aria-live-Zonen mit demselben
-     Satz waeren der Sprechblasen-Fund (F7) in neuer Gestalt. */
-  assert.equal(p.el("beibringen-bereich").hidden, true);
+  /* Beim Wechsel in die Werkbank geht der Dialog zu: Dort stehen dieselben
+     Knoepfe mit demselben Zaehler, und zwei sichtbare aria-live-Zonen mit
+     demselben Satz waeren der Sprechblasen-Fund (F7) in neuer Gestalt. */
+  assert.equal(p.el("beibringen-dialog").hidden, true, "der Dialog weicht der Werkbank");
 
   await p.klick("werkbank-zurueck");
-  assert.equal(p.el("beibringen-bereich").hidden, false, "zurueck im Hauptlayout steht er wieder da");
+  assert.equal(p.el("beibringen-knopf").hidden, false, "der Einstieg in der Modus-Zeile steht immer da");
 });
 
 test("BB4 — Absagen kommen woertlich aus dem Bestand, eine leere Aufnahme behauptet keinen Ablauf", async (t) => {
@@ -4640,6 +4698,7 @@ test("BB4 — Absagen kommen woertlich aus dem Bestand, eine leere Aufnahme beha
     workerAntworten: { "rekorder:stop": { ok: true, anzahl: 0, schritte: [] } },
   });
   t.after(leer.aufraeumen);
+  await leer.klick("beibringen-knopf");
   await leer.klick("beibringen-stop");
   assert.equal(leer.el("beibringen-ergebnis").textContent, "Die Aufnahme ist beendet, aufgezeichnet wurde nichts.");
   assert.equal(leer.el("beibringen-werkbank").hidden, true, "kein Weg zu einem Ablauf, den es nicht gibt");
@@ -4652,6 +4711,7 @@ test("BB4 — Absagen kommen woertlich aus dem Bestand, eine leere Aufnahme beha
     workerAntworten: { "rekorder:start": { ok: false, kennung: "kein_empfaenger", klartext: satz } },
   });
   t.after(absage.aufraeumen);
+  await absage.klick("beibringen-knopf");
   await absage.klick("beibringen-start");
   assert.equal(absage.el("beibringen-ergebnis").textContent, satz);
   assert.match(absage.el("beibringen-ergebnis").className, /absage/, "als Absage abgesetzt, nicht als Erfolg");
@@ -4662,6 +4722,7 @@ test("BB4 — Absagen kommen woertlich aus dem Bestand, eine leere Aufnahme beha
      eigene Absage `kein_dienst`, kein toter Knopf, keine Ausnahme. */
   const ohne = await panelStarten({});
   t.after(ohne.aufraeumen);
+  await ohne.klick("beibringen-knopf");
   await ohne.klick("beibringen-start");
   assert.equal(ohne.el("beibringen-ergebnis").textContent, "Aufzeichnen kann diese Fassung hier nicht.");
 });
@@ -4682,8 +4743,10 @@ test("BB5 — Waehrend einer laufenden Cloud-Sitzung gilt die Regel der Werkbank
 
   await p.sitzungHerstellen();
   assert.ok(p.zustand.sitzung, "Vorbedingung: es laeuft eine Sitzung");
-  assert.equal(p.el("beibringen-bereich").hidden, false, "der Einstieg bleibt auch jetzt stehen");
+  assert.equal(p.el("beibringen-knopf").hidden, false, "der Einstieg bleibt auch jetzt stehen");
 
+  await p.klick("beibringen-knopf");
+  assert.equal(p.el("beibringen-dialog").hidden, false, "und der Dialog geht auch jetzt auf");
   await p.klick("beibringen-start");
   assert.ok(p.anWorker().includes("rekorder:start"), "der Start geht durch, wie in der Werkbank");
   assert.equal(p.el("beibringen-stand").dataset.laeuft, "ja");
@@ -4706,6 +4769,112 @@ test("BB6 — Keine zweite Logikfassung: rekorder:start und rekorder:stop stehen
   assert.ok(starten.includes("griff.aufnahmeStarten()"), "Start laeuft ueber die Werkbank");
   const beenden = abschnitt("async function beibringenBeenden", "/* ---");
   assert.ok(beenden.includes("griff.aufnahmeBeenden()"), "Beenden laeuft ueber die Werkbank");
+});
+
+test("BB7 — Der Knopf oeffnet den Dialog, der Fokus wandert hinein und beim Schliessen auf den Knopf zurueck", async (t) => {
+  const p = await panelStarten();
+  t.after(p.aufraeumen);
+  /* Den Anfangswert von aria-expanded misst BB1 im HTML — die Nachbildung
+     hier kennt nur die Merkmale, die panel.js selbst setzt. */
+  assert.equal(p.el("beibringen-dialog").hidden, true, "Vorbedingung: der Dialog beginnt zu");
+
+  await p.klick("beibringen-knopf");
+  assert.equal(p.el("beibringen-dialog").hidden, false, "der Knopf oeffnet den Dialog");
+  assert.equal(p.el("beibringen-knopf").getAttribute("aria-expanded"), "true", "und sagt das auch");
+  /* Der Fokus steht auf der Ueberschrift — der Vorleser sagt damit zuerst,
+     WO man gelandet ist (dieselbe Regel wie bei den Karten, ueberschriftVon). */
+  assert.equal(p.fokus(), p.el("beibringen-titel"), "der Fokus wandert in den Dialog, auf die Ueberschrift");
+
+  /* Ein einzelnes Escape schliesst — und der Fokus kehrt auf den Knopf
+     zurueck, nicht auf body: Auf body bleibt der Vorleser stumm, und der
+     Mensch muesste sich neu durch die ganze Leiste tabben (Befund
+     10.08.2026, dieselbe Fuehrung wie am Menue). */
+  await p.fensterEreignis("keydown", { key: "Escape" });
+  assert.equal(p.el("beibringen-dialog").hidden, true, "ein einzelnes Escape schliesst den Dialog");
+  assert.equal(p.el("beibringen-knopf").getAttribute("aria-expanded"), "false");
+  assert.equal(p.fokus(), p.el("beibringen-knopf"), "der Fokus steht wieder auf dem Beibringen-Knopf");
+  assert.notEqual(p.fokus(), p.koerper, "und faellt nie auf body");
+
+  /* Der Knopf ist auch der Weg zu: Ein zweiter Druck schliesst, wie am
+     Menue-Knopf — samt Fokusrueckgabe. */
+  await p.klick("beibringen-knopf");
+  assert.equal(p.el("beibringen-dialog").hidden, false);
+  await p.klick("beibringen-knopf");
+  assert.equal(p.el("beibringen-dialog").hidden, true, "derselbe Knopf schliesst wieder");
+  assert.equal(p.fokus(), p.el("beibringen-knopf"));
+});
+
+test("BB8 — Das Dialog-Escape laesst die Notbremse ganz: es stiehlt ihr keinen Schlag und schenkt ihr keinen", async (t) => {
+  const p = await panelStarten();
+  t.after(p.aufraeumen);
+  await p.sitzungHerstellen();
+  assert.ok(p.zustand.sitzung, "Vorbedingung: es laeuft eine Sitzung");
+  await p.klick("beibringen-knopf");
+  assert.equal(p.el("beibringen-dialog").hidden, false, "Vorbedingung: der Dialog ist offen");
+  p.alleSpurenLeeren();
+
+  /* Schlag 1 schliesst NUR den Dialog. Die Sitzung lebt weiter. */
+  await p.fensterEreignis("keydown", { key: "Escape" });
+  assert.equal(p.el("beibringen-dialog").hidden, true, "das erste Escape schliesst den Dialog");
+  assert.ok(p.zustand.sitzung, "und beendet keine Sitzung");
+  assert.ok(!p.anWorker().includes("link:notaus"), "kein Not-Aus beim blossen Schliessen");
+
+  /* Schlag 2, unmittelbar danach: Wuerde das Dialog-Escape als erster Schlag
+     der Notbremse mitgezaehlt, feuerte JETZT der Not-Aus — ein Stopp, um den
+     niemand gebeten hat. */
+  await p.fensterEreignis("keydown", { key: "Escape" });
+  assert.ok(p.zustand.sitzung, "das Schliessen des Dialogs zaehlt nicht als erster Schlag der Notbremse");
+  assert.ok(!p.anWorker().includes("link:notaus"));
+
+  /* Schlag 3: Jetzt sind es zwei ECHTE Schlaege kurz hintereinander — die
+     Notbremse funktioniert nach dem Dialog genau wie vorher (N3). Ein
+     Dialog-Escape, das sie verschluckte, liesse diesen Schlag verpuffen. */
+  await p.fensterEreignis("keydown", { key: "Escape" });
+  assert.equal(p.zustand.sitzung, null, "Esc Esc bleibt die Notbremse");
+  const reihe = p.anWorker();
+  assert.ok(reihe.indexOf("link:notaus") < reihe.indexOf("link:trennen"), "auf demselben Weg wie der Knopf");
+  assert.equal(p.anWorkerVoll().find((n) => n.typ === "link:notaus").grund, "esc");
+});
+
+test("BB9 — Laeuft eine Aufnahme, zeigt der Knopf sie auch bei geschlossenem Dialog: Punkt UND Wortlaut", async (t) => {
+  attrappeSetzen({ panelAntwortet: null });
+  const echt = await import("../panel/werkbank.js");
+  const p = await panelStarten({
+    werkbankModul: echt,
+    workerAntworten: { "rekorder:start": { ok: true, anzahl: 0 } },
+  });
+  t.after(p.aufraeumen);
+
+  /* Vor der Aufnahme behauptet der Knopf keine: weggelassen, nicht
+     ausgegraut. */
+  assert.notEqual(p.el("beibringen-knopf").dataset.laeuft, "ja");
+  assert.equal(p.el("beibringen-knopf-stand").hidden, true, "kein Wortfeld ohne Aufnahme");
+
+  await p.klick("beibringen-knopf");
+  await p.klick("beibringen-start");
+  /* Dialog zu — die Aufnahme laeuft weiter, und der Knopf ist jetzt die
+     einzige sichtbare Stelle dafuer (WCAG 1.4.1: Punkt als Zweitsignal, das
+     Wort traegt die Aussage). */
+  await p.fensterEreignis("keydown", { key: "Escape" });
+  assert.equal(p.el("beibringen-dialog").hidden, true, "Vorbedingung: der Dialog ist zu");
+  assert.equal(p.el("beibringen-knopf").dataset.laeuft, "ja", "der Punkt am Knopf sagt: es laeuft");
+  assert.equal(p.el("beibringen-knopf-stand").hidden, false);
+  assert.equal(p.el("beibringen-knopf-stand").textContent, "Aufnahme läuft, 0 Schritte.",
+    "und der Wortlaut steht daneben, nicht nur Farbe");
+
+  /* `rekorder:stand` aus dem Tab zieht den Knopf mit nach — derselbe
+     Empfaenger, EINE Quelle fuer alle Ansichten (F4). */
+  p.melden({ typ: "rekorder:stand", anzahl: 4, laeuft: true });
+  assert.equal(p.el("beibringen-knopf-stand").textContent, "Aufnahme läuft, 4 Schritte.");
+  assert.equal(p.el("beibringen-wort").textContent, "Aufnahme läuft, 4 Schritte.",
+    "der Dialog traegt denselben Stand fuer das naechste Oeffnen");
+
+  /* Endet die Aufnahme, verschwindet die Anzeige am Knopf restlos: „Aufnahme
+     laeuft" neben einem stillen Punkt waere eine Falschaussage. */
+  p.melden({ typ: "rekorder:stand", anzahl: 0, laeuft: false });
+  assert.notEqual(p.el("beibringen-knopf").dataset.laeuft, "ja");
+  assert.equal(p.el("beibringen-knopf-stand").hidden, true);
+  assert.equal(p.el("beibringen-knopf-stand").textContent, "", "kein alter Wortlaut bleibt am Knopf stehen");
 });
 
 /* ------------------------------------------------------------------ *

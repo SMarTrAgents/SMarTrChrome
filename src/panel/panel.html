@@ -82,7 +82,7 @@
         <span class="haken" aria-hidden="true"></span> <span data-i18n="kopf_menue_beenden">Verbindung beenden</span>
       </button>
 
-      <p class="menue-fuss">SMarTrChrome 0.6.1</p>
+      <p class="menue-fuss">SMarTrChrome 0.6.2</p>
     </div>
 
     <!-- Läuft eine Cloud-Sitzung, steht das hier, und zwar durchgehend
@@ -176,42 +176,72 @@
     -->
     <section id="modus-bereich" class="modus-bereich">
       <h2 id="modus-titel" class="modus-titel" data-i18n="modus_titel">Wie selbständig soll ich arbeiten?</h2>
-      <div id="modus-wahl" class="segmentwahl" role="radiogroup" aria-labelledby="modus-titel">
-        <button id="modus-manual" class="segment" type="button" role="radio" aria-checked="false"
-                tabindex="-1" data-i18n="modus_manual">Jeder Schritt einzeln</button>
-        <button id="modus-assist" class="segment" type="button" role="radio" aria-checked="true"
-                tabindex="0" data-i18n="modus_assist">Mitdenken</button>
-        <button id="modus-auto" class="segment" type="button" role="radio" aria-checked="false"
-                tabindex="-1" data-i18n="modus_auto">Selbständig</button>
+      <!-- Die Modus-Zeile trägt zwei Dinge nebeneinander: die radiogroup mit
+           den drei Stufen und den Beibringen-Knopf. Der Knopf steht bewusst
+           AUSSERHALB der Gruppe und ohne role="radio": Er ist kein Modus, er
+           öffnet einen Dialog — ein vierter „Radio" wäre eine Lüge über die
+           Gruppe, und die Pfeiltastenwahl des Umschalters liefe hinein.
+
+           Sein Wort kommt über zusatztexteUebersetzen (panel.js) aus
+           demselben Schlüssel wie der Dialogtitel (werkbank_beibringen_titel):
+           EIN Wort, zwei Ansichten. Ein data-i18n hier wäre derselbe
+           Schlüssel zweimal im HTML, und Prüfsatz I1 verlangt zu Recht, dass
+           jeder Schlüssel dort nur einmal steht.
+
+           Läuft eine Aufnahme, zeigt der Knopf sie selbst: roter Punkt UND
+           Wortlaut im Feld daneben (beibringenStandZeigen) — auch bei
+           geschlossenem Dialog ist Farbe nie das einzige Signal (WCAG 1.4.1).
+           Das Feld ist KEINE Vorlesezone: gesprochen wird über die Ansage
+           und die Zustandszeile im offenen Dialog, eine dritte Zone wäre der
+           Sprechblasen-Fund (F7) in neuer Gestalt. -->
+      <div class="modus-zeile">
+        <div id="modus-wahl" class="segmentwahl" role="radiogroup" aria-labelledby="modus-titel">
+          <button id="modus-manual" class="segment" type="button" role="radio" aria-checked="false"
+                  tabindex="-1" data-i18n="modus_manual">Jeder Schritt einzeln</button>
+          <button id="modus-assist" class="segment" type="button" role="radio" aria-checked="true"
+                  tabindex="0" data-i18n="modus_assist">Mitdenken</button>
+          <button id="modus-auto" class="segment" type="button" role="radio" aria-checked="false"
+                  tabindex="-1" data-i18n="modus_auto">Selbständig</button>
+        </div>
+        <button id="beibringen-knopf" class="segment beibringen-knopf" type="button"
+                aria-haspopup="dialog" aria-expanded="false" aria-controls="beibringen-dialog">
+          <span class="beibringen-punkt" aria-hidden="true"></span>
+          <span id="beibringen-knopf-wort">Beibringen</span>
+          <span id="beibringen-knopf-stand" class="beibringen-knopf-stand" hidden></span>
+        </button>
       </div>
       <p id="modus-auskunft" class="modus-auskunft" data-i18n="modus_assist_auskunft"></p>
       <p id="modus-riegel" class="modus-riegel" data-i18n="modus_riegel"></p>
     </section>
 
     <!--
-      Beibringen — der sichtbare Einstieg in den Teach-Modus (Vertrag §7.2).
+      Beibringen — der Teach-Modus als Popup-Dialog (Vertrag §7.2).
 
-      Befund Inhaber 15.08.2026: Aufzeichnen war nur über Menü und Werkbank
-      erreichbar, also hinter zwei Klicks versteckt, und wer die Leiste zum
-      ersten Mal sieht, findet den Weg nicht. Der Einstieg steht deshalb hier,
-      unterhalb des Modus-Bereichs, im Hauptlayout.
+      Befund Inhaber 15.08.2026 abends: Die Karte der 0.6.1 stand ständig im
+      Hauptlayout und machte die Leiste voll — das Gespräch war kaum noch zu
+      finden. Der Einstieg ist jetzt der Knopf in der Modus-Zeile; dieser
+      Dialog trägt den Inhalt der Karte unverändert und öffnet sich nur auf
+      Wunsch (beibringenDialogOeffnen in panel.js, Fokusführung wie am Menü).
 
-      Er ist eine ZWEITE ANSICHT derselben Bedienung, keine zweite Logik (F4):
-      Die Knöpfe rufen über werkbankGriffHolen() in panel.js exakt die
-      Funktionen der Werkbank (aufnahmeStarten, aufnahmeBeenden), und der
-      Zähler kommt aus derselben Quelle wie dort (`rekorder:stand` und die
-      Antworten der Dienste). Eine Sperre während einer laufenden
+      Er ist weiterhin eine ZWEITE ANSICHT derselben Bedienung, keine zweite
+      Logik (F4): Die Knöpfe rufen über werkbankGriffHolen() in panel.js
+      exakt die Funktionen der Werkbank (aufnahmeStarten, aufnahmeBeenden),
+      und der Zähler kommt aus derselben Quelle wie dort (`rekorder:stand`
+      und die Antworten der Dienste). Eine Sperre während einer laufenden
       Cloud-Sitzung gibt es hier NICHT, weil die Werkbank keine hat — geprüft
       am 15.08.2026 in werkbank.js, worker.js und rekorder.js: Der Rekorder
       wird dort nirgends an der Sitzung gemessen.
 
       Der Aufnahmezustand steht als Punkt UND Wortlaut da (WCAG 1.4.1): Farbe
-      ist nie das einzige Signal. aria-live="polite" wie am Zähler der
-      Werkbank; doppelt spricht dabei nichts, weil setzeZustand diese Karte
-      ausblendet, solange die Werkbank offen ist — zwei sichtbare Vorlesezonen
-      mit demselben Satz wären der Sprechblasen-Fund (F7) in neuer Gestalt.
+      ist nie das einzige Signal. aria-live="polite" nur an der Zustandszeile
+      HIER: Ist der Dialog zu, ist die Zeile aus dem Baum, und der Knopf in
+      der Modus-Zeile zeigt den Stand sichtbar, aber stumm. Öffnet die
+      Werkbank, geht der Dialog zu (setzeZustand): zwei sichtbare
+      aria-live-Zonen mit demselben Satz wären der Sprechblasen-Fund (F7)
+      in neuer Gestalt.
     -->
-    <section id="beibringen-bereich" class="beibringen-bereich" aria-labelledby="beibringen-titel">
+    <section id="beibringen-dialog" class="karte beibringen-dialog" role="dialog"
+             aria-labelledby="beibringen-titel" hidden>
       <h2 id="beibringen-titel" class="beibringen-titel" data-i18n="werkbank_beibringen_titel">Beibringen</h2>
       <p class="beibringen-hinweis" data-i18n="werkbank_beibringen_hinweis">Mach die Arbeit einmal selbst vor. Ich schreibe die Schritte mit, und daraus entsteht ein Ablauf.</p>
       <p id="beibringen-stand" class="beibringen-stand" data-laeuft="nein" aria-live="polite">
@@ -230,7 +260,7 @@
       <p id="beibringen-ergebnis" class="beibringen-ergebnis" hidden></p>
       <button id="beibringen-werkbank" class="chip vorschlag beibringen-weg" type="button" hidden
               data-i18n="werkbank_beibringen_weg">Ablauf in der Werkbank ansehen</button>
-    </section>
+    </section><!-- /#beibringen-dialog -->
 
     <!-- Der Beispielauftrag gehört zur laufenden Sitzung, nicht zum
          Leerzustand. Bis 0.4.0 stand er in #leer und war deshalb nie zu

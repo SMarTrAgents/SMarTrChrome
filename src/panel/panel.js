@@ -113,6 +113,13 @@ function merkmaleUebersetzen() {
 function zusatztexteUebersetzen() {
   const stark = document.querySelector("#dialog-mehr .geltung strong");
   if (stark) stark.textContent = t("dialog_geltung_stark", "Nur dieser eine Tab");
+  /* Der Beibringen-Knopf in der Modus-Zeile teilt seinen Schlüssel mit dem
+     Dialogtitel: EIN Wort, zwei Ansichten. Ein data-i18n am Knopf wäre
+     derselbe Schlüssel zweimal in panel.html, und Prüfsatz I1 (A-PANEL)
+     verlangt zu Recht, dass jeder Schlüssel dort nur einmal steht — also
+     holt der Knopf sein Wort hier, aus derselben Quelle. */
+  const knopfWort = $("beibringen-knopf-wort");
+  if (knopfWort) knopfWort.textContent = t("werkbank_beibringen_titel", "Beibringen");
 }
 
 spracheAnwenden(document);
@@ -355,13 +362,13 @@ function setzeZustand(name) {
    * nicht über einen zweiten Antrag.
    */
   $("startseite").hidden = !(name === "bereit" || name === "aktiv");
-  /* Der Beibringen-Einstieg weicht genau EINER Ansicht: der Werkbank selbst.
+  /* Der Beibringen-Dialog weicht genau EINER Ansicht: der Werkbank selbst.
      Dort stehen dieselben Knöpfe mit demselben Zähler, und zwei sichtbare
      aria-live-Zonen mit demselben Satz würden doppelt vorgelesen — der
-     Sprechblasen-Fund (F7) in neuer Gestalt. In jedem anderen Zustand bleibt
-     der Einstieg stehen, damit eine laufende Aufnahme von hier aus beendet
-     werden kann. */
-  $("beibringen-bereich").hidden = name === "werkbank";
+     Sprechblasen-Fund (F7) in neuer Gestalt. Der KNOPF in der Modus-Zeile
+     bleibt in jedem Zustand stehen; läuft eine Aufnahme, zeigt er das selbst
+     (beibringenStandZeigen), damit sie von überall beendet werden kann. */
+  if (name === "werkbank") beibringenDialogOeffnen(false);
   /* Der Beispielauftrag wohnte bis 0.4.0 in #leer und war damit nie zu sehen:
      sitzungAnzeigen() blendet ihn ein und schaltet unmittelbar danach auf
      `aktiv`, wo #leer verschwindet. Jetzt steht er neben der Sitzungsleiste
@@ -3224,13 +3231,14 @@ async function buchAusgeben() {
 }
 
 /* ------------------------------------------------------------------ *
- * Beibringen — der Teach-Modus im Hauptlayout (Vertrag §7.2)
+ * Beibringen — der Teach-Modus als Knopf und Popup-Dialog (Vertrag §7.2)
  *
- * Zwei Knöpfe und ein Zustand, mehr nicht. Die Logik wohnt NICHT hier
- * (Festlegung F4): Start und Ende laufen durch die Funktionen der Werkbank
- * (werkbankGriffHolen → aufnahmeStarten/aufnahmeBeenden), und dort durch
- * dieselbe Prüfung wie jeder eingelesene Ablauf. Hier steht nur die zweite
- * Ansicht desselben Zustands.
+ * Ein Knopf in der Modus-Zeile, ein Dialog mit zwei Knöpfen und einem
+ * Zustand, mehr nicht. Die Logik wohnt NICHT hier (Festlegung F4): Start und
+ * Ende laufen durch die Funktionen der Werkbank (werkbankGriffHolen →
+ * aufnahmeStarten/aufnahmeBeenden), und dort durch dieselbe Prüfung wie
+ * jeder eingelesene Ablauf. Hier steht nur die zweite Ansicht desselben
+ * Zustands.
  *
  * Eine Sperre während einer laufenden Cloud-Sitzung gibt es hier keine, und
  * das ist gemessen, nicht vergessen (15.08.2026): Weder die Werkbank noch
@@ -3240,24 +3248,58 @@ async function buchAusgeben() {
  * ------------------------------------------------------------------ */
 
 /**
+ * Den Beibringen-Dialog öffnen oder schließen — dieselbe Fokusführung wie am
+ * Menü (menueOeffnen): Beim Schließen wandert der Fokus zurück auf den
+ * Knopf, BEVOR der Dialog versteckt wird (ein verstecktes Element kann ihn
+ * nicht halten, er fiele auf `body`, und dort bleibt der Vorleser stumm).
+ * Beim Öffnen wandert er hinein auf die Überschrift, damit zuerst gesagt
+ * wird, WO man gelandet ist.
+ */
+function beibringenDialogOeffnen(offen) {
+  const dialog = $("beibringen-dialog");
+  if (!offen && dialog.contains(document.activeElement)) $("beibringen-knopf").focus();
+  dialog.hidden = !offen;
+  $("beibringen-knopf").setAttribute("aria-expanded", String(offen));
+  if (offen) fokusHin(ueberschriftVon(dialog));
+}
+
+/**
  * Wie die Aufnahme gerade steht — Punkt UND Wortlaut (WCAG 1.4.1).
  *
  * Dieselben Katalogschlüssel wie am Zähler der Werkbank
  * (werkbank.js, aufnahmeStandSetzen): zwei Ansichten, ein Wortlaut.
+ *
+ * Nachgezogen wird IMMER beides, die Zustandszeile im Dialog und der Knopf
+ * in der Modus-Zeile: Läuft eine Aufnahme bei geschlossenem Dialog, ist der
+ * Knopf die einzige sichtbare Stelle dafür — roter Punkt als Zweitsignal,
+ * das Wort trägt die Aussage. Stumm bleibt das Feld am Knopf absichtlich:
+ * Gesprochen wird über die Ansage und die aria-live-Zeile im offenen
+ * Dialog, eine dritte Vorlesezone wäre der Sprechblasen-Fund (F7).
  */
 function beibringenStandZeigen({ anzahl = 0, laeuft = false } = {}) {
   const stand = $("beibringen-stand");
   const wort = $("beibringen-wort");
+  const knopf = $("beibringen-knopf");
+  const knopfStand = $("beibringen-knopf-stand");
   const zahl = Number.isFinite(Number(anzahl)) ? Math.max(0, Math.floor(Number(anzahl))) : 0;
   stand.dataset.laeuft = laeuft ? "ja" : "nein";
+  knopf.dataset.laeuft = laeuft ? "ja" : "nein";
   if (laeuft) {
     wort.removeAttribute("data-i18n");
-    wort.textContent = zahl === 1
+    const satz = zahl === 1
       ? t("aufnahme_laeuft_einer", "Aufnahme läuft, 1 Schritt.")
       : t("aufnahme_laeuft_viele", "Aufnahme läuft, $1 Schritte.", String(zahl));
+    wort.textContent = satz;
+    knopfStand.textContent = satz;
+    knopfStand.hidden = false;
   } else {
     wort.setAttribute("data-i18n", "werkbank_aufnahme_aus");
     wort.textContent = t("werkbank_aufnahme_aus", "Es läuft keine Aufnahme.");
+    /* Kein alter Wortlaut bleibt am Knopf stehen: „Aufnahme läuft" neben
+       einem grauen Punkt wäre eine Falschaussage. Weggelassen, nicht
+       ausgegraut. */
+    knopfStand.textContent = "";
+    knopfStand.hidden = true;
   }
   return { anzahl: zahl, laeuft: laeuft === true };
 }
@@ -3369,8 +3411,11 @@ $("menue-buch").addEventListener("click", () => {
   menueOeffnen(false);
   return buchOeffnen();
 });
-/* Der Teach-Modus im Hauptlayout. Die Rueckgabe wird durchgereicht wie bei
-   den Menuepunkten darueber: Wer drueckt, wartet auf ein Ergebnis. */
+/* Der Teach-Modus: Der Knopf in der Modus-Zeile öffnet und schließt den
+   Dialog, wie der Menü-Knopf das Menü. Die Rueckgabe der Aufnahme-Knöpfe
+   wird durchgereicht wie bei den Menuepunkten darueber: Wer drueckt, wartet
+   auf ein Ergebnis. */
+$("beibringen-knopf").addEventListener("click", () => beibringenDialogOeffnen($("beibringen-dialog").hidden));
 $("beibringen-start").addEventListener("click", beibringenStarten);
 $("beibringen-stop").addEventListener("click", beibringenBeenden);
 $("beibringen-werkbank").addEventListener("click", () => werkbankOeffnen());
@@ -3555,6 +3600,16 @@ $("menue-knopf").addEventListener("click", () => menueOeffnen($("menue").hidden)
 document.addEventListener("click", (e) => {
   if (!$("menue").hidden && !e.target.closest("#menue") && !e.target.closest("#menue-knopf")) {
     menueOeffnen(false);
+  }
+  /* Der Beibringen-Dialog schließt auf demselben Weg wie das Menü: Ein Klick
+     irgendwo anders heißt, der Mensch ist hier fertig. Die Aufnahme läuft
+     davon unberührt weiter — ihren Stand zeigt der Knopf. */
+  if (
+    !$("beibringen-dialog").hidden &&
+    !e.target.closest("#beibringen-dialog") &&
+    !e.target.closest("#beibringen-knopf")
+  ) {
+    beibringenDialogOeffnen(false);
   }
 });
 for (const b of document.querySelectorAll("[data-vorlesen]")) {
@@ -4126,6 +4181,16 @@ window.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (!$("menue").hidden) {
     menueOeffnen(false);
+    return;
+  }
+  /* Ein einzelnes Escape schließt den Beibringen-Dialog — und zählt dabei
+     ausdrücklich NICHT als Schlag der Notbremse: `letztesEsc` bleibt
+     unberührt, genau wie beim Menü darüber. Die Notbremse verlangt danach
+     weiterhin ihre zwei eigenen Schläge (Prüfsatz BB8). Ein Dialog, der den
+     ersten Schlag schluckte, machte aus Esc Esc drei Schläge; einer, der ihn
+     mitbrächte, stoppte die Sitzung beim bloßen Schließen. */
+  if (!$("beibringen-dialog").hidden) {
+    beibringenDialogOeffnen(false);
     return;
   }
   const jetzt = performance.now();

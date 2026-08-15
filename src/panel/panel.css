@@ -286,11 +286,34 @@ body {
 
 /* ---------------- Beibringen (Teach-Modus) ---------------- */
 
-.beibringen-bereich {
+/* Die Modus-Zeile: links die drei Stufen, rechts der Beibringen-Knopf. */
+.modus-zeile { display: flex; align-items: stretch; gap: 4px; }
+.modus-zeile .segmentwahl { flex: 1 1 auto; min-width: 0; }
+
+/* Der Knopf trägt die Optik der Segmentknöpfe (.segment: 44 px, Pillenform,
+   dieselbe Schrift), steht aber AUSSERHALB der radiogroup — er ist kein
+   Modus, er öffnet einen Dialog. Der eigene Pillenrahmen macht ihn bündig
+   mit der eingerahmten Gruppe daneben. */
+.beibringen-knopf {
   flex: 0 0 auto;
-  display: grid; gap: 4px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--rand);
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 2px 12px;
+  border: 1px solid var(--rand); border-radius: 999px;
+}
+.beibringen-knopf .beibringen-punkt { display: none; }
+/* Läuft eine Aufnahme, zeigt der Knopf sie auch bei geschlossenem Dialog:
+   roter Punkt UND Wortlaut im Feld daneben (panel.js, beibringenStandZeigen).
+   Farbe ist nie das einzige Signal (WCAG 1.4.1). */
+.beibringen-knopf[data-laeuft="ja"] { color: var(--text); border-color: var(--rot); }
+.beibringen-knopf[data-laeuft="ja"] .beibringen-punkt { display: inline-block; background: var(--rot); }
+.beibringen-knopf-stand { font-size: 13px; }
+
+/* Der Dialog: eine Karte über der Fläche, im Stil des Menüs — Schatten und
+   z-Ebene sagen „das liegt obenauf und geht wieder zu". */
+.beibringen-dialog {
+  position: fixed; left: 12px; right: 12px; top: 64px; z-index: 30;
+  max-height: calc(100% - 88px); overflow-y: auto;
+  box-shadow: 0 8px 24px rgba(0,0,0,.6);
 }
 .beibringen-titel { font-size: 15px; color: var(--leise); font-weight: 600; }
 .beibringen-hinweis { margin: 0; font-size: 14px; color: var(--leise); line-height: 1.4; }
@@ -306,7 +329,7 @@ body {
    „Fehler" — dieselbe Bedeutung wie das Zeichen ● im Tab (rekorder.js). */
 .beibringen-stand[data-laeuft="ja"] { color: var(--text); }
 .beibringen-stand[data-laeuft="ja"] .beibringen-punkt { background: var(--rot); }
-.beibringen-bereich .knopfreihe button { flex: 0 1 auto; }
+.beibringen-dialog .knopfreihe button { flex: 0 1 auto; }
 /* Das Ergebnis des letzten Beendens: ruhig wie der Modus-Riegel, denn ein
    fertiger Ablauf ist kein Alarm. Eine Absage wird gelb abgesetzt, nicht rot —
    „auf dieser Seite geht es nicht" ist eine Regel, kein Defekt. */
@@ -323,7 +346,8 @@ body {
 }
 .beibringen-weg { margin: 0; }
 @media (prefers-reduced-motion: no-preference) {
-  .beibringen-stand[data-laeuft="ja"] .beibringen-punkt { animation: pulsen 2.4s ease-in-out infinite; }
+  .beibringen-stand[data-laeuft="ja"] .beibringen-punkt,
+  .beibringen-knopf[data-laeuft="ja"] .beibringen-punkt { animation: pulsen 2.4s ease-in-out infinite; }
 }
 
 /* ---------------- Tab-Liste ---------------- */

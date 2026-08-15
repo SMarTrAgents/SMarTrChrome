@@ -5,6 +5,41 @@ Fassung ist **Was nicht geht**. Er steht hier und nicht in der Ankündigung.
 
 ---
 
+## 0.6.2, 15.08.2026 — Beibringen als Knopf, das Panel wird wieder schlank
+
+Rückmeldung des Inhabers zur 0.6.1, am selben Tag umgesetzt: Das Panel war zu
+vollgepackt, der Chat kaum zu finden. Ab jetzt gilt als Abnahmekriterium für
+jede Panel-Änderung: **Das Chat-Eingabefeld bleibt immer sichtbar, ohne
+Bildlauf, in jedem Zustand.**
+
+### Geändert
+
+- **Die Beibringen-Karte ist aus dem Dauerlayout verschwunden.** Beibringen
+  ist jetzt ein Knopf in der Modus-Zeile, gleiche Optik wie die Modusknöpfe,
+  aber bewusst ausserhalb der Auswahlgruppe (er ist kein Modus). Ein Klick
+  öffnet einen Dialog mit exakt dem bisherigen Karteninhalt: Zustand als
+  Punkt UND Wortlaut, Aufnahme starten und beenden, Ergebnis, Weg in die
+  Werkbank.
+- **Der Aufnahmezustand bleibt bei geschlossenem Dialog sichtbar** — am Knopf
+  selbst, als Wortlaut, nicht nur als Farbe.
+- **Ein einzelnes Escape schliesst nur den Dialog.** Die Notbremse Esc Esc
+  bleibt unangetastet: Der Dialog-Escape stiehlt ihr keinen Schlag und
+  schenkt ihr keinen — beides einzeln gemessen.
+- Der Fokus wandert beim Öffnen in den Dialog und beim Schliessen zurück auf
+  den Knopf; die Verdrahtung bleibt die eine der Werkbank (kein zweiter
+  Sender, per Prüfsatz erzwungen).
+
+### Prüfung
+
+963 Prüfsätze, 963 grün, gemessen am 15.08.2026. Die drei neuen
+(Fokusführung, Escape gegen Notbremse, Knopf-Zustandsanzeige) sind zweimal
+gemessen, grün am Bau und rot am probeweise zurückgedrehten Bau, dazu eine
+unabhängige Nachmessung mit eigenen Mutationen. Der Handlauf im echten
+Chrome steht aus, insbesondere die Optik der Modus-Zeile bei schmaler Leiste
+und die feste Position des Dialogs.
+
+---
+
 ## 0.6.1, 15.08.2026 — Beibringen im Hauptlayout, SMarTrBrowser auf der Liste
 
 ### Neu
