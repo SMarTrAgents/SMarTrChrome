@@ -280,7 +280,9 @@ nicht und kostet nur Robustheit.
 
 **Festlegung:** Die Leerlaufkappung läuft immer, aber `idle_limit` ist auf der
 Altschiene `0` (= aus) und auf der Ticketschiene der Wert aus dem Ticket
-(Vorgabe **180 s**). `CONNECT_IDLE_ENFORCE` entfällt.
+(Vorgabe **600 s**, am 05.08.2026 vom Inhaber von 180 s angehoben, nachdem die
+Frist eine laufende Sitzung nach 182 s beendet hatte, siehe
+`PLAN-VERBESSERUNGEN-20260805.md`). `CONNECT_IDLE_ENFORCE` entfällt.
 
 **Warum:** Der Desktop hält die Leitung mit einem WS-Protokoll-Ping wach, der
 keine Anwendungstätigkeit erzeugt — eine scharfe Kappung würde ausgerechnet den
@@ -288,7 +290,8 @@ produktiven Client trennen (`app.py:465-477`); mit `idle_limit = 0` für die
 Altschiene ist er sicher und die neue Schiene trotzdem gedeckelt.
 
 **Folge:** `app.py:71` `LEGACY_IDLE_DEFAULT = 0`, `app.py:70`
-`TICKET_IDLE_DEFAULT = 180` (nicht 300 — spec-02 §4.4/R3 und `ticket.py:67`).
+`TICKET_IDLE_DEFAULT = 600` (seit 05.08.2026, vorher 180; heute `IDLE_TIMEOUT`
+in `ticket.py:84`).
 
 ---
 
@@ -628,7 +631,7 @@ Ein Wort, eine Bedeutung. Was hier nicht steht, geht nicht über die Leitung.
 | `allow` | `string[]` | Hostnamen, ≤10, nie leer (E7); ein abschließender Wurzelpunkt ist bedeutungslos (§6) | Freigabeseite |
 | `tab_host` | `string` | Host des Antragstabs | Erweiterung |
 | `step_mode` | `"confirm_each"`\|`"auto"` | Rückfrage je Schritt | Freigabeseite |
-| `idle_timeout` | `int` | Leerlauffrist in Sekunden, Vorgabe 180 | Ticketausgabe |
+| `idle_timeout` | `int` | Leerlauffrist in Sekunden, Vorgabe 600 | Ticketausgabe |
 | `reauth` | `object` | `{method, assertion}` | Freigabeseite |
 | `origin` | `string` | Herkunftserklärung der Seite, siehe §7 | Freigabeseite |
 | `state` | `string` | `pending`\|`approved`\|`denied`\|`consumed`\|`expired` | Ticketausgabe |
@@ -716,7 +719,7 @@ Antwort `201` — **Lesestufe mit `tab_host` (E15, Sitzungsfreigabe):**
   "state": "approved",
   "granted": {
     "access": "read", "duration": 600, "mode": "tab",
-    "allow": ["geizhals.de"], "step_mode": "confirm_each", "idle_timeout": 180
+    "allow": ["geizhals.de"], "step_mode": "confirm_each", "idle_timeout": 600
   },
   "redeem_key": "pX6OlD5masRPfnc531nc9PbU8fm-SG4uzX0Osk2CbYw",
   "expires_in": 120
@@ -776,7 +779,7 @@ Antwort `200`:
   "limits": {
     "access": ["read", "write"],
     "min_duration": 1, "max_duration": 3600,
-    "max_allow": 10, "auto_enabled": false, "idle_timeout": 180
+    "max_allow": 10, "auto_enabled": false, "idle_timeout": 600
   },
   "verify_word_len": 6,
   "attempts_left": 3,
@@ -845,7 +848,7 @@ Antwort `200`:
   "state": "approved",
   "granted": {
     "access": "read", "duration": 600, "mode": "tab",
-    "allow": ["geizhals.de"], "step_mode": "confirm_each", "idle_timeout": 180
+    "allow": ["geizhals.de"], "step_mode": "confirm_each", "idle_timeout": 600
   },
   "ticket_expires_in": 60,
   "hinweis": "Die Erweiterung holt den Schein jetzt ab. Du kannst dieses Fenster schließen."
@@ -903,7 +906,7 @@ HS256, signiert mit demselben `JWT_SECRET` wie Gateway und Relay.
   "client": "smartrchrome",
   "access": "read",
   "duration": 600,
-  "idle_timeout": 180,
+  "idle_timeout": 600,
   "step_mode": "confirm_each",
   "mode": "tab",
   "allow": ["geizhals.de"]
@@ -1028,7 +1031,7 @@ Ticketschiene:
   "access": "read",
   "expiry": 600,
   "expires_at": "2026-07-27T14:22:31Z",
-  "idle_timeout": 180,
+  "idle_timeout": 600,
   "mode": "tab",
   "allow": ["geizhals.de"],
   "step_mode": "confirm_each",
@@ -1242,7 +1245,7 @@ an einem 404 hängenbleiben.
 
 `200`: `{"connected":true,"access":"read","expires_at":"…Z",
 "expires_at_epoch":1785283351,"client":"smartrchrome","mode":"tab",
-"allow":["geizhals.de"],"idle_timeout":180,"pending":0}`
+"allow":["geizhals.de"],"idle_timeout":600,"pending":0}`
 `410`: Code bekannt, Sitzung vorbei. `404`: unbekannt oder fremd.
 
 ### `GET /health`
@@ -1454,7 +1457,7 @@ Die Erweiterung übersetzt nach Status, nicht nach Kennung
 | Vorbelegte Dauer | 600 s | `preselect.duration` |
 | Höchstdauer Ticketschiene | 3600 s | `limits.max_duration` |
 | Höchstdauer Altschiene | 28800 s | Desktop |
-| Leerlauffrist Ticketschiene | 180 s | `idle_timeout` |
+| Leerlauffrist Ticketschiene | 600 s | `idle_timeout` |
 | Leerlauffrist Altschiene | 0 (aus) | Desktop |
 | Adressen je Sitzung | ≤ 10 | `allow` |
 | Kennwortversuche je Vorgang | 3 | `attempts_left` |
@@ -1480,7 +1483,7 @@ Keine Empfehlung — das ist die Abnahmeliste.
 6. Leeres `allow` → `4400 allow_leer` (E7).
 7. `auth_ok`: `scope` → `allow`, dazu `mode` und `step_mode` (E6, §5.3).
 8. `/status`: `scope` → `allow`, `mode` ergänzen.
-9. `LEGACY_IDLE_DEFAULT = 0`, `TICKET_IDLE_DEFAULT = 180`, `CONNECT_IDLE_ENFORCE` entfällt (E11).
+9. `LEGACY_IDLE_DEFAULT = 0`, `TICKET_IDLE_DEFAULT = 600`, `CONNECT_IDLE_ENFORCE` entfällt (E11).
 10. Positivliste `TICKET_CLIENT_DECKEL` statt Negativliste, `client`
     kleingeschrieben, unbekannt/fehlend → `4400 client_unbekannt` (E13).
 11. `amr` mit `mfa-pending`/`mfa-setup` überall abweisen (E14, §4.2).
